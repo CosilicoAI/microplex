@@ -3,9 +3,9 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "microsynth"
+name = "microplex"
 version = "0.1.0"
-description = "Conditional microdata synthesis using normalizing flows"
+description = "Microdata synthesis and reweighting using normalizing flows"
 readme = "README.md"
 license = "MIT"
 authors = [
@@ -58,16 +58,16 @@ docs = [
     "sphinx-autodoc-typehints>=1.23",
 ]
 all = [
-    "microsynth[dev,benchmark,docs]",
+    "microplex[dev,benchmark,docs]",
 ]
 
 [project.urls]
-Homepage = "https://github.com/CosilicoAI/micro"
-Documentation = "https://cosilicoai.github.io/micro"
-Repository = "https://github.com/CosilicoAI/micro"
+Homepage = "https://github.com/CosilicoAI/microplex"
+Documentation = "https://cosilicoai.github.io/microplex"
+Repository = "https://github.com/CosilicoAI/microplex"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/micro"]
+packages = ["src/microplex"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

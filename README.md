@@ -1,14 +1,14 @@
-# micro
+# microplex
 
-Conditional microdata synthesis using normalizing flows.
+Microdata synthesis and reweighting using normalizing flows.
 
-[![PyPI](https://img.shields.io/pypi/v/microsynth.svg)](https://pypi.org/project/microsynth/)
-[![Tests](https://github.com/CosilicoAI/micro/actions/workflows/test.yml/badge.svg)](https://github.com/CosilicoAI/micro/actions/workflows/test.yml)
-[![Docs](https://github.com/CosilicoAI/micro/actions/workflows/docs.yml/badge.svg)](https://cosilicoai.github.io/micro)
+[![PyPI](https://img.shields.io/pypi/v/microplex.svg)](https://pypi.org/project/microplex/)
+[![Tests](https://github.com/CosilicoAI/microplex/actions/workflows/test.yml/badge.svg)](https://github.com/CosilicoAI/microplex/actions/workflows/test.yml)
+[![Docs](https://github.com/CosilicoAI/microplex/actions/workflows/docs.yml/badge.svg)](https://cosilicoai.github.io/microplex)
 
 ## Overview
 
-`micro` synthesizes survey microdata while preserving:
+`microplex` creates rich, calibrated microdata through:
 
 - **Conditional relationships**: Generate target variables given demographics
 - **Zero-inflated distributions**: Handle variables that are 0 for many observations
@@ -18,13 +18,13 @@ Conditional microdata synthesis using normalizing flows.
 ## Installation
 
 ```bash
-pip install microsynth
+pip install microplex
 ```
 
 ## Quick Start
 
 ```python
-from micro import Synthesizer
+from microplex import Synthesizer
 import pandas as pd
 
 # Load training data with known target variables
@@ -44,9 +44,9 @@ new_demographics = pd.read_csv("demographics_only.csv")
 synthetic = synth.generate(new_demographics)
 ```
 
-## Why `micro`?
+## Why `microplex`?
 
-| Feature | micro | CT-GAN | TVAE | synthpop |
+| Feature | microplex | CT-GAN | TVAE | synthpop |
 |---------|-------|--------|------|----------|
 | Conditional generation | ✅ | ❌ | ❌ | ❌ |
 | Zero-inflation handling | ✅ | ❌ | ❌ | ⚠️ |
@@ -85,11 +85,11 @@ synthetic = synth.generate(new_demographics)
 
 ## Documentation
 
-Full documentation at [cosilicoai.github.io/micro](https://cosilicoai.github.io/micro)
+Full documentation at [cosilicoai.github.io/microplex](https://cosilicoai.github.io/microplex)
 
-- [Tutorial](https://cosilicoai.github.io/micro/tutorial.html)
-- [API Reference](https://cosilicoai.github.io/micro/api.html)
-- [Benchmarks](https://cosilicoai.github.io/micro/benchmarks.html)
+- [Tutorial](https://cosilicoai.github.io/microplex/tutorial.html)
+- [API Reference](https://cosilicoai.github.io/microplex/api.html)
+- [Benchmarks](https://cosilicoai.github.io/microplex/benchmarks.html)
 
 ## Benchmarks
 
@@ -103,11 +103,11 @@ See [benchmarks/](benchmarks/) for comparisons against:
 ## Citation
 
 ```bibtex
-@software{micro2024,
+@software{microplex2024,
   author = {Cosilico},
-  title = {micro: Conditional microdata synthesis using normalizing flows},
+  title = {microplex: Microdata synthesis and reweighting using normalizing flows},
   year = {2024},
-  url = {https://github.com/CosilicoAI/micro}
+  url = {https://github.com/CosilicoAI/microplex}
 }
 ```
 

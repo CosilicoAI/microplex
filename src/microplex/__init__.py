@@ -1,14 +1,15 @@
 """
-micro: Conditional microdata synthesis using normalizing flows.
+microplex: Microdata synthesis and reweighting using normalizing flows.
 
-A library for synthesizing survey microdata while preserving:
-- Conditional relationships (demographics → outcomes)
+A library for creating rich, calibrated microdata through:
+- Conditional synthesis (demographics → outcomes)
+- Reweighting to population targets
 - Zero-inflated distributions (common in economic/health data)
 - Joint correlations between variables
 - Hierarchical structures (households, firms, etc.)
 
 Example:
-    >>> from micro import Synthesizer
+    >>> from microplex import Synthesizer
     >>> synth = Synthesizer(
     ...     target_vars=["income", "expenditure"],
     ...     condition_vars=["age", "education"],
@@ -17,16 +18,16 @@ Example:
     >>> synthetic = synth.generate(new_demographics)
 """
 
-from micro.synthesizer import Synthesizer
-from micro.transforms import (
+from microplex.synthesizer import Synthesizer
+from microplex.transforms import (
     ZeroInflatedTransform,
     LogTransform,
     Standardizer,
     VariableTransformer,
     MultiVariableTransformer,
 )
-from micro.flows import ConditionalMAF, MADE, AffineCouplingLayer
-from micro.discrete import (
+from microplex.flows import ConditionalMAF, MADE, AffineCouplingLayer
+from microplex.discrete import (
     BinaryModel,
     CategoricalModel,
     DiscreteModelCollection,

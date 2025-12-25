@@ -1,26 +1,27 @@
-# micro
+# microplex
 
-**Conditional microdata synthesis using normalizing flows.**
+**Microdata synthesis and reweighting using normalizing flows.**
 
-`micro` is a Python library for synthesizing survey microdata while preserving statistical properties and conditional relationships.
+`microplex` creates rich, calibrated microdata by combining synthesis and reweighting.
 
 ## Key Features
 
-- **Conditional generation**: Generate target variables given demographics (not full joint distribution)
-- **Zero-inflation handling**: Built-in support for variables that are 0 for many observations
-- **Stable training**: Normalizing flows provide exact likelihood and stable gradients
-- **Privacy-preserving**: Generates synthetic records without copying real data
+- **Conditional synthesis**: Generate target variables given demographics
+- **Sparse reweighting**: L0/L1 optimization to match population targets
+- **Multi-source fusion**: Combine CPS, ACS, admin data into one population
+- **Zero-inflation handling**: Built-in support for variables with many zeros
+- **Scalable**: Synthesize billions of records, reweight to any geography
 
 ## Installation
 
 ```bash
-pip install micro
+pip install microplex
 ```
 
 ## Quick Example
 
 ```python
-from micro import Synthesizer
+from microplex import Synthesizer
 
 # Initialize
 synth = Synthesizer(
@@ -40,37 +41,68 @@ synthetic = synth.generate(new_demographics)
 | Use Case | Description |
 |----------|-------------|
 | Survey enhancement | Impute income variables from tax data onto census |
+| Small area estimation | Reweight synthetic population to county/tract targets |
 | Privacy synthesis | Generate synthetic data for public release |
-| Data fusion | Combine variables from multiple surveys |
-| Missing data | Fill in missing values conditioned on observed |
+| Data fusion | Combine variables from CPS, ACS, SIPP, admin data |
 
-## How It Works
+## The microplex Workflow
 
 ```
-Training Data          New Demographics
-     │                       │
-     ▼                       ▼
-┌─────────┐           ┌─────────────┐
-│ Fit     │           │ Condition   │
-│ Model   │           │ Variables   │
-└────┬────┘           └──────┬──────┘
-     │                       │
-     ▼                       ▼
-┌─────────────────────────────────────┐
-│        Normalizing Flow             │
-│  P(target | conditions)             │
-└─────────────────────────────────────┘
-                 │
-                 ▼
-         Synthetic Data
+                         ┌─────────────────────────────────────┐
+                         │           DATA SOURCES              │
+                         ├─────────┬─────────┬─────────────────┤
+                         │   CPS   │   ACS   │   Admin Data    │
+                         │ income  │  geo    │   validation    │
+                         │  tax    │ housing │    targets      │
+                         └────┬────┴────┬────┴────────┬────────┘
+                              │         │             │
+                              ▼         ▼             │
+                    ┌─────────────────────────┐       │
+                    │    CONDITIONAL MAF      │       │
+                    │  P(targets | context)   │       │
+                    │                         │       │
+                    │  • Zero-inflation       │       │
+                    │  • Joint correlations   │       │
+                    │  • Hierarchical         │       │
+                    └───────────┬─────────────┘       │
+                                │                     │
+                                ▼                     │
+                    ┌─────────────────────────┐       │
+                    │    SYNTHESIZE           │       │
+                    │    BILLIONS OF          │       │
+                    │    HOUSEHOLDS           │       │
+                    └───────────┬─────────────┘       │
+                                │                     │
+                                ▼                     ▼
+                    ┌─────────────────────────────────────────┐
+                    │         SPARSE REWEIGHTING              │
+                    │                                         │
+                    │   min ||w||₀  s.t.  Σ wᵢxᵢ = targets   │
+                    │                                         │
+                    │   • Match population margins            │
+                    │   • Any geography (state/county/tract)  │
+                    │   • Minimal record subset               │
+                    └───────────────────┬─────────────────────┘
+                                        │
+                                        ▼
+                    ┌─────────────────────────────────────────┐
+                    │         CALIBRATED MICRODATA            │
+                    │                                         │
+                    │   Rich population with:                 │
+                    │   • All variables from all sources      │
+                    │   • Matches official statistics         │
+                    │   • Any geographic granularity          │
+                    └─────────────────────────────────────────┘
 ```
 
 ## Comparison to Alternatives
 
-| Feature | micro | CT-GAN | TVAE | synthpop |
-|---------|:-----:|:------:|:----:|:--------:|
+| Feature | microplex | CT-GAN | TVAE | synthpop |
+|---------|:---------:|:------:|:----:|:--------:|
 | Conditional generation | ✅ | ❌ | ❌ | ❌ |
 | Zero-inflation | ✅ | ❌ | ❌ | ⚠️ |
+| Sparse reweighting | ✅ | ❌ | ❌ | ❌ |
+| Multi-source fusion | ✅ | ❌ | ❌ | ⚠️ |
 | Exact likelihood | ✅ | ❌ | ❌ | N/A |
 | Stable training | ✅ | ⚠️ | ✅ | ✅ |
 

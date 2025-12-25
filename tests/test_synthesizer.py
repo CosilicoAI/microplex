@@ -19,7 +19,7 @@ class TestSynthesizerInit:
 
     def test_basic_initialization(self):
         """Should initialize with target and condition variables."""
-        from micro import Synthesizer
+        from microplex import Synthesizer
 
         synth = Synthesizer(
             target_vars=["income", "expenditure"],
@@ -32,7 +32,7 @@ class TestSynthesizerInit:
 
     def test_with_discrete_vars(self):
         """Should accept discrete target variables."""
-        from micro import Synthesizer
+        from microplex import Synthesizer
 
         synth = Synthesizer(
             target_vars=["income"],
@@ -74,7 +74,7 @@ class TestSynthesizerFit:
 
     def test_fit_completes(self, sample_data):
         """Fit should complete without errors."""
-        from micro import Synthesizer
+        from microplex import Synthesizer
 
         synth = Synthesizer(
             target_vars=["income", "expenditure"],
@@ -87,7 +87,7 @@ class TestSynthesizerFit:
 
     def test_fit_learns_transforms(self, sample_data):
         """Fit should learn data transforms."""
-        from micro import Synthesizer
+        from microplex import Synthesizer
 
         synth = Synthesizer(
             target_vars=["income", "expenditure"],
@@ -101,7 +101,7 @@ class TestSynthesizerFit:
 
     def test_fit_trains_flow(self, sample_data):
         """Fit should train the normalizing flow."""
-        from micro import Synthesizer
+        from microplex import Synthesizer
 
         synth = Synthesizer(
             target_vars=["income", "expenditure"],
@@ -142,7 +142,7 @@ class TestSynthesizerGenerate:
     @pytest.fixture
     def fitted_synth(self, sample_data):
         """Return a fitted synthesizer."""
-        from micro import Synthesizer
+        from microplex import Synthesizer
 
         synth = Synthesizer(
             target_vars=["income", "expenditure"],
@@ -231,7 +231,7 @@ class TestSaveLoad:
 
     def test_save_and_load(self, sample_data, tmp_path):
         """Should save and load model correctly."""
-        from micro import Synthesizer
+        from microplex import Synthesizer
 
         synth = Synthesizer(
             target_vars=["income"],

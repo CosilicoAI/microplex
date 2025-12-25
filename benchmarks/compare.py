@@ -1,8 +1,8 @@
 """
-Benchmark comparisons between micro and other synthesis methods.
+Benchmark comparisons between microplex and other synthesis methods.
 
 Compares:
-- micro (normalizing flows)
+- microplex (normalizing flows)
 - CT-GAN (Conditional Tabular GAN from SDV)
 - TVAE (Tabular VAE from SDV)
 - GaussianCopula (from SDV)
@@ -105,7 +105,7 @@ class MicroBenchmark:
         self.model = None
 
     def fit(self, data: pd.DataFrame, **fit_kwargs):
-        from micro import Synthesizer
+        from microplex import Synthesizer
 
         self.model = Synthesizer(
             target_vars=self.target_vars,
