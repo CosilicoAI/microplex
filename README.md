@@ -2,7 +2,7 @@
 
 Conditional microdata synthesis using normalizing flows.
 
-[![PyPI](https://img.shields.io/pypi/v/micro.svg)](https://pypi.org/project/micro/)
+[![PyPI](https://img.shields.io/pypi/v/microsynth.svg)](https://pypi.org/project/microsynth/)
 [![Tests](https://github.com/CosilicoAI/micro/actions/workflows/test.yml/badge.svg)](https://github.com/CosilicoAI/micro/actions/workflows/test.yml)
 [![Docs](https://github.com/CosilicoAI/micro/actions/workflows/docs.yml/badge.svg)](https://cosilicoai.github.io/micro)
 
@@ -18,7 +18,7 @@ Conditional microdata synthesis using normalizing flows.
 ## Installation
 
 ```bash
-pip install micro
+pip install microsynth
 ```
 
 ## Quick Start
