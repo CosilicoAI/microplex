@@ -35,6 +35,10 @@ class SynthesizerConfig:
     zero_inflated: bool = True
     log_transform: bool = True
 
+    # Variance regularization
+    variance_regularization: float = 0.1
+    sample_clipping: float = 3.0  # Clip z-samples beyond this std (3.0 works well for log-normal)
+
 
 class Synthesizer:
     """
@@ -67,6 +71,8 @@ class Synthesizer:
         hidden_dim: int = 64,
         zero_inflated: bool = True,
         log_transform: bool = True,
+        variance_regularization: float = 0.1,
+        sample_clipping: float = 3.0,
     ):
         """
         Initialize synthesizer.
@@ -79,6 +85,8 @@ class Synthesizer:
             hidden_dim: Hidden layer size
             zero_inflated: Whether target vars have many zeros
             log_transform: Whether to log-transform positive values
+            variance_regularization: Weight for variance matching loss (0.0 to disable)
+            sample_clipping: Clip z-samples beyond this many std devs (None to disable)
         """
         self.target_vars = target_vars
         self.condition_vars = condition_vars
@@ -87,6 +95,8 @@ class Synthesizer:
         self.hidden_dim = hidden_dim
         self.zero_inflated = zero_inflated
         self.log_transform = log_transform
+        self.variance_regularization = variance_regularization
+        self.sample_clipping = sample_clipping
 
         # Will be set during fit
         self.transformer_: Optional[MultiVariableTransformer] = None
@@ -96,6 +106,9 @@ class Synthesizer:
         self.is_fitted_: bool = False
         self.training_history_: List[float] = []
         self._actual_n_context: int = 0  # Actual context dim (may include dummy)
+        self._train_target_std: Optional[torch.Tensor] = None  # Store target std for variance reg
+        self._train_target_max: Optional[torch.Tensor] = None  # Store max for clipping calibration
+        self._original_scale_stats: Optional[Dict[str, Dict[str, float]]] = None  # Original scale stats for clipping
 
     def fit(
         self,
@@ -137,6 +150,20 @@ class Synthesizer:
 
         # Transform target variables
         transformed = self.transformer_.transform(data_dict)
+
+        # Store original scale statistics for adaptive clipping
+        self._original_scale_stats = {}
+        for var in self.target_vars:
+            values = data[var].values
+            positive_values = values[values > 0]
+            if len(positive_values) > 0:
+                self._original_scale_stats[var] = {
+                    'max': float(np.max(positive_values)),
+                    'p99': float(np.percentile(positive_values, 99)),
+                    'p999': float(np.percentile(positive_values, 99.9)),
+                }
+            else:
+                self._original_scale_stats[var] = {'max': 1.0, 'p99': 1.0, 'p999': 1.0}
 
         # Prepare tensors
         n_context = len(self.condition_vars)
@@ -223,7 +250,7 @@ class Synthesizer:
         learning_rate: float,
         verbose: bool,
     ):
-        """Train the normalizing flow model."""
+        """Train the normalizing flow model with variance regularization."""
         optimizer = torch.optim.Adam(
             self.flow_model_.parameters(), lr=learning_rate
         )
@@ -240,6 +267,12 @@ class Synthesizer:
             train_context = context[all_positive]
             train_weights = weights[all_positive]
 
+        # Store target statistics for variance regularization and adaptive clipping
+        self._train_target_std = train_targets.std(dim=0)
+        self._train_target_mean = train_targets.mean(dim=0)
+        self._train_target_max = train_targets.max(dim=0).values
+        self._train_target_min = train_targets.min(dim=0).values
+
         dataset = TensorDataset(train_targets, train_context, train_weights)
         loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
@@ -247,25 +280,56 @@ class Synthesizer:
 
         for epoch in range(epochs):
             epoch_loss = 0.0
+            epoch_var_loss = 0.0
             n_batches = 0
 
             for batch_targets, batch_context, batch_weights in loader:
                 optimizer.zero_grad()
 
+                # Standard negative log-likelihood loss
                 log_prob = self.flow_model_.log_prob(batch_targets, batch_context)
-                loss = -(log_prob * batch_weights).sum() / batch_weights.sum()
+                nll_loss = -(log_prob * batch_weights).sum() / batch_weights.sum()
+
+                # Variance regularization: penalize log_scale being too small or too large
+                # The log_scale parameters in MADE control variance - encourage them to stay near 0
+                var_loss = torch.tensor(0.0)
+                if self.variance_regularization > 0:
+                    # Regularize the log_scale outputs to have variance matching target variance
+                    # This is done by running forward pass and checking the log_det contribution
+                    z = batch_targets
+                    log_scale_sum = torch.tensor(0.0)
+                    for layer in self.flow_model_.layers:
+                        perm_idx = list(self.flow_model_.layers).index(layer)
+                        perm = getattr(self.flow_model_, f"perm_{perm_idx}")
+                        z = z[:, perm]
+                        mu, log_scale = layer.made(z, batch_context)
+                        # Penalize log_scale being too far from 0 (which means scale != 1)
+                        # This helps prevent over/under-dispersion
+                        log_scale_sum = log_scale_sum + (log_scale ** 2).mean()
+                        z = (z - mu) * torch.exp(-log_scale)
+
+                    var_loss = log_scale_sum / len(self.flow_model_.layers)
+
+                # Combined loss
+                loss = nll_loss + self.variance_regularization * var_loss
 
                 loss.backward()
+
+                # Gradient clipping for stability
+                torch.nn.utils.clip_grad_norm_(self.flow_model_.parameters(), 1.0)
+
                 optimizer.step()
 
-                epoch_loss += loss.item()
+                epoch_loss += nll_loss.item()
+                epoch_var_loss += var_loss.item() if isinstance(var_loss, torch.Tensor) else var_loss
                 n_batches += 1
 
             avg_loss = epoch_loss / n_batches
+            avg_var_loss = epoch_var_loss / n_batches
             self.training_history_.append(avg_loss)
 
             if verbose and (epoch + 1) % 10 == 0:
-                print(f"Epoch {epoch + 1}/{epochs}, Loss: {avg_loss:.4f}")
+                print(f"Epoch {epoch + 1}/{epochs}, NLL: {avg_loss:.4f}, VarLoss: {avg_var_loss:.4f}")
 
     def _train_zero_indicators(
         self,
@@ -376,9 +440,9 @@ class Synthesizer:
             context_np = np.zeros((len(conditions), 1))
         context = torch.tensor(context_np, dtype=torch.float32)
 
-        # Sample from flow
+        # Sample from flow (with optional clipping)
         with torch.no_grad():
-            samples = self.flow_model_.sample(context)
+            samples = self.flow_model_.sample(context, clip_z=self.sample_clipping)
 
         samples_np = samples.numpy()
 
@@ -403,9 +467,17 @@ class Synthesizer:
                         0.0
                     )
 
-        # Ensure non-negative values
+        # Ensure non-negative values and clip to training data range
         for var in self.target_vars:
             original_dict[var] = np.maximum(original_dict[var], 0)
+
+            # Clip extreme values to slightly beyond training max
+            # This prevents a few outliers from dominating variance
+            if self._original_scale_stats and var in self._original_scale_stats:
+                stats = self._original_scale_stats[var]
+                # Allow up to 10% beyond the training max
+                clip_max = stats['max'] * 1.1
+                original_dict[var] = np.minimum(original_dict[var], clip_max)
 
         # Sample discrete variables
         if self.discrete_model_ is not None:
@@ -437,6 +509,8 @@ class Synthesizer:
             "hidden_dim": self.hidden_dim,
             "zero_inflated": self.zero_inflated,
             "log_transform": self.log_transform,
+            "variance_regularization": self.variance_regularization,
+            "sample_clipping": self.sample_clipping,
             "transformer": self.transformer_,
             "flow_state_dict": self.flow_model_.state_dict(),
             "zero_indicators_state_dict": (
@@ -448,6 +522,7 @@ class Synthesizer:
                 if self.discrete_model_ else None
             ),
             "training_history": self.training_history_,
+            "original_scale_stats": self._original_scale_stats,
         }
 
         torch.save(state, Path(path))
@@ -465,10 +540,13 @@ class Synthesizer:
             hidden_dim=state["hidden_dim"],
             zero_inflated=state["zero_inflated"],
             log_transform=state["log_transform"],
+            variance_regularization=state.get("variance_regularization", 0.1),
+            sample_clipping=state.get("sample_clipping", 3.0),
         )
 
         synth.transformer_ = state["transformer"]
         synth.training_history_ = state["training_history"]
+        synth._original_scale_stats = state.get("original_scale_stats")
 
         # Reconstruct flow
         n_targets = len(state["target_vars"])

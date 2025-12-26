@@ -1,18 +1,32 @@
 # microplex Benchmark Results Summary
 
-**Date:** December 25, 2024
+**Date:** December 26, 2024
 **Version:** 0.1.0
-**Status:** ✅ **All benchmarks passed - microplex demonstrates clear superiority**
+**Status:** All benchmarks passed - microplex demonstrates strong performance
 
 ## Executive Summary
 
-Comprehensive benchmarks comparing microplex to state-of-the-art synthetic data methods (CT-GAN, TVAE, Gaussian Copula from SDV) **and PolicyEngine's current Sequential QRF approach** demonstrate that **microplex is the best method for economic microdata synthesis**.
+Comprehensive benchmarks comparing microplex to state-of-the-art synthetic data methods (CT-GAN, TVAE, Gaussian Copula from SDV), **PolicyEngine's current Sequential QRF approach**, and **TabPFN (Prior-Data Fitted Networks)** demonstrate that **microplex is the best overall method for economic microdata synthesis**.
 
-### NEW: QRF Comparison (PolicyEngine Current Approach)
+### TabPFN Comparison (NEW - Transformer-Based)
+
+We benchmarked microplex against TabPFN (Prior-Data Fitted Networks), a transformer-based approach for tabular prediction:
+
+| Method | Marginal Fidelity (KS) | Correlation Error | Zero-Inflation Error | Generation Speed |
+|--------|------------------------|-------------------|---------------------|------------------|
+| **microplex** | 0.0766 | **0.0907** (best) | 0.0444 | **0.01s** (best) |
+| TabPFN + Zero-Inflation | **0.0716** (best) | 0.1451 | **0.0324** (best) | 1.86s |
+| TabPFN Sequential | 0.3052 | 0.1114 | 0.2297 | 1.62s |
+
+**Key Finding:** TabPFN with two-stage zero handling slightly edges microplex on marginal fidelity and zero handling, but microplex is **186x faster** at generation and has **37% better correlation preservation**. TabPFN is limited to small datasets (<1000 rows).
+
+See **[TabPFN Comparison Report](benchmarks/results/tabpfn_comparison.md)** for full analysis.
+
+### QRF Comparison (PolicyEngine Current Approach)
 
 We benchmarked microplex against Sequential Quantile Random Forests (QRF), PolicyEngine's current microdata enhancement method:
 
-| Method | Marginal Fidelity (KS) ↓ | Correlation Preservation ↓ | Zero-Inflation Error ↓ | Speed |
+| Method | Marginal Fidelity (KS) | Correlation Preservation | Zero-Inflation Error | Speed |
 |--------|-------------------------|---------------------------|----------------------|-------|
 | **microplex** | **0.0685** (5.5x better) | 0.2044 | 0.0561 | **Fastest** |
 | QRF + Zero-Inflation | 0.2327 | **0.0918** (best) | **0.0310** (best) | Moderate |
@@ -77,6 +91,8 @@ Other methods try to model the full distribution in one step, leading to poor ze
 2. **CT-GAN** - Conditional Tabular GAN (SDV)
 3. **TVAE** - Tabular VAE (SDV)
 4. **Gaussian Copula** - Copula synthesis (SDV)
+5. **Sequential QRF** - Quantile Random Forests (PolicyEngine current)
+6. **TabPFN** - Prior-Data Fitted Networks (transformer-based)
 
 ### Metrics
 - **Marginal Fidelity:** KS statistic (distribution matching)
@@ -210,7 +226,7 @@ Full documentation in `/Users/maxghenis/CosilicoAI/micro/benchmarks/results/`:
 - **results.csv** - Summary table
 - **results.md** - Markdown results table
 
-### PolicyEngine QRF Comparison (NEW)
+### PolicyEngine QRF Comparison
 - **qrf_comparison.md** - Full QRF vs microplex analysis
 - **qrf_results.csv** - QRF benchmark summary
 - **qrf_comparison.png** - Main 4-metric visualization
@@ -218,6 +234,14 @@ Full documentation in `/Users/maxghenis/CosilicoAI/micro/benchmarks/results/`:
 - **qrf_zero_inflation.png** - Zero-handling analysis
 - **qrf_timing.png** - Performance comparison
 - **qrf_per_variable_ks.png** - Per-variable fidelity
+
+### TabPFN Comparison (NEW)
+- **tabpfn_comparison.md** - Full TabPFN vs microplex analysis
+- **tabpfn_results.csv** - TabPFN benchmark summary
+- **tabpfn_comparison.png** - Main 4-metric visualization
+- **tabpfn_distributions_*.png** - Per-method distribution comparisons
+- **tabpfn_zero_inflation.png** - Zero-handling analysis
+- **tabpfn_per_variable_ks.png** - Per-variable fidelity
 
 ## Reproducibility
 
@@ -229,6 +253,9 @@ python benchmarks/run_benchmarks.py
 
 # QRF comparison (PolicyEngine current approach)
 python benchmarks/run_qrf_benchmark.py
+
+# TabPFN comparison (transformer-based)
+python benchmarks/run_tabpfn_benchmark.py
 ```
 
 Requirements:
@@ -236,6 +263,7 @@ Requirements:
 - microplex
 - sdv >= 1.0 (for CT-GAN, TVAE, Copula)
 - scikit-learn >= 1.3 (for QRF)
+- tabpfn == 0.1.11 (for TabPFN - newer versions are gated)
 - matplotlib, seaborn, tabulate
 
 Results are deterministic (random seed = 42).
@@ -255,6 +283,6 @@ Next step: **Test on real CPS/ACS data** to validate production readiness.
 
 ---
 
-**Generated:** December 25, 2024
+**Generated:** December 26, 2024
 **Location:** /Users/maxghenis/CosilicoAI/micro/benchmarks/results/
 **Full report:** BENCHMARK_REPORT.md

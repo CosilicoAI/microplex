@@ -316,12 +316,17 @@ class ConditionalMAF(nn.Module):
 
         return base_log_prob + total_log_det
 
-    def sample(self, context: torch.Tensor) -> torch.Tensor:
+    def sample(
+        self,
+        context: torch.Tensor,
+        clip_z: float = None,
+    ) -> torch.Tensor:
         """
         Sample from the flow given context.
 
         Args:
             context: Context [batch, n_context]
+            clip_z: If provided, clip base samples to [-clip_z, clip_z]
 
         Returns:
             Samples [batch, n_features]
@@ -330,6 +335,10 @@ class ConditionalMAF(nn.Module):
 
         # Sample from base distribution
         z = torch.randn(batch_size, self.n_features, device=context.device)
+
+        # Clip base samples to avoid extreme outliers
+        if clip_z is not None:
+            z = torch.clamp(z, min=-clip_z, max=clip_z)
 
         # Inverse transform through layers (in reverse order)
         for i in range(len(self.layers) - 1, -1, -1):
