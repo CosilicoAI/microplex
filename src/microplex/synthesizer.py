@@ -95,6 +95,7 @@ class Synthesizer:
         self.discrete_model_: Optional[DiscreteModelCollection] = None
         self.is_fitted_: bool = False
         self.training_history_: List[float] = []
+        self._actual_n_context: int = 0  # Actual context dim (may include dummy)
 
     def fit(
         self,
@@ -141,10 +142,16 @@ class Synthesizer:
         n_context = len(self.condition_vars)
         n_targets = len(self.target_vars)
 
-        # Context tensor
-        context_np = np.column_stack([
-            data[var].values for var in self.condition_vars
-        ])
+        # Context tensor (handle empty condition_vars for unconditional generation)
+        if n_context > 0:
+            context_np = np.column_stack([
+                data[var].values for var in self.condition_vars
+            ])
+            self._actual_n_context = n_context
+        else:
+            # Unconditional: use dummy context of zeros
+            context_np = np.zeros((len(data), 1))
+            self._actual_n_context = 1
         context = torch.tensor(context_np, dtype=torch.float32)
 
         # Target tensor (replace NaN with 0 for training)
@@ -358,10 +365,14 @@ class Synthesizer:
             torch.manual_seed(seed)
             np.random.seed(seed)
 
-        # Prepare context tensor
-        context_np = np.column_stack([
-            conditions[var].values for var in self.condition_vars
-        ])
+        # Prepare context tensor (handle empty condition_vars for unconditional generation)
+        if len(self.condition_vars) > 0:
+            context_np = np.column_stack([
+                conditions[var].values for var in self.condition_vars
+            ])
+        else:
+            # Unconditional: use dummy context of zeros (matching fit behavior)
+            context_np = np.zeros((len(conditions), 1))
         context = torch.tensor(context_np, dtype=torch.float32)
 
         # Sample from flow
