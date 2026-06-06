@@ -12,7 +12,8 @@ sources:
 
 spine:
   base: cps_asec
-  split: { fraction: 0.5, seed: 0 }
+  method: clone
+  clone: { seed: 0 }
   halves:
     - { name: cps_keep, keep: all }
     - { name: synthetic_puf, strip_to: [demographics, tax_unit_id] }

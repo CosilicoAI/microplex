@@ -1,5 +1,4 @@
-"""Build the spine: split a base survey frame into two disjoint halves, one
-kept whole and one stripped to its declared columns for synthesis.
+"""Build the spine: clone a base survey frame into passthrough and synthetic halves.
 
 This is the eCPS ``puf_clone`` pattern generalized (see
 ``docs/spec-driven-rebuild.md`` §4). The reference implementation
@@ -9,12 +8,12 @@ synthesized from demographic predictors. :class:`SpineBuilder` does the same
 thing generically, driven by the ``spine:`` section of a
 :class:`microplex.spec.MicroplexSpec`.
 
-Crucially (the correctness anchor), the stripped half keeps **only** the
-declared columns (demographics + the entity id) — its income variables are
-dropped so the imputation runner can synthesize the full distribution from
-scratch, rather than inheriting the survey's (different) income tail. There is
-no country logic here: what "demographics" means is supplied by the caller as a
-column group.
+Crucially (the correctness anchor), the synthetic half keeps **only** the
+declared columns (demographics + entity ids, plus zeroed weights) -- its income
+variables are dropped so the imputation runner can synthesize the full
+distribution from scratch, rather than inheriting the survey's tail-deficient
+income distribution. There is no country logic here: what "demographics" means
+is supplied by the caller as a column group.
 """
 
 from __future__ import annotations
@@ -22,7 +21,6 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
-import numpy as np
 import pandas as pd
 
 from microplex.spec import DEMOGRAPHICS_TOKEN, HalfSpec, SpineSpec
@@ -57,12 +55,12 @@ class SpineBuildResult:
 
 
 class SpineBuilder:
-    """Split a base frame into a passthrough half and a stripped half.
+    """Clone a base frame into a passthrough half and a synthetic half.
 
-    The split is deterministic (seeded), disjoint, and covers every base row.
-    The passthrough half keeps all base columns; the stripped half keeps only
-    the columns named in its ``strip_to`` list (resolving the ``demographics``
-    group token via ``column_groups``). A label column records each row's half.
+    The passthrough half keeps all base columns. The synthetic half is a cloned
+    copy of every base row, stripped to declared columns, with numeric id
+    columns offset and weight columns set to zero. This mirrors PE-US-data's
+    PUF clone shape: original records first, synthetic PUF copies second.
 
     Args:
         spine: The validated :class:`~microplex.spec.SpineSpec`.
@@ -70,11 +68,18 @@ class SpineBuilder:
             concrete column names it expands to. Required if any half's
             ``strip_to`` references a group token. Entries in ``strip_to`` that
             are not group tokens are treated as literal column names.
+        id_columns: ID columns whose synthetic-half values should be offset so
+            clone entities cannot collide with original entities. Defaults to
+            all base columns ending in ``"_id"``.
+        weight_columns: Weight columns to retain on the synthetic half and set
+            to ``clone_weight_value``. Defaults to all base columns ending in
+            ``"_weight"``.
+        clone_weight_value: Initial value for synthetic-half weights.
         half_label_column: Name of the column recording the half label.
 
     Notes:
         This class is country-agnostic. It never inspects column *meaning* — it
-        only partitions rows and selects/drops columns by name. The demographic
+        only clones rows and selects/drops columns by name. The demographic
         column set is injected by the caller, not hard-coded.
     """
 
@@ -83,12 +88,20 @@ class SpineBuilder:
         spine: SpineSpec,
         *,
         column_groups: Mapping[str, Sequence[str]] | None = None,
+        id_columns: Sequence[str] | None = None,
+        weight_columns: Sequence[str] | None = None,
+        clone_weight_value: float = 0.0,
         half_label_column: str = DEFAULT_HALF_LABEL_COLUMN,
     ) -> None:
         self.spine = spine
         self.column_groups = {
             token: list(cols) for token, cols in (column_groups or {}).items()
         }
+        self.id_columns = tuple(id_columns) if id_columns is not None else None
+        self.weight_columns = (
+            tuple(weight_columns) if weight_columns is not None else None
+        )
+        self.clone_weight_value = clone_weight_value
         self.half_label_column = half_label_column
 
     # ------------------------------------------------------------------
@@ -96,7 +109,7 @@ class SpineBuilder:
     # ------------------------------------------------------------------
 
     def build(self, base: pd.DataFrame) -> SpineBuildResult:
-        """Split ``base`` into the declared halves.
+        """Clone ``base`` into the declared passthrough and synthetic halves.
 
         Args:
             base: The base survey frame (one row per spine entity).
@@ -115,26 +128,20 @@ class SpineBuilder:
                 f"half label column '{self.half_label_column}' already exists in "
                 "the base frame; pass a different half_label_column."
             )
-
-        first_mask = self._split_mask(len(base))
-
-        # The passthrough/stripped roles are independent of split position: the
-        # spec marks one half keep:all and the other strip_to:. We assign the
-        # FIRST half (per the spec's declared order) to first_mask, the SECOND
-        # to its complement, so the split fraction maps to the first-declared
-        # half exactly as written.
-        first_half, second_half = self.spine.halves
+        normalized = base.reset_index(drop=True)
+        passthrough_half = self.spine.passthrough_half
+        synthetic_half = self.spine.synthetic_half
 
         halves: dict[str, pd.DataFrame] = {}
-        halves[first_half.name] = self._materialize_half(
-            base.loc[first_mask], first_half
+        halves[passthrough_half.name] = self._materialize_half(
+            normalized, passthrough_half, synthetic=False
         )
-        halves[second_half.name] = self._materialize_half(
-            base.loc[~first_mask], second_half
+        halves[synthetic_half.name] = self._materialize_half(
+            normalized, synthetic_half, synthetic=True
         )
 
         stacked = pd.concat(
-            [halves[first_half.name], halves[second_half.name]],
+            [halves[passthrough_half.name], halves[synthetic_half.name]],
             axis=0,
             ignore_index=True,
         )
@@ -181,30 +188,18 @@ class SpineBuilder:
     # Internals
     # ------------------------------------------------------------------
 
-    def _split_mask(self, n: int) -> np.ndarray:
-        """Return a boolean mask selecting the FIRST half's rows.
-
-        Deterministic given the spec's seed; the two halves are disjoint and
-        partition all ``n`` rows. The first half receives ``round(fraction*n)``
-        rows.
-        """
-        rng = np.random.default_rng(self.spine.split.seed)
-        permutation = rng.permutation(n)
-        n_first = int(round(self.spine.split.fraction * n))
-        # Guard the degenerate ends so neither half is empty for non-trivial n.
-        if n >= 2:
-            n_first = max(1, min(n - 1, n_first))
-        first_positions = permutation[:n_first]
-        mask = np.zeros(n, dtype=bool)
-        mask[first_positions] = True
-        return mask
-
-    def _materialize_half(self, rows: pd.DataFrame, half: HalfSpec) -> pd.DataFrame:
+    def _materialize_half(
+        self,
+        rows: pd.DataFrame,
+        half: HalfSpec,
+        *,
+        synthetic: bool,
+    ) -> pd.DataFrame:
         """Select/drop columns for one half and append the label column."""
         if half.is_passthrough:
             out = rows.copy()
         else:
-            keep = self.resolve_columns(half)
+            keep = self._columns_for_synthetic_half(rows, half)
             missing = [c for c in keep if c not in rows.columns]
             if missing:
                 raise ValueError(
@@ -213,5 +208,53 @@ class SpineBuilder:
                 )
             out = rows.loc[:, keep].copy()
         out = out.reset_index(drop=True)
+        if synthetic:
+            self._offset_id_columns(out, rows)
+            for column in self._weight_columns(rows):
+                if column in out.columns:
+                    out[column] = self.clone_weight_value
         out[self.half_label_column] = half.name
         return out
+
+    def _columns_for_synthetic_half(
+        self,
+        base: pd.DataFrame,
+        half: HalfSpec,
+    ) -> list[str]:
+        """Columns retained on the synthetic half before imputation."""
+        columns = [
+            *self.resolve_columns(half),
+            *self._id_columns(base),
+            *self._weight_columns(base),
+        ]
+        unique = dict.fromkeys(columns)
+        return list(unique)
+
+    def _id_columns(self, base: pd.DataFrame) -> tuple[str, ...]:
+        """Resolve id columns, defaulting to columns ending in '_id'."""
+        if self.id_columns is not None:
+            return self.id_columns
+        return tuple(column for column in base.columns if column.endswith("_id"))
+
+    def _weight_columns(self, base: pd.DataFrame) -> tuple[str, ...]:
+        """Resolve weight columns, defaulting to columns ending in '_weight'."""
+        if self.weight_columns is not None:
+            return self.weight_columns
+        return tuple(column for column in base.columns if column.endswith("_weight"))
+
+    def _offset_id_columns(
+        self,
+        clone: pd.DataFrame,
+        base: pd.DataFrame,
+    ) -> None:
+        """Offset synthetic-half id columns so original/clone ids are disjoint."""
+        for column in self._id_columns(base):
+            if column not in clone.columns:
+                continue
+            if not pd.api.types.is_numeric_dtype(clone[column]):
+                raise ValueError(
+                    f"id column '{column}' must be numeric to offset clone ids."
+                )
+            max_value = base[column].max()
+            offset = 0 if pd.isna(max_value) else int(max_value) + 1
+            clone[column] = clone[column] + offset

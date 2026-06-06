@@ -1,4 +1,4 @@
-"""Run the declarative imputation graph: fit microimpute.Imputer per step and
+"""Run the declarative imputation graph: fit a microimpute model per step and
 write the synthesized columns onto the target half.
 
 This is the heart of the spec-driven engine (see
@@ -7,10 +7,10 @@ This is the heart of the spec-driven engine (see
 the model — regime-gated, QRF-based, sequentially-chained imputation. The
 runner only orchestrates the *declared graph*:
 
-- For each :class:`~microplex.spec.ImputationStep`, fit
-  :class:`microimpute.Imputer` on the donor frame (weighted if a weight column
-  is present) over the step's variable list, conditioned on ``condition_on``
-  (default: the target half's demographic columns).
+- For each :class:`~microplex.spec.ImputationStep`, fit microimpute's concrete
+  QRF imputer on the donor frame (weighted if a weight column is present) over
+  the step's variable list, conditioned on ``condition_on`` (default: the target
+  half's demographic columns).
 - microimpute chains internally: numeric ``imputed_variables`` are conditioned
   sequentially on the originals plus the previously-imputed targets, in list
   order. So the runner's only job for chaining is to *order* the variable list;
@@ -149,7 +149,7 @@ class ImputationStepResult:
 
 
 class ImputationRunner:
-    """Orchestrate microimpute.Imputer over a declared imputation graph.
+    """Orchestrate microimpute QRF over a declared imputation graph.
 
     Args:
         column_groups: Mapping from group token (e.g. ``"demographics"``) to its
@@ -162,9 +162,10 @@ class ImputationRunner:
         weight_column: Name of a sampling-weight column. When present in a donor
             frame, the fit is weighted. ``None`` disables weighting.
         spine_keywords: Keyword list for :func:`spine_first_order`.
-        imputer_factory: Callable returning a fresh ``microimpute.Imputer`` (or
-            compatible) per step. Defaults to constructing ``Imputer`` lazily so
-            the dependency is only required when the runner actually runs.
+        imputer_factory: Callable returning a fresh microimpute-compatible
+            imputer per step. Defaults to constructing ``microimpute.QRF``
+            lazily so the dependency is only required when the runner actually
+            runs.
         seed: Seed forwarded to the default imputer factory.
 
     Notes:
@@ -338,7 +339,7 @@ class ImputationRunner:
             new_target[var] = predictions[var].to_numpy()
 
         result.imputed = list(to_impute)
-        result.predictors = self._extract_predictors(fitted)
+        result.predictors = self._declared_predictors(predictors, to_impute)
         logger.info(
             "step onto=%s from=%s: imputed %d vars%s",
             step.onto,
@@ -411,14 +412,31 @@ class ImputationRunner:
         if self._imputer_factory is not None:
             return self._imputer_factory()
         # Lazy import so microimpute is only required when actually running.
-        from microimpute import Imputer
+        # microimpute.Imputer is the abstract base class; QRF is the concrete
+        # chained donor backend used by the eCPS-style pipeline.
+        from microimpute import QRF
 
-        return Imputer(seed=self.seed)
+        imputer = QRF(log_level="WARNING")
+        if hasattr(imputer, "seed"):
+            imputer.seed = self.seed
+        return imputer
 
     @staticmethod
-    def _extract_predictors(fitted) -> dict[str, list[str]]:
-        """Pull the chained-predictor mapping off a fitted imputer result."""
-        predictors_attr = getattr(fitted, "predictors_", None)
-        if isinstance(predictors_attr, Mapping):
-            return {var: list(cols) for var, cols in predictors_attr.items()}
-        return {}
+    def _declared_predictors(
+        predictors: Sequence[str],
+        imputed_variables: Sequence[str],
+    ) -> dict[str, list[str]]:
+        """Return the declared chain map for fitted targets.
+
+        microimpute internally encodes categorical predictors, so fitted model
+        feature names are implementation details. The release-facing contract is
+        simpler: each later variable conditions on the step predictors plus all
+        previously imputed variables in declared chain order.
+        """
+        base = list(predictors)
+        chain: dict[str, list[str]] = {}
+        prior: list[str] = []
+        for var in imputed_variables:
+            chain[var] = [*base, *prior]
+            prior.append(var)
+        return chain

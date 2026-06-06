@@ -1,8 +1,8 @@
 """Tests for SpineBuilder (microplex.spine) on synthetic frames.
 
-Covers: disjoint + total-cover split, stripped columns dropped on the
-synthetic half while demographics + ids are kept, passthrough half keeps
-everything, correct half labels, determinism, and error cases.
+Covers: eCPS-style 2x cloning, stripped columns dropped on the synthetic half
+while demographics + ids + zero weights are kept, passthrough half keeps
+everything, correct half labels, id offsets, and error cases.
 """
 
 from __future__ import annotations
@@ -11,7 +11,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from microplex.spec import HalfSpec, SpineSpec, SplitSpec
+from microplex.spec import CloneSpec, HalfSpec, SpineSpec
 from microplex.spine import DEFAULT_HALF_LABEL_COLUMN, SpineBuilder
 
 DEMOGRAPHIC_COLS = ["age", "is_male", "tax_unit_is_joint"]
@@ -35,11 +35,12 @@ def _synthetic_base(n: int = 200, seed: int = 7) -> pd.DataFrame:
     )
 
 
-def _spine_spec(fraction: float = 0.5, seed: int = 0) -> SpineSpec:
+def _spine_spec(seed: int = 0) -> SpineSpec:
     """A spine: first half keeps all; second stripped to demographics + id."""
     return SpineSpec(
         base="cps",
-        split=SplitSpec(fraction=fraction, seed=seed),
+        method="clone",
+        clone=CloneSpec(seed=seed),
         halves=[
             HalfSpec(name="cps_keep", keep="all"),
             HalfSpec(name="synthetic", strip_to=["demographics", "tax_unit_id"]),
@@ -55,61 +56,22 @@ def _builder(spine: SpineSpec | None = None) -> SpineBuilder:
 
 
 class TestSplit:
-    def test_total_cover(self) -> None:
+    def test_clones_every_base_row_twice(self) -> None:
         base = _synthetic_base(200)
         result = _builder().build(base)
-        assert len(result.frame) == len(base)
+        assert len(result.frame) == 2 * len(base)
+        assert len(result.halves["cps_keep"]) == len(base)
+        assert len(result.halves["synthetic"]) == len(base)
 
-    def test_halves_are_disjoint_and_partition_ids(self) -> None:
+    def test_clone_ids_are_disjoint_offset_copies(self) -> None:
         base = _synthetic_base(200)
         result = _builder().build(base)
         keep_ids = set(result.halves["cps_keep"]["tax_unit_id"])
         synth_ids = set(result.halves["synthetic"]["tax_unit_id"])
-        # Disjoint.
         assert keep_ids.isdisjoint(synth_ids)
-        # Together cover every base id exactly once.
-        assert keep_ids | synth_ids == set(base["tax_unit_id"])
-        assert len(keep_ids) + len(synth_ids) == len(base)
-
-    def test_fraction_assigns_first_half(self) -> None:
-        base = _synthetic_base(100)
-        spine = _spine_spec(fraction=0.3, seed=1)
-        result = SpineBuilder(
-            spine, column_groups={"demographics": DEMOGRAPHIC_COLS}
-        ).build(base)
-        # 30% to the first-declared half (cps_keep).
-        assert len(result.halves["cps_keep"]) == 30
-        assert len(result.halves["synthetic"]) == 70
-
-    def test_determinism_same_seed(self) -> None:
-        base = _synthetic_base(200)
-        r1 = _builder().build(base)
-        r2 = _builder().build(base)
-        ids1 = set(r1.halves["cps_keep"]["tax_unit_id"])
-        ids2 = set(r2.halves["cps_keep"]["tax_unit_id"])
-        assert ids1 == ids2
-
-    def test_different_seed_different_split(self) -> None:
-        base = _synthetic_base(200)
-        r_a = SpineBuilder(
-            _spine_spec(seed=0), column_groups={"demographics": DEMOGRAPHIC_COLS}
-        ).build(base)
-        r_b = SpineBuilder(
-            _spine_spec(seed=999), column_groups={"demographics": DEMOGRAPHIC_COLS}
-        ).build(base)
-        ids_a = set(r_a.halves["cps_keep"]["tax_unit_id"])
-        ids_b = set(r_b.halves["cps_keep"]["tax_unit_id"])
-        assert ids_a != ids_b
-
-    def test_neither_half_empty_for_extreme_fraction(self) -> None:
-        base = _synthetic_base(50)
-        # fraction must be in (0,1); a tiny fraction still yields >=1 row each.
-        spine = _spine_spec(fraction=0.001, seed=3)
-        result = SpineBuilder(
-            spine, column_groups={"demographics": DEMOGRAPHIC_COLS}
-        ).build(base)
-        assert len(result.halves["cps_keep"]) >= 1
-        assert len(result.halves["synthetic"]) >= 1
+        offset = int(base["tax_unit_id"].max()) + 1
+        assert keep_ids == set(base["tax_unit_id"])
+        assert synth_ids == set(base["tax_unit_id"] + offset)
 
 
 class TestColumns:
@@ -126,8 +88,8 @@ class TestColumns:
         synth = result.halves["synthetic"]
         for col in INCOME_COLS:
             assert col not in synth.columns, f"stripped half still has {col}"
-        # household_weight is also not in strip_to -> dropped.
-        assert "household_weight" not in synth.columns
+        # Weight columns are retained so the calibrator can activate the clone.
+        assert "household_weight" in synth.columns
 
     def test_stripped_half_keeps_demographics_and_id(self) -> None:
         base = _synthetic_base()
@@ -135,6 +97,13 @@ class TestColumns:
         synth = result.halves["synthetic"]
         for col in DEMOGRAPHIC_COLS + ["tax_unit_id"]:
             assert col in synth.columns, f"stripped half is missing {col}"
+
+    def test_stripped_half_zeroes_weight_columns(self) -> None:
+        base = _synthetic_base()
+        result = _builder().build(base)
+        synth = result.halves["synthetic"]
+        assert (synth["household_weight"] == 0).all()
+        assert (result.halves["cps_keep"]["household_weight"] > 0).all()
 
     def test_resolve_columns_expands_demographics_group(self) -> None:
         builder = _builder()
@@ -144,7 +113,7 @@ class TestColumns:
     def test_resolve_columns_dedupes(self) -> None:
         spine = SpineSpec(
             base="cps",
-            split=SplitSpec(fraction=0.5),
+            method="clone",
             halves=[
                 HalfSpec(name="keep", keep="all"),
                 # 'age' appears both via the group and literally.

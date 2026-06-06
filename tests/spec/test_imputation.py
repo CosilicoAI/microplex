@@ -8,9 +8,19 @@ full-graph run() including 'both'.
 
 from __future__ import annotations
 
+from importlib.metadata import PackageNotFoundError, version
+
 import numpy as np
 import pandas as pd
 import pytest
+
+try:
+    version("microimpute")
+except PackageNotFoundError:
+    pytest.skip(
+        "microimpute is required for spec-driven imputation tests",
+        allow_module_level=True,
+    )
 
 from microplex.imputation import (
     SPINE_FIRST_KEYWORDS,

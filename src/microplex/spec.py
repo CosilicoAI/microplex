@@ -5,7 +5,7 @@ This module is the single source of truth for "what a pack declares" (see
 ``docs/spec-driven-rebuild.md`` §1). A pack ships a YAML document; the engine
 (:mod:`microplex.run`) consumes the validated :class:`MicroplexSpec` and runs
 generic stages over it. There is no logic-Python in the pack: the spec names
-sources, declares how the spine is split, what is imputed from what (and in
+sources, declares how the spine is cloned, what is imputed from what (and in
 what order), which deterministic transforms run, and which targets calibrate
 the result.
 
@@ -34,12 +34,13 @@ from pydantic import (
 
 __all__ = [
     "SourceRole",
+    "SpineMethod",
     "ImputationOrder",
     "TransformKind",
     "CalibrationMethod",
     "SpecMeta",
     "SourceSpec",
-    "SplitSpec",
+    "CloneSpec",
     "HalfSpec",
     "SpineSpec",
     "ImputationStep",
@@ -73,13 +74,24 @@ class SpecError(ValueError):
 class SourceRole(str, Enum):
     """The role a source plays in the build.
 
-    - ``spine``: the survey substrate that is split into halves. Exactly one
+    - ``spine``: the survey substrate that is cloned into halves. Exactly one
       source must be the spine.
     - ``donor``: a source other halves draw imputed variables from.
     """
 
     SPINE = "spine"
     DONOR = "donor"
+
+
+class SpineMethod(str, Enum):
+    """Spine construction strategy.
+
+    - ``clone``: eCPS-style PUF clone semantics. Every base row appears once in
+      a passthrough half and once in a synthetic half. This is the only
+      supported method until an explicitly-tested partition variant exists.
+    """
+
+    CLONE = "clone"
 
 
 class ImputationOrder(str, Enum):
@@ -159,20 +171,17 @@ class SourceSpec(_StrictModel):
     )
 
 
-class SplitSpec(_StrictModel):
-    """How the base frame is split into two disjoint halves."""
+class CloneSpec(_StrictModel):
+    """Options for eCPS-style clone spine construction."""
 
-    fraction: float = Field(
-        ...,
-        gt=0.0,
-        lt=1.0,
-        description="Fraction of base rows assigned to the FIRST half (0<f<1).",
+    seed: int = Field(
+        default=0,
+        description="Reserved deterministic seed for clone-stage stochastic hooks.",
     )
-    seed: int = Field(default=0, description="Deterministic RNG seed for the split.")
 
 
 class HalfSpec(_StrictModel):
-    """One half of the split spine.
+    """One half of the cloned spine.
 
     Exactly one of ``keep`` / ``strip_to`` must be set:
 
@@ -225,23 +234,35 @@ class HalfSpec(_StrictModel):
 
 
 class SpineSpec(_StrictModel):
-    """The spine: a base source split into exactly two halves.
+    """The spine: a base source cloned into exactly two halves.
 
-    This is the eCPS ``puf_clone`` pattern, generalized (see blueprint §4):
-    one half keeps real survey values, the other is stripped to demographics
-    and synthesized through the imputation graph.
+    This is the eCPS ``puf_clone`` pattern, generalized (see blueprint §4): one
+    half keeps real survey values, the other is a cloned copy stripped to
+    demographics/ids and synthesized through the imputation graph.
     """
 
     base: str = Field(
         ...,
         min_length=1,
-        description="Name of the source to split (its role must be 'spine').",
+        description="Name of the source to clone (its role must be 'spine').",
     )
-    split: SplitSpec
+    method: SpineMethod = Field(
+        default=SpineMethod.CLONE,
+        description="Spine construction method. Only 'clone' is currently supported.",
+    )
+    clone: CloneSpec = Field(
+        default_factory=CloneSpec,
+        description="Options for the eCPS-style clone spine method.",
+    )
     halves: list[HalfSpec] = Field(..., min_length=2, max_length=2)
 
     @model_validator(mode="after")
     def _validate_halves(self) -> SpineSpec:
+        if self.method is not SpineMethod.CLONE:
+            raise ValueError(
+                f"spine.method '{self.method.value}' is not supported; "
+                "only 'clone' is currently valid."
+            )
         names = [half.name for half in self.halves]
         if len(set(names)) != len(names):
             raise ValueError(f"spine halves must have distinct names; got {names}.")
@@ -277,7 +298,7 @@ class ImputationStep(_StrictModel):
     """One step in the declarative imputation graph.
 
     Synthesize ``vars`` onto the ``onto`` half (or ``both`` halves) by fitting
-    :class:`microimpute.Imputer` on the ``from`` donor, conditioned on
+    microimpute's concrete QRF donor backend on the ``from`` donor, conditioned on
     ``condition_on`` (default: the half's demographic columns) plus the
     already-imputed chain. ``order`` controls the chain ordering.
     """
