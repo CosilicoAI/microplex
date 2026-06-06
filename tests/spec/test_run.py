@@ -12,7 +12,12 @@ import pandas as pd
 import pytest
 
 from microplex.core import EntityType
-from microplex.run import PENDING_STAGES, resolve_sources, run_spec
+from microplex.run import (
+    PENDING_STAGES,
+    SpecCalibrationResult,
+    resolve_sources,
+    run_spec,
+)
 from microplex.spec import load_spec_dict
 from microplex.targets import (
     TargetAggregation,
@@ -164,6 +169,34 @@ class RecordingTargetProvider:
         return apply_target_query(self.target_set, query)
 
 
+class RecordingCalibrator:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    def calibrate(
+        self,
+        frame: pd.DataFrame,
+        *,
+        target_set: TargetSet,
+        calibrate,
+        weight_column: str | None,
+    ) -> SpecCalibrationResult:
+        self.calls.append(
+            {
+                "target_names": tuple(target.name for target in target_set.targets),
+                "loss": calibrate.loss,
+                "method": calibrate.method.value,
+                "weight_column": weight_column,
+            }
+        )
+        calibrated = frame.copy()
+        calibrated["household_weight"] = calibrated["household_weight"] + 1.0
+        return SpecCalibrationResult(
+            frame=calibrated,
+            diagnostics={"targets": len(target_set.targets)},
+        )
+
+
 def _target_set() -> TargetSet:
     return TargetSet(
         [
@@ -299,6 +332,54 @@ class TestRunSpec:
             "target_profile": "pe_native_broad",
             "calibration_target_profile": "pe_native_broad_source_backed",
         }
+
+    def test_calibrator_runs_after_declared_targets_are_loaded(self) -> None:
+        spec = load_spec_dict(_spec_dict())
+        provider = RecordingTargetProvider(_target_set())
+        calibrator = RecordingCalibrator()
+
+        result = run_spec(
+            spec,
+            _sources(),
+            demographic_columns=DEMOGRAPHIC_COLS,
+            target_provider=provider,
+            calibrator=calibrator,
+        )
+
+        assert result.pending_stages == ("export",)
+        assert result.calibration_result is not None
+        assert result.calibration_result.diagnostics == {"targets": 1}
+        assert calibrator.calls == [
+            {
+                "target_names": ("employment_income_total",),
+                "loss": "pe_native_bucketed_huber_v1",
+                "method": "apg",
+                "weight_column": "household_weight",
+            }
+        ]
+        uncalibrated = run_spec(
+            spec,
+            _sources(),
+            demographic_columns=DEMOGRAPHIC_COLS,
+            target_provider=provider,
+        )
+        pd.testing.assert_series_equal(
+            result.frame["household_weight"],
+            uncalibrated.frame["household_weight"] + 1.0,
+            check_names=False,
+        )
+
+    def test_calibrator_requires_loaded_declared_target_surface(self) -> None:
+        spec = load_spec_dict(_spec_dict())
+        calibrator = RecordingCalibrator()
+
+        with pytest.raises(ValueError, match="requires a loaded target_set"):
+            run_spec(
+                spec,
+                _sources(),
+                demographic_columns=DEMOGRAPHIC_COLS,
+                calibrator=calibrator,
+            )
 
     def test_imputation_results_recorded(self) -> None:
         spec = load_spec_dict(_spec_dict())

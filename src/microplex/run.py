@@ -13,12 +13,15 @@ spec-driven engine (see ``docs/spec-driven-rebuild.md`` §2) over a validated
    declared split/derive rules to the stacked frame.
 5. **Targets** (:class:`~microplex.targets.TargetProvider`) — when a provider is
    supplied, load the spec-declared target surface and attach it to the result.
+6. **Calibration** (:class:`SpecCalibrator`) — when both a target provider and a
+   calibrator are supplied, reweight the post-transform frame to the loaded
+   target surface.
 
-Calibration and export are **not yet wired** here — they are marked as explicit
-``TODO`` stages (see :data:`PENDING_STAGES`) and the blueprint's build order (§6
-steps 3, 6). ``run_spec`` returns the post-transform frame plus any loaded
-target set; a later phase will reweight to it and export the PolicyEngine
-dataset.
+Export is **not yet wired** here — it is marked as an explicit ``TODO`` stage
+(see :data:`PENDING_STAGES`) and the blueprint's build order (§6 step 6).
+``run_spec`` returns the post-transform or calibrated frame plus any loaded
+target set and calibration diagnostics; a later phase will export the
+PolicyEngine dataset.
 
 Source resolution contract: ``run_spec`` takes an already-loaded
 ``{source_name: DataFrame}`` mapping. Wiring the full provider-backed
@@ -31,6 +34,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from typing import Any, Protocol, runtime_checkable
 
 import pandas as pd
 
@@ -39,7 +43,7 @@ from microplex.imputation import (
     ImputationRunner,
     ImputationStepResult,
 )
-from microplex.spec import MicroplexSpec
+from microplex.spec import CalibrateSpec, MicroplexSpec
 from microplex.spec_transforms import TransformEngine
 from microplex.spine import SpineBuilder, SpineBuildResult
 from microplex.targets.provider import TargetProvider, TargetQuery
@@ -50,6 +54,8 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "PENDING_STAGES",
     "RunResult",
+    "SpecCalibrationResult",
+    "SpecCalibrator",
     "resolve_sources",
     "run_spec",
 ]
@@ -58,9 +64,32 @@ __all__ = [
 #: :func:`run_spec`. Each is a clear TODO, not a stub that fabricates output.
 PENDING_STAGES: tuple[str, ...] = (
     "targets",  # ArchTargetProvider: fetch + roll up the Arch target set.
-    "calibrate",  # Calibrator: reweight to targets via the declared loss/method.
+    "calibrate",  # SpecCalibrator: reweight to targets via declared loss/method.
     "export",  # Exporter: write the PolicyEngine dataset.
 )
+
+
+@dataclass(frozen=True)
+class SpecCalibrationResult:
+    """The output of a spec-runner calibration stage."""
+
+    frame: pd.DataFrame
+    diagnostics: Mapping[str, Any] = field(default_factory=dict)
+
+
+@runtime_checkable
+class SpecCalibrator(Protocol):
+    """Protocol for country-specific calibration bound into ``run_spec``."""
+
+    def calibrate(
+        self,
+        frame: pd.DataFrame,
+        *,
+        target_set: TargetSet,
+        calibrate: CalibrateSpec,
+        weight_column: str | None,
+    ) -> SpecCalibrationResult | pd.DataFrame:
+        """Return a calibrated frame for the loaded target surface."""
 
 
 @dataclass
@@ -75,6 +104,9 @@ class RunResult:
         imputation_results: Per-(step, half) imputation outcomes.
         target_set: The spec-declared target set when a target provider was
             supplied; otherwise ``None`` and ``targets`` remains pending.
+        calibration_result: The calibration output when a calibrator was
+            supplied and run; otherwise ``None`` and ``calibrate`` remains
+            pending.
         pending_stages: Stages declared but not yet run (see
             :data:`PENDING_STAGES`).
     """
@@ -84,6 +116,7 @@ class RunResult:
     halves: dict[str, pd.DataFrame]
     imputation_results: list[ImputationStepResult] = field(default_factory=list)
     target_set: TargetSet | None = None
+    calibration_result: SpecCalibrationResult | None = None
     pending_stages: tuple[str, ...] = PENDING_STAGES
 
 
@@ -127,6 +160,7 @@ def run_spec(
     spine_keywords: Sequence[str] = SPINE_FIRST_KEYWORDS,
     imputer_factory=None,
     target_provider: TargetProvider | None = None,
+    calibrator: SpecCalibrator | None = None,
     seed: int = 0,
 ) -> RunResult:
     """Run the wired stages of the spec-driven engine end-to-end.
@@ -145,6 +179,10 @@ def run_spec(
             (defaults to canonical regime-aware ``microimpute.Imputer``).
         target_provider: Optional provider used to load the spec-declared target
             surface. When omitted, targets remain an explicit pending stage.
+        calibrator: Optional country-specific calibrator used to reweight the
+            post-transform frame to the loaded target surface. Requires both
+            ``spec.targets`` and ``target_provider`` so calibration never runs
+            against an implicit or freshly recomputed target surface.
         seed: Seed forwarded to the default imputer.
 
     Returns:
@@ -200,6 +238,7 @@ def run_spec(
     final_frame = transform_engine.apply(stacked, spec.transforms)
 
     target_set: TargetSet | None = None
+    calibration_result: SpecCalibrationResult | None = None
     pending_stages = list(PENDING_STAGES)
 
     # Stage 5: targets. A provider-backed load is the first non-faked seam for
@@ -223,12 +262,45 @@ def run_spec(
             tuple(pending_stages),
         )
 
+    # Stage 6: calibration. This seam is intentionally strict: calibrating
+    # without a loaded TargetSet would recreate the stale eCPS-surface failure
+    # mode that the release gates now forbid.
+    if calibrator is not None:
+        if spec.calibrate is None:
+            raise ValueError(
+                "calibrator was supplied but the spec has no 'calibrate' section"
+            )
+        if target_set is None:
+            raise ValueError(
+                "calibrator requires a loaded target_set; supply target_provider "
+                "for the spec-declared target surface"
+            )
+        raw_calibration_result = calibrator.calibrate(
+            final_frame,
+            target_set=target_set,
+            calibrate=spec.calibrate,
+            weight_column=weight_column,
+        )
+        if isinstance(raw_calibration_result, pd.DataFrame):
+            calibration_result = SpecCalibrationResult(frame=raw_calibration_result)
+        else:
+            calibration_result = raw_calibration_result
+        final_frame = calibration_result.frame
+        pending_stages.remove("calibrate")
+        logger.info(
+            "run_spec: calibrated frame with %d targets using '%s'/%s",
+            len(target_set.targets),
+            spec.calibrate.loss,
+            spec.calibrate.method.value,
+        )
+
     return RunResult(
         frame=final_frame,
         spine=spine_result,
         halves=halves,
         imputation_results=imputation_results,
         target_set=target_set,
+        calibration_result=calibration_result,
         pending_stages=tuple(pending_stages),
     )
 
