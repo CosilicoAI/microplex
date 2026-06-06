@@ -7,10 +7,10 @@ This is the heart of the spec-driven engine (see
 the model — regime-gated, QRF-based, sequentially-chained imputation. The
 runner only orchestrates the *declared graph*:
 
-- For each :class:`~microplex.spec.ImputationStep`, fit microimpute's concrete
-  QRF imputer on the donor frame (weighted if a weight column is present) over
-  the step's variable list, conditioned on ``condition_on`` (default: the target
-  half's demographic columns).
+- For each :class:`~microplex.spec.ImputationStep`, fit microimpute's canonical
+  regime-aware ``Imputer`` on the donor frame (weighted if a weight column is
+  present) over the step's variable list, conditioned on ``condition_on``
+  (default: the target half's demographic columns).
 - microimpute chains internally: numeric ``imputed_variables`` are conditioned
   sequentially on the originals plus the previously-imputed targets, in list
   order. So the runner's only job for chaining is to *order* the variable list;
@@ -135,9 +135,11 @@ class ImputationStepResult:
         skipped_passthrough: Requested vars that already existed on the target
             and were preserved (step did not set ``synthesize``).
         skipped_missing_in_donor: Requested vars not present in the donor frame.
-        predictors: The fitted ``Imputer.predictors_`` mapping (var -> chained
-            predictor list), for inspection/testing. Empty if nothing numeric
-            was imputed.
+        predictors: The declared chain mapping (var -> chained predictor list),
+            for inspection/testing. Empty if nothing numeric was imputed.
+        regimes: The fitted sign-regime mapping exposed by canonical
+            ``microimpute.Imputer`` when available. Empty for injected custom
+            backends that do not expose ``regimes_``.
     """
 
     onto: str
@@ -146,10 +148,11 @@ class ImputationStepResult:
     skipped_passthrough: list[str] = field(default_factory=list)
     skipped_missing_in_donor: list[str] = field(default_factory=list)
     predictors: dict[str, list[str]] = field(default_factory=dict)
+    regimes: dict[str, str] = field(default_factory=dict)
 
 
 class ImputationRunner:
-    """Orchestrate microimpute QRF over a declared imputation graph.
+    """Orchestrate canonical microimpute over a declared imputation graph.
 
     Args:
         column_groups: Mapping from group token (e.g. ``"demographics"``) to its
@@ -163,9 +166,9 @@ class ImputationRunner:
             frame, the fit is weighted. ``None`` disables weighting.
         spine_keywords: Keyword list for :func:`spine_first_order`.
         imputer_factory: Callable returning a fresh microimpute-compatible
-            imputer per step. Defaults to constructing ``microimpute.QRF``
-            lazily so the dependency is only required when the runner actually
-            runs.
+            imputer per step. Defaults to constructing the canonical
+            regime-aware ``microimpute.Imputer`` lazily so the dependency is
+            only required when the runner actually runs.
         seed: Seed forwarded to the default imputer factory.
 
     Notes:
@@ -340,6 +343,7 @@ class ImputationRunner:
 
         result.imputed = list(to_impute)
         result.predictors = self._declared_predictors(predictors, to_impute)
+        result.regimes = self._extract_regimes(fitted, to_impute)
         logger.info(
             "step onto=%s from=%s: imputed %d vars%s",
             step.onto,
@@ -412,14 +416,29 @@ class ImputationRunner:
         if self._imputer_factory is not None:
             return self._imputer_factory()
         # Lazy import so microimpute is only required when actually running.
-        # microimpute.Imputer is the abstract base class; QRF is the concrete
-        # chained donor backend used by the eCPS-style pipeline.
-        from microimpute import QRF
+        # The canonical Imputer is regime-gated, QRF-based, and always chains
+        # numeric targets in declared order. Bare QRF is injectable for
+        # experiments, but it is not the release-default path.
+        from microimpute import Imputer
 
-        imputer = QRF(log_level="WARNING")
+        imputer = Imputer(seed=self.seed, log_level="WARNING")
         if hasattr(imputer, "seed"):
             imputer.seed = self.seed
         return imputer
+
+    @staticmethod
+    def _extract_regimes(fitted, imputed_variables: Sequence[str]) -> dict[str, str]:
+        """Extract fitted sign regimes when the backend exposes them."""
+        regimes = getattr(fitted, "regimes_", None)
+        if regimes is None:
+            return {}
+        if callable(regimes):
+            regimes = regimes()
+        return {
+            var: str(regime)
+            for var, regime in dict(regimes).items()
+            if var in set(imputed_variables)
+        }
 
     @staticmethod
     def _declared_predictors(

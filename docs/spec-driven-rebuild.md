@@ -38,7 +38,7 @@ spine:
 imputation:
   # Declarative graph. Each step = synthesize a set of vars from a donor onto a
   # target half, conditioned on demographics + the already-imputed chain.
-  # The engine runs microimpute's concrete QRF donor backend per step.
+  # The engine runs microimpute's canonical regime-aware donor backend per step.
   - { onto: synthetic_puf, from: puf, vars: PUF_TAX_BLOCK,  order: spine_first }
   - { onto: cps_keep,      from: puf, vars: PUF_ONLY_BLOCK, condition_on: [demographics, cps_income] }
   - { onto: both,          from: scf, vars: [net_worth, ...] }
@@ -61,7 +61,7 @@ calibrate:
 Notes:
 - **Variable blocks** (`PUF_TAX_BLOCK`, etc.) are named lists declared in the spec (or pulled from the model's variable metadata), not Python.
 - **`condition_on` / `order`** are the only "knobs" — they map to microimpute's `predictors` + chain order. `spine_first` = a generic ordering that puts wage/total-income/receipt-type variables before the dependent items.
-- **passthrough vs synthesize** is a per-variable tag, declared. This is what's left of the 1,300-line `VariableSemanticSpec` — the rest dissolves because microimpute's concrete donor backend now does regime+chaining generically.
+- **passthrough vs synthesize** is a per-variable tag, declared. This is what's left of the 1,300-line `VariableSemanticSpec` — the rest dissolves because microimpute's canonical donor backend now does regime+chaining generically.
 
 ---
 
@@ -72,7 +72,7 @@ Notes:
 1. **`spec` (`microplex.spec`)** — Pydantic schema + loader/validator for the DSL above. The single source of truth for "what a pack declares."
 2. **`SourceRegistry`** — resolve `sources` to loaded, harmonized frames (already largely in `microplex/data_sources` + the source providers).
 3. **`SpineBuilder`** — implement §4 (clone base; one half kept; other half stripped to declared columns). Generic; no country logic.
-4. **`ImputationRunner`** — for each `imputation` step, fit microimpute's concrete QRF donor backend on the donor (weighted) over the step's var block, conditioned on `condition_on` (+ chain), and apply to the target half. This is the heart; microimpute already does the model. The runner just orchestrates the declared graph + entity grain.
+4. **`ImputationRunner`** — for each `imputation` step, fit microimpute's canonical regime-aware donor backend on the donor (weighted) over the step's var block, conditioned on `condition_on` (+ chain), and apply to the target half. This is the heart; microimpute already does the model. The runner just orchestrates the declared graph + entity grain.
 5. **`TransformEngine`** — apply declared `transforms` (splits/derivations) deterministically.
 6. **`ArchTargetProvider`** (moved out of `microplex-us/targets/arch.py`) — fetch + roll up Arch target records into `TargetSet`. Generic; the *values* already live in Arch (the pack just names the set).
 7. **`Calibrator`** — reweight to targets via the declared loss/method (already in core).
@@ -85,7 +85,7 @@ Notes:
 | today (microplex-us) | becomes |
 | --- | --- |
 | `pipelines/us.py` spine construction (~clone) | `microplex.SpineBuilder` (generic), driven by `spine:` spec |
-| `pipelines/us.py` donor integration + `donor_imputers.py` | `microplex.ImputationRunner` + microimpute QRF (done), driven by `imputation:` spec |
+| `pipelines/us.py` donor integration + `donor_imputers.py` | `microplex.ImputationRunner` + canonical microimpute (done), driven by `imputation:` spec |
 | `variables.py` `VariableSemanticSpec` (1,300 lines) | dissolves → per-variable `{source, passthrough\|synthesize, order}` tags in the spec; regime/chaining is microimpute's job |
 | `targets/arch.py` (7k, "Adapters from Arch records to core specs") | `microplex.targets.ArchProvider` (generic; the providers/rollups/carry-forward are not US-specific) |
 | SS-split etc. | declared `transforms:` consumed by `microplex.TransformEngine` |
@@ -98,7 +98,7 @@ Notes:
 This is the bug that cost the current build. The synthetic-PUF half must carry the **PUF's** income distribution (the tail), not CPS's. So:
 
 - `cps_keep` half: real CPS values (passthrough). Its PUF-only tax detail (cap gains, etc.) is imputed *conditioned on* its real CPS income.
-- `synthetic_puf` half: **strip to demographics (+ tax_unit_id)**, then **synthesize the whole PUF tax-unit** (wages included) through microimpute's concrete QRF donor backend conditioned on demographics + the chain. Wide distributions on the first chained variables are correct — it's a barely-conditioned pure synthetic PUF. **Never keep/condition on CPS wages here.**
+- `synthetic_puf` half: **strip to demographics (+ tax_unit_id)**, then **synthesize the whole PUF tax-unit** (wages included) through microimpute's canonical regime-aware donor backend conditioned on demographics + the chain. Wide distributions on the first chained variables are correct — it's a barely-conditioned pure synthetic PUF. **Never keep/condition on CPS wages here.**
 
 This is exactly what eCPS's `policyengine_us_data/calibration/puf_impute.py:puf_clone_dataset` does by hand ("doubles CPS; one half keeps CPS values, the other half gets PUF tax variables imputed via QRF" from demographic predictors). `SpineBuilder` + `ImputationRunner` implement that pattern generically; the spec declares it.
 

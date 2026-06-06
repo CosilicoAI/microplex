@@ -298,9 +298,9 @@ class ImputationStep(_StrictModel):
     """One step in the declarative imputation graph.
 
     Synthesize ``vars`` onto the ``onto`` half (or ``both`` halves) by fitting
-    microimpute's concrete QRF donor backend on the ``from`` donor, conditioned on
-    ``condition_on`` (default: the half's demographic columns) plus the
-    already-imputed chain. ``order`` controls the chain ordering.
+    microimpute's canonical regime-aware donor backend on the ``from`` donor,
+    conditioned on ``condition_on`` (default: the half's demographic columns)
+    plus the already-imputed chain. ``order`` controls the chain ordering.
     """
 
     onto: str = Field(..., min_length=1, description="Target half name, or 'both'.")
