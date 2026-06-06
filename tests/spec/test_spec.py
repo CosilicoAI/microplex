@@ -17,6 +17,7 @@ from microplex.spec import (
     MicroplexSpec,
     SourceRole,
     SpecError,
+    SpineMethod,
     TransformKind,
     load_spec,
     load_spec_dict,
@@ -35,7 +36,8 @@ def _valid_spec_dict() -> dict:
         },
         "spine": {
             "base": "cps",
-            "split": {"fraction": 0.5, "seed": 0},
+            "method": "clone",
+            "clone": {"seed": 0},
             "halves": [
                 {"name": "cps_keep", "keep": "all"},
                 {"name": "synthetic_puf", "strip_to": ["demographics", "tax_unit_id"]},
@@ -76,11 +78,11 @@ class TestLoadValid:
     def test_fixture_spine_halves(self) -> None:
         spec = load_spec(FIXTURES / "us_2024.yaml")
         assert spec.spine.half_names == ("cps_keep", "synthetic_puf")
+        assert spec.spine.method is SpineMethod.CLONE
         assert spec.spine.passthrough_half.name == "cps_keep"
         assert spec.spine.synthetic_half.name == "synthetic_puf"
         assert spec.spine.synthetic_half.strip_to == ["demographics", "tax_unit_id"]
-        assert spec.spine.split.fraction == 0.5
-        assert spec.spine.split.seed == 0
+        assert spec.spine.clone.seed == 0
 
     def test_fixture_imputation_steps(self) -> None:
         spec = load_spec(FIXTURES / "us_2024.yaml")
@@ -259,10 +261,17 @@ class TestRejectMalformed:
         with pytest.raises(SpecError, match="halves"):
             load_spec_dict(data)
 
-    def test_split_fraction_out_of_range(self) -> None:
+    def test_old_partition_split_field_rejected(self) -> None:
         data = _valid_spec_dict()
-        data["spine"]["split"]["fraction"] = 1.5
-        with pytest.raises(SpecError, match="fraction"):
+        del data["spine"]["clone"]
+        data["spine"]["split"] = {"fraction": 0.5, "seed": 0}
+        with pytest.raises(SpecError, match="split"):
+            load_spec_dict(data)
+
+    def test_unsupported_spine_method_rejected(self) -> None:
+        data = _valid_spec_dict()
+        data["spine"]["method"] = "split"
+        with pytest.raises(SpecError, match="method"):
             load_spec_dict(data)
 
     def test_imputation_onto_unknown_half(self) -> None:

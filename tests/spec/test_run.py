@@ -79,7 +79,8 @@ def _spec_dict() -> dict:
         },
         "spine": {
             "base": "cps",
-            "split": {"fraction": 0.5, "seed": 0},
+            "method": "clone",
+            "clone": {"seed": 0},
             "halves": [
                 {"name": "cps_keep", "keep": "all"},
                 {
@@ -146,7 +147,15 @@ class TestRunSpec:
             demographic_columns=DEMOGRAPHIC_COLS,
         )
         assert isinstance(result.frame, pd.DataFrame)
-        assert len(result.frame) == len(_cps())  # both halves cover the base
+        base = _cps()
+        assert len(result.frame) == 2 * len(base)
+        label = result.spine.half_label_column
+        assert result.frame[label].value_counts().to_dict() == {
+            "cps_keep": len(base),
+            "synthetic_puf": len(base),
+        }
+        synthetic = result.frame[result.frame[label] == "synthetic_puf"]
+        assert (synthetic["household_weight"] == 0).all()
 
     def test_output_has_expected_columns(self) -> None:
         spec = load_spec_dict(_spec_dict())

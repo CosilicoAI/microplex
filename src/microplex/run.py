@@ -5,10 +5,10 @@ spec-driven engine (see ``docs/spec-driven-rebuild.md`` §2) over a validated
 :class:`~microplex.spec.MicroplexSpec`:
 
 1. **Sources** — resolve the spec's declared sources to loaded frames.
-2. **Spine** (:class:`~microplex.spine.SpineBuilder`) — split the base into a
-   passthrough half and a stripped half.
+2. **Spine** (:class:`~microplex.spine.SpineBuilder`) — clone the base into a
+   passthrough half and a stripped synthetic half.
 3. **Imputation** (:class:`~microplex.imputation.ImputationRunner`) — synthesize
-   the declared variable graph onto the halves via ``microimpute.Imputer``.
+   the declared variable graph onto the halves via microimpute QRF.
 4. **Transforms** (:class:`~microplex.spec_transforms.TransformEngine`) — apply
    declared split/derive rules to the stacked frame.
 
@@ -134,7 +134,7 @@ def run_spec(
         weight_column: Sampling-weight column for weighted imputation fits.
         spine_keywords: Keyword list for the spine-first ordering heuristic.
         imputer_factory: Optional callable returning a fresh imputer per step
-            (defaults to ``microimpute.Imputer``).
+            (defaults to ``microimpute.QRF``).
         seed: Seed forwarded to the default imputer.
 
     Returns:

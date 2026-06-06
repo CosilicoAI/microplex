@@ -8,8 +8,9 @@ Status as of this overnight session. Branch: `claude/spec-driven-engine`
 
 The five foundation modules from the build brief are complete: each is
 implemented, unit-tested on small **synthetic** frames (no real CPS/PUF data
-build — that's a later phase), `ruff format` + `ruff check` clean, and
-committed + pushed separately.
+build — that's a later phase), and pushed. Codex PR #18 then corrected the
+spine to explicit eCPS clone semantics and the runner to concrete
+microimpute QRF.
 
 | # | Module | Class / entry point | Tests | Status |
 |---|--------|--------------------|-------|--------|
@@ -19,11 +20,12 @@ committed + pushed separately.
 | 4 | `src/microplex/spec_transforms.py` | `TransformEngine` | `tests/spec/test_spec_transforms.py` (13) | pushed |
 | 5 | `src/microplex/run.py` | `run_spec`, `resolve_sources`, `RunResult` | `tests/spec/test_run.py` (10) | pushed |
 
-**100 tests, all passing.** Fixture spec: `tests/spec/fixtures/us_2024.yaml`.
+**Spec tests after PR #18: 98 passing.** Fixture spec:
+`tests/spec/fixtures/us_2024.yaml`.
 
 ### 1. `microplex.spec` — the DSL (blueprint §1)
 Pydantic v2 schema + YAML loader for the full DSL: `meta`, `sources`
-(name→{dataset, role}), `spine` (base, split{fraction,seed},
+(name→{dataset, role}), `spine` (base, method: clone, clone{seed},
 halves[{name, keep|strip_to}]), `imputation` (steps {onto, from, vars,
 condition_on?, order?, synthesize?}), `transforms` (split/derive),
 `targets` ({arch:{country,model_year}}), `calibrate` ({loss, method,
@@ -36,19 +38,20 @@ passthrough half, fractional split sums to 1, etc. `load_spec(path)` and
 messages.
 
 ### 2. `microplex.spine` — `SpineBuilder` (blueprint §4)
-The eCPS `puf_clone` pattern generalized. Splits a base frame into two
-disjoint, deterministic (seeded) halves that partition every row; the
-passthrough (`keep: all`) half keeps all columns, the stripped (`strip_to`)
-half keeps only its declared columns (so its income tail is synthesized from
-scratch, not inherited — the correctness anchor). Appends a half-label column.
+The eCPS `puf_clone` pattern generalized. Clones every base row into two
+copies: the passthrough (`keep: all`) half keeps all columns, while the
+synthetic (`strip_to`) half keeps only its declared columns plus ids/weights
+(so its income tail is synthesized from scratch, not inherited — the
+correctness anchor). Synthetic ids are offset and synthetic weights start at
+zero. Appends a half-label column.
 Country-agnostic: the `demographics` group token is resolved via a
 caller-supplied `column_groups` mapping, never hard-coded.
 
 ### 3. `microplex.imputation` — `ImputationRunner` (blueprint §2 stage 4, the heart)
-For each step, fits `microimpute.Imputer` on the donor frame (weighted when a
-weight column is present), conditioned on the resolved `condition_on` (default:
-the half's demographic columns), and writes the predicted columns onto the
-target half. **Chaining is microimpute's job** — the runner only orders the
+For each step, fits concrete `microimpute.QRF` on the donor frame (weighted
+when a weight column is present), conditioned on the resolved `condition_on`
+(default: the half's demographic columns), and writes the predicted columns
+onto the target half. **Chaining is microimpute's job** — the runner only orders the
 variable list; `spine_first_order` is the generic, documented, overridable
 heuristic (income/receipt-type keywords first, stable within tiers) so
 dependents chain on the income spine. Respects passthrough: a column the half
@@ -56,9 +59,9 @@ already has is preserved unless the step sets `synthesize: true`. `run()`
 applies the whole graph, expanding `both` to every half and threading
 sequential steps through a working copy.
 
-Chaining is verified the way the brief asked — via the fitted imputer's
-`predictors_`: e.g. with `imputed_variables=[employment_income, capital_gains]`,
-`predictors_["capital_gains"]` contains `"employment_income"`.
+Chaining is verified via the runner's declared chain map, not encoded model
+feature names: e.g. with `imputed_variables=[employment_income, capital_gains]`,
+`predictors["capital_gains"]` contains `"employment_income"`.
 
 ### 4. `microplex.spec_transforms` — `TransformEngine` (blueprint §2 stage 5)
 Applies declared `split`/`derive` rules deterministically. A fractional split
