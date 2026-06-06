@@ -184,6 +184,13 @@ class TestConditionOn:
 
 
 class TestRunStep:
+    def test_default_factory_uses_canonical_regime_imputer(self) -> None:
+        from microimpute import Imputer
+
+        imputer = _runner()._make_imputer()
+        assert isinstance(imputer, Imputer)
+        assert imputer.signregime is True
+
     def test_imputes_requested_vars(self) -> None:
         runner = _runner()
         step = ImputationStep(
@@ -197,6 +204,7 @@ class TestRunStep:
         assert "capital_gains" in new_target.columns
         assert new_target["employment_income"].notna().all()
         assert set(result.imputed) == {"employment_income", "capital_gains"}
+        assert set(result.regimes) == {"employment_income", "capital_gains"}
         # Demographics + id preserved.
         for col in ["tax_unit_id", "age", "is_male"]:
             assert col in new_target.columns

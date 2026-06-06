@@ -9,8 +9,8 @@ Status as of this overnight session. Branch: `claude/spec-driven-engine`
 The five foundation modules from the build brief are complete: each is
 implemented, unit-tested on small **synthetic** frames (no real CPS/PUF data
 build — that's a later phase), and pushed. Codex PR #18 then corrected the
-spine to explicit eCPS clone semantics and the runner to concrete
-microimpute QRF.
+spine to explicit eCPS clone semantics. The follow-up runner correction pins
+the default to canonical regime-aware microimpute.
 
 | # | Module | Class / entry point | Tests | Status |
 |---|--------|--------------------|-------|--------|
@@ -48,10 +48,10 @@ Country-agnostic: the `demographics` group token is resolved via a
 caller-supplied `column_groups` mapping, never hard-coded.
 
 ### 3. `microplex.imputation` — `ImputationRunner` (blueprint §2 stage 4, the heart)
-For each step, fits concrete `microimpute.QRF` on the donor frame (weighted
-when a weight column is present), conditioned on the resolved `condition_on`
-(default: the half's demographic columns), and writes the predicted columns
-onto the target half. **Chaining is microimpute's job** — the runner only orders the
+For each step, fits canonical regime-aware `microimpute.Imputer` on the donor
+frame (weighted when a weight column is present), conditioned on the resolved
+`condition_on` (default: the half's demographic columns), and writes the
+predicted columns onto the target half. **Chaining is microimpute's job** — the runner only orders the
 variable list; `spine_first_order` is the generic, documented, overridable
 heuristic (income/receipt-type keywords first, stable within tiers) so
 dependents chain on the income spine. Respects passthrough: a column the half

@@ -1607,7 +1607,7 @@ wheels = [
 [[package]]
 name = "microimpute"
 version = "3.1.1"
-source = { registry = "https://pypi.org/simple" }
+source = { git = "https://github.com/PolicyEngine/microimpute.git?rev=90be828eb442c48ee86bb91bb83a75da4b0f0f89#90be828eb442c48ee86bb91bb83a75da4b0f0f89" }
 dependencies = [
     { name = "joblib", marker = "python_full_version >= '3.12'" },
     { name = "numpy", marker = "python_full_version >= '3.12'" },
@@ -1622,10 +1622,6 @@ dependencies = [
     { name = "scipy", marker = "python_full_version >= '3.12'" },
     { name = "statsmodels", marker = "python_full_version >= '3.12'" },
     { name = "tqdm", marker = "python_full_version >= '3.12'" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/a0/a0/15e25e78b7fa48d100f52d210290f2ba5820ebc47e4859748a7d89a3cae9/microimpute-3.1.1.tar.gz", hash = "sha256:70aa5bd28e7cef254695b8317c0f88e11e39ea204e0f6362cb33a94163438c3e", size = 146197, upload-time = "2026-06-06T09:54:07.848Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/7f/d9/2b1ae246461f88388e2a43ff29f0f3477ac89cc52b11abaf775089b7553d/microimpute-3.1.1-py3-none-any.whl", hash = "sha256:c6a8fcb2ab129486fce48299cf89901b12632d69c0483251bae5f8d68a0d326b", size = 127432, upload-time = "2026-06-06T09:54:06.717Z" },
 ]
 
 [[package]]
@@ -1704,7 +1700,7 @@ requires-dist = [
     { name = "l0-python", marker = "extra == 'l0'", specifier = ">=0.4" },
     { name = "matplotlib", marker = "extra == 'benchmark'", specifier = ">=3.7" },
     { name = "microcalibrate", marker = "python_full_version >= '3.13' and extra == 'calibrate'", specifier = ">=0.22" },
-    { name = "microimpute", marker = "python_full_version >= '3.12' and python_full_version < '3.15'", specifier = ">=3.1.1" },
+    { name = "microimpute", marker = "python_full_version >= '3.12' and python_full_version < '3.15'", git = "https://github.com/PolicyEngine/microimpute.git?rev=90be828eb442c48ee86bb91bb83a75da4b0f0f89" },
     { name = "microplex", extras = ["dev", "benchmark", "docs", "calibrate"], marker = "extra == 'all'" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.0" },
     { name = "myst-nb", marker = "extra == 'docs'", specifier = ">=0.17" },
