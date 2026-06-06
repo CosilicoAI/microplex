@@ -129,7 +129,14 @@ def _spec_dict() -> dict:
                 }
             },
         ],
-        "targets": {"arch": {"country": "us", "model_year": 2024}},
+        "targets": {
+            "arch": {
+                "country": "us",
+                "model_year": 2024,
+                "target_profile": "pe_native_broad",
+                "calibration_target_profile": "pe_native_broad_source_backed",
+            }
+        },
         "calibrate": {"loss": "pe_native_bucketed_huber_v1", "method": "apg"},
     }
 

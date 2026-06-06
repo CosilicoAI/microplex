@@ -51,7 +51,11 @@ transforms:
   - split: { source: social_security, into: {retirement: ..., disability: ..., survivors: ..., ssi: ...} }
 
 targets:
-  arch: { country: us, model_year: 2024 }   # the Arch target set; engine fetches + rolls up
+  arch:
+    country: us
+    model_year: 2024
+    target_profile: pe_native_broad
+    calibration_target_profile: pe_native_broad_source_backed
 
 calibrate:
   loss: pe_native_bucketed_huber_v1
