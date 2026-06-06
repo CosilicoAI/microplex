@@ -1,0 +1,51 @@
+# Illustrative valid Microplex spec fixture (mirrors blueprint §1).
+# Used by tests; not a production pack spec.
+meta:
+  country: us
+  model_year: 2024
+  policyengine_model: policyengine-us
+
+sources:
+  cps_asec: { dataset: cps_asec_2024, role: spine }
+  puf: { dataset: puf_2024, role: donor }
+  scf: { dataset: scf_2022, role: donor }
+
+spine:
+  base: cps_asec
+  split: { fraction: 0.5, seed: 0 }
+  halves:
+    - { name: cps_keep, keep: all }
+    - { name: synthetic_puf, strip_to: [demographics, tax_unit_id] }
+
+imputation:
+  - onto: synthetic_puf
+    from: puf
+    vars: [employment_income, long_term_capital_gains, taxable_interest_income]
+    order: spine_first
+    synthesize: true
+  - onto: cps_keep
+    from: puf
+    vars: [long_term_capital_gains]
+    condition_on: [demographics, employment_income]
+  - onto: both
+    from: scf
+    vars: [net_worth]
+
+transforms:
+  - split:
+      source: social_security
+      into:
+        social_security_retirement: 0.7
+        social_security_disability: 0.2
+        social_security_survivors: 0.1
+  - derive:
+      target: total_income
+      expr: employment_income + taxable_interest_income
+
+targets:
+  arch: { country: us, model_year: 2024 }
+
+calibrate:
+  loss: pe_native_bucketed_huber_v1
+  method: apg
+  target_records: 100000
