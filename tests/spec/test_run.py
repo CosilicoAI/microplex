@@ -11,8 +11,17 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from microplex.core import EntityType
 from microplex.run import PENDING_STAGES, resolve_sources, run_spec
 from microplex.spec import load_spec_dict
+from microplex.targets import (
+    TargetAggregation,
+    TargetProvider,
+    TargetQuery,
+    TargetSet,
+    TargetSpec,
+    apply_target_query,
+)
 
 DEMOGRAPHIC_COLS = ["age", "is_male", "tax_unit_is_joint"]
 
@@ -145,6 +154,31 @@ def _sources() -> dict[str, pd.DataFrame]:
     return {"cps": _cps(), "puf": _puf(), "scf": _scf()}
 
 
+class RecordingTargetProvider:
+    def __init__(self, target_set: TargetSet) -> None:
+        self.target_set = target_set
+        self.queries: list[TargetQuery | None] = []
+
+    def load_target_set(self, query: TargetQuery | None = None) -> TargetSet:
+        self.queries.append(query)
+        return apply_target_query(self.target_set, query)
+
+
+def _target_set() -> TargetSet:
+    return TargetSet(
+        [
+            TargetSpec(
+                name="employment_income_total",
+                entity=EntityType.TAX_UNIT,
+                value=1_000_000.0,
+                period=2024,
+                measure="employment_income",
+                aggregation=TargetAggregation.SUM,
+            )
+        ]
+    )
+
+
 class TestRunSpec:
     def test_end_to_end_runs(self) -> None:
         spec = load_spec_dict(_spec_dict())
@@ -233,8 +267,38 @@ class TestRunSpec:
         spec = load_spec_dict(_spec_dict())
         result = run_spec(spec, _sources(), demographic_columns=DEMOGRAPHIC_COLS)
         assert result.pending_stages == PENDING_STAGES
+        assert result.target_set is None
         assert "calibrate" in result.pending_stages
         assert "export" in result.pending_stages
+
+    def test_target_provider_loads_declared_target_surface(self) -> None:
+        spec = load_spec_dict(_spec_dict())
+        provider = RecordingTargetProvider(_target_set())
+
+        assert isinstance(provider, TargetProvider)
+        result = run_spec(
+            spec,
+            _sources(),
+            demographic_columns=DEMOGRAPHIC_COLS,
+            target_provider=provider,
+        )
+
+        assert result.target_set is not None
+        assert [target.name for target in result.target_set.targets] == [
+            "employment_income_total"
+        ]
+        assert result.pending_stages == ("calibrate", "export")
+        assert len(provider.queries) == 1
+        query = provider.queries[0]
+        assert query is not None
+        assert query.period == 2024
+        assert query.provider_filters == {
+            "source": "arch",
+            "country": "us",
+            "model_year": 2024,
+            "target_profile": "pe_native_broad",
+            "calibration_target_profile": "pe_native_broad_source_backed",
+        }
 
     def test_imputation_results_recorded(self) -> None:
         spec = load_spec_dict(_spec_dict())

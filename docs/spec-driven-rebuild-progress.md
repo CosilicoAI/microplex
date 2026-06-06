@@ -82,12 +82,14 @@ transforms see earlier outputs; `apply()` never mutates input.
 ### 5. `microplex.run` — `run_spec` (blueprint §2, §6)
 Sequences the wired stages: `resolve_sources` → `SpineBuilder` →
 `ImputationRunner` → `TransformEngine`. Returns a `RunResult` with the
-post-transform stacked frame, the spine result, per-half frames, and per-step
-imputation outcomes. The end-to-end smoke test runs the full sequence on tiny
-synthetic CPS/PUF/SCF frames and asserts the output column set, that both
+post-transform stacked frame, the spine result, per-half frames, per-step
+imputation outcomes, and, when a `TargetProvider` is supplied, the
+spec-declared `TargetSet`. The end-to-end smoke test runs the full sequence on
+tiny synthetic CPS/PUF/SCF frames and asserts the output column set, that both
 halves get `net_worth` (a `both` step), that the synthetic half's income is
-synthesized while the kept half's real income is preserved (passthrough), and
-that a split sums back.
+synthesized while the kept half's real income is preserved (passthrough), that a
+split sums back, and that the target provider receives the declared Arch
+country/model-year/profile query.
 
 ## Notable correctness fix found while building
 
@@ -102,12 +104,14 @@ imputation tests.
 
 ## Deliberately NOT wired (clear TODOs, not faked)
 
-`run_spec` reports these via `PENDING_STAGES = ("targets", "calibrate",
-"export")` and logs that they are not yet wired. No weights or calibrated
-datasets are fabricated. These correspond to blueprint §2 stages 6–8 and build
-order §6 step 3:
+`run_spec` reports still-unwired stages via `PENDING_STAGES = ("targets",
+"calibrate", "export")`. If a `TargetProvider` is supplied, the `targets`
+stage is no longer pending: the runner builds a `TargetQuery` from
+`targets.arch` (`country`, `model_year`, `target_profile`,
+`calibration_target_profile`) and attaches the loaded `TargetSet` to the
+result. If no provider is supplied, `targets` remains pending. No weights or
+calibrated datasets are fabricated. Remaining TODOs:
 
-- **`targets` (ArchTargetProvider):** fetch + roll up the Arch target set.
 - **`calibrate` (Calibrator):** reweight to targets via the declared
   loss/method (core already has `Calibrator`/`Reweighter`/`SparseCalibrator`).
 - **`export` (Exporter):** write the PolicyEngine dataset.
@@ -178,9 +182,10 @@ runs use the direct-venv path and `uv.lock` is left untouched.)
 
 ## What remains (next phases, in blueprint build order)
 
-1. **Wire targets/calibrate/export into `run_spec`** (the `PENDING_STAGES`).
-   Reuse core's `Calibrator`/`Reweighter` for calibrate; build the generic
-   Arch provider for targets (the deferred stretch).
+1. **Wire calibrate/export into `run_spec`** (the remaining
+   `PENDING_STAGES`). Reuse core's `Calibrator`/`Reweighter` for calibrate;
+   build the generic Arch provider implementation behind the target-provider
+   seam (the deferred stretch).
 2. **The Arch provider move** as scoped above — generic record protocol +
    injected config + fresh generic tests.
 3. **Provider-backed `SourceRegistry`** behind `resolve_sources` so the spec's

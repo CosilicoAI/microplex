@@ -11,12 +11,14 @@ spec-driven engine (see ``docs/spec-driven-rebuild.md`` §2) over a validated
    the declared variable graph onto the halves via canonical microimpute.
 4. **Transforms** (:class:`~microplex.spec_transforms.TransformEngine`) — apply
    declared split/derive rules to the stacked frame.
+5. **Targets** (:class:`~microplex.targets.TargetProvider`) — when a provider is
+   supplied, load the spec-declared target surface and attach it to the result.
 
-Targets, calibration, and export are **not yet wired** here — they are marked
-as explicit ``TODO`` stages (see :data:`PENDING_STAGES`) and the blueprint's
-build order (§6 steps 3, 6). ``run_spec`` returns the post-transform frame; a
-later phase will fetch the Arch target set, reweight to it, and export the
-PolicyEngine dataset.
+Calibration and export are **not yet wired** here — they are marked as explicit
+``TODO`` stages (see :data:`PENDING_STAGES`) and the blueprint's build order (§6
+steps 3, 6). ``run_spec`` returns the post-transform frame plus any loaded
+target set; a later phase will reweight to it and export the PolicyEngine
+dataset.
 
 Source resolution contract: ``run_spec`` takes an already-loaded
 ``{source_name: DataFrame}`` mapping. Wiring the full provider-backed
@@ -40,6 +42,8 @@ from microplex.imputation import (
 from microplex.spec import MicroplexSpec
 from microplex.spec_transforms import TransformEngine
 from microplex.spine import SpineBuilder, SpineBuildResult
+from microplex.targets.provider import TargetProvider, TargetQuery
+from microplex.targets.spec import TargetSet
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +73,8 @@ class RunResult:
         halves: The per-half frames after imputation (before stacking for
             transforms), keyed by half name.
         imputation_results: Per-(step, half) imputation outcomes.
+        target_set: The spec-declared target set when a target provider was
+            supplied; otherwise ``None`` and ``targets`` remains pending.
         pending_stages: Stages declared but not yet run (see
             :data:`PENDING_STAGES`).
     """
@@ -77,6 +83,7 @@ class RunResult:
     spine: SpineBuildResult
     halves: dict[str, pd.DataFrame]
     imputation_results: list[ImputationStepResult] = field(default_factory=list)
+    target_set: TargetSet | None = None
     pending_stages: tuple[str, ...] = PENDING_STAGES
 
 
@@ -119,6 +126,7 @@ def run_spec(
     weight_column: str | None = "household_weight",
     spine_keywords: Sequence[str] = SPINE_FIRST_KEYWORDS,
     imputer_factory=None,
+    target_provider: TargetProvider | None = None,
     seed: int = 0,
 ) -> RunResult:
     """Run the wired stages of the spec-driven engine end-to-end.
@@ -135,12 +143,14 @@ def run_spec(
         spine_keywords: Keyword list for the spine-first ordering heuristic.
         imputer_factory: Optional callable returning a fresh imputer per step
             (defaults to canonical regime-aware ``microimpute.Imputer``).
+        target_provider: Optional provider used to load the spec-declared target
+            surface. When omitted, targets remain an explicit pending stage.
         seed: Seed forwarded to the default imputer.
 
     Returns:
         A :class:`RunResult`. ``frame`` is the post-transform stacked frame;
-        ``pending_stages`` lists the not-yet-wired targets/calibrate/export
-        stages.
+        ``target_set`` is populated only when ``target_provider`` is supplied;
+        ``pending_stages`` lists the not-yet-wired stages.
 
     Raises:
         KeyError: if a declared source has no frame.
@@ -189,14 +199,28 @@ def run_spec(
     transform_engine = TransformEngine()
     final_frame = transform_engine.apply(stacked, spec.transforms)
 
-    # Stages 5+ (targets / calibrate / export): not yet wired. See
-    # PENDING_STAGES and docs/spec-driven-rebuild.md §6. We deliberately do not
-    # fabricate weights or a calibrated dataset here.
-    if spec.targets is not None or spec.calibrate is not None:
+    target_set: TargetSet | None = None
+    pending_stages = list(PENDING_STAGES)
+
+    # Stage 5: targets. A provider-backed load is the first non-faked seam for
+    # the clean scoring/calibration surface. Calibration/export still remain
+    # explicit TODOs; we deliberately do not fabricate weights or a dataset.
+    if spec.targets is not None and target_provider is not None:
+        target_query = _target_query_from_spec(spec)
+        target_set = target_provider.load_target_set(target_query)
+        pending_stages.remove("targets")
         logger.info(
-            "run_spec: targets/calibrate declared but not yet wired; "
+            "run_spec: loaded %d targets for profile '%s' "
+            "(calibration profile '%s')",
+            len(target_set.targets),
+            spec.targets.arch.target_profile,
+            spec.targets.arch.resolved_calibration_target_profile,
+        )
+    elif spec.targets is not None:
+        logger.info(
+            "run_spec: targets declared but no target_provider was supplied; "
             "returning the post-transform frame. Pending: %s",
-            PENDING_STAGES,
+            tuple(pending_stages),
         )
 
     return RunResult(
@@ -204,7 +228,30 @@ def run_spec(
         spine=spine_result,
         halves=halves,
         imputation_results=imputation_results,
-        pending_stages=PENDING_STAGES,
+        target_set=target_set,
+        pending_stages=tuple(pending_stages),
+    )
+
+
+def _target_query_from_spec(spec: MicroplexSpec) -> TargetQuery:
+    """Build the provider query for the spec-declared Arch target surface."""
+    if spec.targets is None:
+        raise ValueError("cannot build a target query for a spec without targets")
+    arch = spec.targets.arch
+    provider_filters = {
+        "source": "arch",
+        "country": arch.country,
+        "model_year": arch.model_year,
+    }
+    if arch.target_profile is not None:
+        provider_filters["target_profile"] = arch.target_profile
+    if arch.resolved_calibration_target_profile is not None:
+        provider_filters["calibration_target_profile"] = (
+            arch.resolved_calibration_target_profile
+        )
+    return TargetQuery(
+        period=arch.model_year,
+        provider_filters=provider_filters,
     )
 
 
