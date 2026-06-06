@@ -1,0 +1,188 @@
+# Spec-driven Microplex rebuild — progress
+
+Status as of this overnight session. Branch: `claude/spec-driven-engine`
+(repo `PolicyEngine/microplex`). Authoritative design:
+[`docs/spec-driven-rebuild.md`](./spec-driven-rebuild.md).
+
+## What's built, tested, and pushed
+
+The five foundation modules from the build brief are complete: each is
+implemented, unit-tested on small **synthetic** frames (no real CPS/PUF data
+build — that's a later phase), `ruff format` + `ruff check` clean, and
+committed + pushed separately.
+
+| # | Module | Class / entry point | Tests | Status |
+|---|--------|--------------------|-------|--------|
+| 1 | `src/microplex/spec.py` | `MicroplexSpec`, `load_spec`, `load_spec_dict` | `tests/spec/test_spec.py` (34) | pushed |
+| 2 | `src/microplex/spine.py` | `SpineBuilder`, `SpineBuildResult` | `tests/spec/test_spine.py` (18) | pushed |
+| 3 | `src/microplex/imputation.py` | `ImputationRunner`, `spine_first_order` | `tests/spec/test_imputation.py` (25) | pushed |
+| 4 | `src/microplex/spec_transforms.py` | `TransformEngine` | `tests/spec/test_spec_transforms.py` (13) | pushed |
+| 5 | `src/microplex/run.py` | `run_spec`, `resolve_sources`, `RunResult` | `tests/spec/test_run.py` (10) | pushed |
+
+**100 tests, all passing.** Fixture spec: `tests/spec/fixtures/us_2024.yaml`.
+
+### 1. `microplex.spec` — the DSL (blueprint §1)
+Pydantic v2 schema + YAML loader for the full DSL: `meta`, `sources`
+(name→{dataset, role}), `spine` (base, split{fraction,seed},
+halves[{name, keep|strip_to}]), `imputation` (steps {onto, from, vars,
+condition_on?, order?, synthesize?}), `transforms` (split/derive),
+`targets` ({arch:{country,model_year}}), `calibrate` ({loss, method,
+target_records?}). Strict (`extra="forbid"`) with cross-reference validation:
+exactly one spine source, `spine.base` resolves and is the spine source,
+imputation `onto` references a declared half or `both`, `from` references a
+declared source, exactly-one `keep`/`strip_to` per half, exactly one
+passthrough half, fractional split sums to 1, etc. `load_spec(path)` and
+`load_spec_dict(mapping)` raise a single `SpecError` with field-pathed
+messages.
+
+### 2. `microplex.spine` — `SpineBuilder` (blueprint §4)
+The eCPS `puf_clone` pattern generalized. Splits a base frame into two
+disjoint, deterministic (seeded) halves that partition every row; the
+passthrough (`keep: all`) half keeps all columns, the stripped (`strip_to`)
+half keeps only its declared columns (so its income tail is synthesized from
+scratch, not inherited — the correctness anchor). Appends a half-label column.
+Country-agnostic: the `demographics` group token is resolved via a
+caller-supplied `column_groups` mapping, never hard-coded.
+
+### 3. `microplex.imputation` — `ImputationRunner` (blueprint §2 stage 4, the heart)
+For each step, fits `microimpute.Imputer` on the donor frame (weighted when a
+weight column is present), conditioned on the resolved `condition_on` (default:
+the half's demographic columns), and writes the predicted columns onto the
+target half. **Chaining is microimpute's job** — the runner only orders the
+variable list; `spine_first_order` is the generic, documented, overridable
+heuristic (income/receipt-type keywords first, stable within tiers) so
+dependents chain on the income spine. Respects passthrough: a column the half
+already has is preserved unless the step sets `synthesize: true`. `run()`
+applies the whole graph, expanding `both` to every half and threading
+sequential steps through a working copy.
+
+Chaining is verified the way the brief asked — via the fitted imputer's
+`predictors_`: e.g. with `imputed_variables=[employment_income, capital_gains]`,
+`predictors_["capital_gains"]` contains `"employment_income"`.
+
+### 4. `microplex.spec_transforms` — `TransformEngine` (blueprint §2 stage 5)
+Applies declared `split`/`derive` rules deterministically. A fractional split
+partitions a source column into named pieces that **sum back to the source**
+(asserted within tolerance); a derive evaluates a pandas-eval expression. Later
+transforms see earlier outputs; `apply()` never mutates input.
+
+> **Naming note.** Named `spec_transforms` rather than `transforms` because
+> `microplex.transforms` already exists and houses the unrelated
+> numeric/array variable transformers (`LogTransform`, `Standardizer`,
+> `ZeroInflatedTransform`, …) used for neural-network training. The blueprint's
+> "TransformEngine" is a distinct, spec-driven concern, so it lives in its own
+> module to avoid clobbering that public surface. If a later phase wants the
+> flat `microplex.transforms.TransformEngine` name, the variable transformers
+> should be moved/renamed first (e.g. to `microplex.variable_transforms`) as a
+> deliberate, separately-reviewed change.
+
+### 5. `microplex.run` — `run_spec` (blueprint §2, §6)
+Sequences the wired stages: `resolve_sources` → `SpineBuilder` →
+`ImputationRunner` → `TransformEngine`. Returns a `RunResult` with the
+post-transform stacked frame, the spine result, per-half frames, and per-step
+imputation outcomes. The end-to-end smoke test runs the full sequence on tiny
+synthetic CPS/PUF/SCF frames and asserts the output column set, that both
+halves get `net_worth` (a `both` step), that the synthetic half's income is
+synthesized while the kept half's real income is preserved (passthrough), and
+that a split sums back.
+
+## Notable correctness fix found while building
+
+`ImputationRunner` initially passed only `[predictors + imputed_vars]` to
+`Imputer.fit`. microimpute routes **non-numeric** (categorical/boolean) targets
+to an auxiliary imputer that reads `weight_col` off `X_train` *by name*, so a
+weighted fit with any non-numeric target raised
+`"Weight column 'household_weight' not found in training data"`. Fixed by
+including the weight column in the training frame even though it is neither a
+predictor nor an imputed variable. Covered by the boolean-target path in the
+imputation tests.
+
+## Deliberately NOT wired (clear TODOs, not faked)
+
+`run_spec` reports these via `PENDING_STAGES = ("targets", "calibrate",
+"export")` and logs that they are not yet wired. No weights or calibrated
+datasets are fabricated. These correspond to blueprint §2 stages 6–8 and build
+order §6 step 3:
+
+- **`targets` (ArchTargetProvider):** fetch + roll up the Arch target set.
+- **`calibrate` (Calibrator):** reweight to targets via the declared
+  loss/method (core already has `Calibrator`/`Reweighter`/`SparseCalibrator`).
+- **`export` (Exporter):** write the PolicyEngine dataset.
+
+## Stretch goal (Arch provider move) — assessed and deferred, not attempted
+
+The brief's stretch was to begin moving the generic Arch target provider +
+rollups out of `microplex-us/src/microplex_us/targets/arch.py` into
+`microplex/targets/arch_provider.py`. After reading the source
+(`/Users/maxghenis/.claude-worktrees/microplex-us-microimpute/src/microplex_us/targets/arch.py`,
+**7,116 lines**, with a **4,145-line** test suite at
+`tests/targets/test_arch.py`), I deferred this rather than thrash, per the
+"faithful move or skip" instruction. Reasons:
+
+1. **It is not cleanly generic yet.** The providers (`ArchSQLiteTargetProvider`,
+   `ArchFactSQLiteTargetProvider`, `ArchConsumerFactJSONLTargetProvider`,
+   `ArchCompositeSQLiteTargetProvider`) import `microplex_us.geography`,
+   `microplex_us.microdata_roles`, and
+   `microplex_us.policyengine.target_profiles`, and resolve records via
+   `arch_target_record_to_canonical_spec` (US PolicyEngine profile resolution).
+2. **Carry-forward / rollup / component-sum are parameterized by US constant
+   tables, not generic config.** `_is_latest_carry_forward_candidate` hard-codes
+   `source == "SSA"` and `ARCH_LATEST_CARRY_FORWARD_VARIABLES`;
+   `_component_sum_records` uses `ARCH_COMPONENT_SUM_TARGETS`; the
+   state→national rollup calls US-specific BEA/NIPA helpers and emits
+   `concept="policyengine_us.…"`. They operate on the US-shaped
+   `ArchTargetRecord` (jurisdiction, `SOIAgingFactors`, state FIPS).
+3. **The existing tests are US-behavioral**, not generic: SOI aging, AGI
+   brackets, EITC child counts, congressional districts, census STC state
+   income tax, PolicyEngine target cells. They cannot validate a generic core
+   module against "the same Arch fixtures" without dragging `microplex_us` into
+   core — which violates the core's country-agnostic contract (the whole point
+   of the rebuild).
+
+A faithful move therefore requires real design work that belongs in a dedicated
+phase: define a **generic, country-neutral target-record protocol**; lift
+carry-forward / state→national rollup / component-sum onto it with every
+US-specific constant (`ARCH_LATEST_CARRY_FORWARD_VARIABLES`,
+`ARCH_COMPONENT_SUM_TARGETS`, source aliases, the SSA gate, BEA wage
+synthesis) **injected** rather than hard-coded; decouple from
+`policyengine_us` profile resolution; and write a fresh synthetic generic test
+corpus. Rushing it overnight would produce either an unfaithful half-move or
+US-leakage into core. Note: core *already* has a small neutral Arch helper
+layer — `src/microplex/targets/arch.py` (171 lines, `ArchConsumerFact` +
+JSONL loaders) and the generic `TabularRollupTargetProvider` in
+`src/microplex/targets/rollups.py` — which is the right foundation to build the
+generic provider/rollups on when that phase starts.
+
+## How to run the tests
+
+A persistent venv at `.venv` has `pytest`, `ruff`, and `microimpute` (editable
+from the reconcile worktree) installed directly, so test runs don't churn
+`uv.lock`:
+
+```bash
+# microimpute (the canonical Imputer) installed editable into .venv:
+uv pip install --python .venv/bin/python -e \
+  /Users/maxghenis/.claude-worktrees/microimpute-reconcile
+
+# run the spec-engine suite:
+.venv/bin/python -m pytest tests/spec/ -q
+.venv/bin/ruff check src/microplex/{spec,spine,imputation,spec_transforms,run}.py tests/spec/
+```
+
+(The blueprint's suggested `uv run --with-editable …/microimpute-reconcile …`
+also works but re-resolves and rewrites `uv.lock`, which is why the committed
+runs use the direct-venv path and `uv.lock` is left untouched.)
+
+## What remains (next phases, in blueprint build order)
+
+1. **Wire targets/calibrate/export into `run_spec`** (the `PENDING_STAGES`).
+   Reuse core's `Calibrator`/`Reweighter` for calibrate; build the generic
+   Arch provider for targets (the deferred stretch).
+2. **The Arch provider move** as scoped above — generic record protocol +
+   injected config + fresh generic tests.
+3. **Provider-backed `SourceRegistry`** behind `resolve_sources` so the spec's
+   `sources[*].dataset` ids load + harmonize real frames (currently the caller
+   passes already-loaded frames).
+4. **`microplex-us/specs/us-2024.yaml`** — the pure-spec pack.
+5. **The real data build + validation harness vs. frozen eCPS** (blueprint §5,
+   §6 step 6) — the multi-hour CPS/PUF run, explicitly out of scope here.
