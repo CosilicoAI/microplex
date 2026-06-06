@@ -2,8 +2,8 @@
 
 Covers: spine_first ordering, condition_on resolution, imputing requested
 vars, passthrough preservation vs. synthesize-overwrite, chaining wired
-(assert via the fitted Imputer's predictors_), donor-missing handling, and the
-full-graph run() including 'both'.
+(assert via the fitted Imputer's predictors_), regime-gated signed support,
+donor-missing handling, and the full-graph run() including 'both'.
 """
 
 from __future__ import annotations
@@ -190,6 +190,51 @@ class TestRunStep:
         imputer = _runner()._make_imputer()
         assert isinstance(imputer, Imputer)
         assert imputer.signregime is True
+
+    def test_default_imputer_preserves_signed_support_gap(self) -> None:
+        """Loss-bearing targets must not leak into unsupported sign gaps.
+
+        This guards the release default against regressing to bare QRF. The donor
+        has a negative tail and a positive tail with no observations in
+        (-20, 20); the canonical regime gate must expose the fitted sign regime
+        and keep synthetic predictions out of that unsupported gap.
+        """
+        rng = np.random.default_rng(123)
+        n = 800
+        negative_x = rng.normal(-2, 0.2, n // 2)
+        positive_x = rng.normal(2, 0.2, n // 2)
+        donor = pd.DataFrame(
+            {
+                "x": np.concatenate([negative_x, positive_x]),
+                "lossy_income": np.concatenate(
+                    [
+                        rng.uniform(-100, -20, n // 2),
+                        rng.uniform(20, 100, n // 2),
+                    ]
+                ),
+                "household_weight": np.ones(n),
+            }
+        )
+        target = pd.DataFrame({"x": np.linspace(-2.5, 2.5, 400)})
+
+        runner = ImputationRunner(
+            column_groups={"demographics": ["x"]},
+            weight_column="household_weight",
+            seed=0,
+        )
+        step = ImputationStep(
+            onto="synthetic",
+            **{"from": "puf"},
+            vars=["lossy_income"],
+            synthesize=True,
+        )
+        new_target, result = runner.run_step(step, donor=donor, target=target)
+        predictions = new_target["lossy_income"].to_numpy()
+
+        assert result.regimes["lossy_income"] == "SIGN_ONLY"
+        assert not ((predictions > -20) & (predictions < 20)).any()
+        negative_share = (predictions < 0).mean()
+        assert 0.35 < negative_share < 0.65
 
     def test_imputes_requested_vars(self) -> None:
         runner = _runner()
