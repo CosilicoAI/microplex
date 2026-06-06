@@ -427,11 +427,29 @@ class ArchTargetSpec(_StrictModel):
 
     country: str = Field(..., min_length=1)
     model_year: int
+    target_profile: str | None = Field(
+        default=None,
+        min_length=1,
+        description="Target surface/profile used for scoring and metadata.",
+    )
+    calibration_target_profile: str | None = Field(
+        default=None,
+        min_length=1,
+        description=(
+            "Optional narrower/source-backed profile used by calibration. "
+            "Defaults to target_profile when omitted."
+        ),
+    )
 
     @field_validator("country")
     @classmethod
     def _lower_country(cls, value: str) -> str:
         return value.strip().lower()
+
+    @property
+    def resolved_calibration_target_profile(self) -> str | None:
+        """Calibration profile after applying the default-to-target rule."""
+        return self.calibration_target_profile or self.target_profile
 
 
 class TargetsSpec(_StrictModel):

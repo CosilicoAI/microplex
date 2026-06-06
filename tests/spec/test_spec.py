@@ -125,6 +125,11 @@ class TestLoadValid:
         assert spec.targets is not None
         assert spec.targets.arch.country == "us"
         assert spec.targets.arch.model_year == 2024
+        assert spec.targets.arch.target_profile == "pe_native_broad"
+        assert (
+            spec.targets.arch.resolved_calibration_target_profile
+            == "pe_native_broad_source_backed"
+        )
         assert spec.calibrate is not None
         assert spec.calibrate.loss == "pe_native_bucketed_huber_v1"
         assert spec.calibrate.method is CalibrationMethod.APG

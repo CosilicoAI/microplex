@@ -44,7 +44,11 @@ transforms:
       expr: employment_income + taxable_interest_income
 
 targets:
-  arch: { country: us, model_year: 2024 }
+  arch:
+    country: us
+    model_year: 2024
+    target_profile: pe_native_broad
+    calibration_target_profile: pe_native_broad_source_backed
 
 calibrate:
   loss: pe_native_bucketed_huber_v1
