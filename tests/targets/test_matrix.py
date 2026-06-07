@@ -10,12 +10,15 @@ from scipy import sparse
 
 from microplex.core import EntityType
 from microplex.targets import (
+    SPARSE_TARGET_MATRIX_CERTIFICATE_SCHEMA,
     FilterOperator,
     SparseTargetMatrix,
     TargetFilter,
     TargetReweightingConstraint,
     TargetSpec,
     assemble_clone_sparse_target_matrix,
+    assert_sparse_target_matrix_certificate,
+    build_sparse_target_matrix_certificate,
     compile_sparse_target_matrix,
     target_constraints_to_sparse_matrix,
 )
@@ -252,3 +255,85 @@ def test_assemble_clone_sparse_target_matrix_rejects_wrong_record_width() -> Non
             n_records=2,
             n_clones=2,
         )
+
+
+def test_sparse_target_matrix_certificate_round_trips_and_matches() -> None:
+    target_matrix = SparseTargetMatrix(
+        matrix=sparse.csr_matrix(np.array([[1.0, 0.0], [0.0, 2.0]])),
+        target_vector=np.array([10.0, 20.0]),
+        names=("income", "count"),
+        metadata=({"family": "income"}, {"family": "demo"}),
+        skipped_targets=(("unsupported", "missing_features:x"),),
+    )
+
+    certificate = build_sparse_target_matrix_certificate(
+        target_matrix,
+        extra={"baseline": "production_ecps"},
+    )
+    payload = certificate.to_dict()
+
+    assert payload["schema_version"] == SPARSE_TARGET_MATRIX_CERTIFICATE_SCHEMA
+    assert payload["n_targets"] == 2
+    assert payload["n_weights"] == 2
+    assert payload["nnz"] == 2
+    assert payload["extra"] == {"baseline": "production_ecps"}
+    assert_sparse_target_matrix_certificate(target_matrix, payload)
+    target_matrix.assert_matches_certificate(payload)
+
+
+def test_sparse_target_matrix_certificate_is_stable_across_csr_index_order() -> None:
+    unsorted = sparse.csr_matrix(
+        (
+            np.array([2.0, 1.0]),
+            np.array([1, 0]),
+            np.array([0, 2]),
+        ),
+        shape=(1, 2),
+    )
+    sorted_matrix = sparse.csr_matrix(np.array([[1.0, 2.0]]))
+    left = SparseTargetMatrix(
+        matrix=unsorted,
+        target_vector=np.array([3.0]),
+        names=("target",),
+    )
+    right = SparseTargetMatrix(
+        matrix=sorted_matrix,
+        target_vector=np.array([3.0]),
+        names=("target",),
+    )
+
+    assert left.certificate().to_dict() == right.certificate().to_dict()
+
+
+def test_sparse_target_matrix_certificate_rejects_changed_values() -> None:
+    target_matrix = SparseTargetMatrix(
+        matrix=sparse.csr_matrix(np.array([[1.0, 0.0]])),
+        target_vector=np.array([1.0]),
+        names=("target",),
+    )
+    certificate = target_matrix.certificate()
+    changed = SparseTargetMatrix(
+        matrix=sparse.csr_matrix(np.array([[2.0, 0.0]])),
+        target_vector=np.array([1.0]),
+        names=("target",),
+    )
+
+    with pytest.raises(ValueError, match="matrix_values_sha256"):
+        assert_sparse_target_matrix_certificate(changed, certificate)
+
+
+def test_sparse_target_matrix_certificate_rejects_changed_names() -> None:
+    target_matrix = SparseTargetMatrix(
+        matrix=sparse.csr_matrix(np.array([[1.0, 0.0]])),
+        target_vector=np.array([1.0]),
+        names=("target",),
+    )
+    certificate = target_matrix.certificate()
+    changed = SparseTargetMatrix(
+        matrix=sparse.csr_matrix(np.array([[1.0, 0.0]])),
+        target_vector=np.array([1.0]),
+        names=("renamed",),
+    )
+
+    with pytest.raises(ValueError, match="names_sha256"):
+        assert_sparse_target_matrix_certificate(changed, certificate)
