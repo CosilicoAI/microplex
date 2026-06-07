@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import numpy as np
@@ -17,6 +19,8 @@ from microplex.targets.reweighting import (
     compile_target_reweighting_constraints,
 )
 from microplex.targets.spec import TargetSpec
+
+SPARSE_TARGET_MATRIX_CERTIFICATE_SCHEMA = "microplex.sparse_target_matrix.v1"
 
 
 @dataclass(frozen=True)
@@ -60,6 +64,113 @@ class SparseTargetMatrix:
     @property
     def n_weights(self) -> int:
         return self.matrix.shape[1]
+
+    def certificate(self) -> SparseTargetMatrixCertificate:
+        """Build a deterministic identity certificate for this target surface."""
+        return build_sparse_target_matrix_certificate(self)
+
+    def assert_matches_certificate(
+        self,
+        certificate: SparseTargetMatrixCertificate | Mapping[str, Any],
+    ) -> None:
+        """Raise if this target surface does not match a stored certificate."""
+        assert_sparse_target_matrix_certificate(self, certificate)
+
+
+@dataclass(frozen=True)
+class SparseTargetMatrixCertificate:
+    """Deterministic identity hashes for a sparse target matrix."""
+
+    schema_version: str
+    n_targets: int
+    n_weights: int
+    nnz: int
+    names_sha256: str
+    target_vector_sha256: str
+    metadata_sha256: str
+    skipped_targets_sha256: str
+    matrix_structure_sha256: str
+    matrix_values_sha256: str
+    extra: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "n_targets": self.n_targets,
+            "n_weights": self.n_weights,
+            "nnz": self.nnz,
+            "names_sha256": self.names_sha256,
+            "target_vector_sha256": self.target_vector_sha256,
+            "metadata_sha256": self.metadata_sha256,
+            "skipped_targets_sha256": self.skipped_targets_sha256,
+            "matrix_structure_sha256": self.matrix_structure_sha256,
+            "matrix_values_sha256": self.matrix_values_sha256,
+            "extra": dict(self.extra),
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> SparseTargetMatrixCertificate:
+        return cls(
+            schema_version=str(payload["schema_version"]),
+            n_targets=int(payload["n_targets"]),
+            n_weights=int(payload["n_weights"]),
+            nnz=int(payload["nnz"]),
+            names_sha256=str(payload["names_sha256"]),
+            target_vector_sha256=str(payload["target_vector_sha256"]),
+            metadata_sha256=str(payload["metadata_sha256"]),
+            skipped_targets_sha256=str(payload["skipped_targets_sha256"]),
+            matrix_structure_sha256=str(payload["matrix_structure_sha256"]),
+            matrix_values_sha256=str(payload["matrix_values_sha256"]),
+            extra=dict(payload.get("extra", {})),
+        )
+
+
+def build_sparse_target_matrix_certificate(
+    target_matrix: SparseTargetMatrix,
+    *,
+    extra: Mapping[str, Any] | None = None,
+) -> SparseTargetMatrixCertificate:
+    """Build a deterministic certificate for a sparse target matrix."""
+    matrix = target_matrix.matrix.copy().tocsr()
+    matrix.sort_indices()
+    return SparseTargetMatrixCertificate(
+        schema_version=SPARSE_TARGET_MATRIX_CERTIFICATE_SCHEMA,
+        n_targets=target_matrix.n_targets,
+        n_weights=target_matrix.n_weights,
+        nnz=int(matrix.nnz),
+        names_sha256=_json_sha256(target_matrix.names),
+        target_vector_sha256=_array_sha256(target_matrix.target_vector, dtype="<f8"),
+        metadata_sha256=_json_sha256(target_matrix.metadata),
+        skipped_targets_sha256=_json_sha256(target_matrix.skipped_targets),
+        matrix_structure_sha256=_matrix_structure_sha256(matrix),
+        matrix_values_sha256=_array_sha256(matrix.data, dtype="<f8"),
+        extra=dict(extra or {}),
+    )
+
+
+def assert_sparse_target_matrix_certificate(
+    target_matrix: SparseTargetMatrix,
+    certificate: SparseTargetMatrixCertificate | Mapping[str, Any],
+) -> None:
+    """Raise if a sparse target matrix does not match a stored certificate."""
+    expected = (
+        certificate
+        if isinstance(certificate, SparseTargetMatrixCertificate)
+        else SparseTargetMatrixCertificate.from_dict(certificate)
+    )
+    actual = build_sparse_target_matrix_certificate(target_matrix, extra=expected.extra)
+    expected_payload = expected.to_dict()
+    actual_payload = actual.to_dict()
+    mismatches = [
+        key
+        for key, expected_value in expected_payload.items()
+        if actual_payload.get(key) != expected_value
+    ]
+    if mismatches:
+        raise ValueError(
+            "Sparse target matrix certificate mismatch: "
+            + ", ".join(sorted(mismatches))
+        )
 
 
 def target_constraints_to_sparse_matrix(
@@ -242,3 +353,28 @@ def _validate_clone_matrix_alignment(
         raise ValueError(
             f"clone {clone_idx} skipped-target diagnostics do not match clone 0."
         )
+
+
+def _json_sha256(value: Any) -> str:
+    payload = json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _array_sha256(array: np.ndarray, *, dtype: str) -> str:
+    contiguous = np.ascontiguousarray(np.asarray(array).astype(dtype, copy=False))
+    digest = hashlib.sha256()
+    digest.update(str(contiguous.shape).encode("utf-8"))
+    digest.update(contiguous.tobytes())
+    return digest.hexdigest()
+
+
+def _matrix_structure_sha256(matrix: sparse.csr_matrix) -> str:
+    digest = hashlib.sha256()
+    digest.update(str(matrix.shape).encode("utf-8"))
+    digest.update(_array_bytes(matrix.indptr, dtype="<i8"))
+    digest.update(_array_bytes(matrix.indices, dtype="<i8"))
+    return digest.hexdigest()
+
+
+def _array_bytes(array: np.ndarray, *, dtype: str) -> bytes:
+    return np.ascontiguousarray(np.asarray(array).astype(dtype, copy=False)).tobytes()

@@ -53,8 +53,12 @@ from microplex.targets.bundles import (
 )
 from microplex.targets.database import Target, TargetCategory, TargetsDatabase
 from microplex.targets.matrix import (
+    SPARSE_TARGET_MATRIX_CERTIFICATE_SCHEMA,
     SparseTargetMatrix,
+    SparseTargetMatrixCertificate,
     assemble_clone_sparse_target_matrix,
+    assert_sparse_target_matrix_certificate,
+    build_sparse_target_matrix_certificate,
     compile_sparse_target_matrix,
     target_constraints_to_sparse_matrix,
 )
@@ -155,8 +159,12 @@ __all__ = [
     "build_grouped_summaries",
     "EntityTableBinding",
     "EntityTableBundle",
+    "SPARSE_TARGET_MATRIX_CERTIFICATE_SCHEMA",
     "SparseTargetMatrix",
+    "SparseTargetMatrixCertificate",
     "assemble_clone_sparse_target_matrix",
+    "assert_sparse_target_matrix_certificate",
+    "build_sparse_target_matrix_certificate",
     "compile_sparse_target_matrix",
     "target_constraints_to_sparse_matrix",
     "EntityTableBundleReweightingResult",
