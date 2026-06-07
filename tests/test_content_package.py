@@ -87,6 +87,48 @@ def test_spec_variable_manifest_diff_covers_required_and_imputed_vars() -> None:
     assert diff.variable_manifest_count == 6
 
 
+def test_spec_variable_manifest_diff_uses_loaded_yaml_model() -> None:
+    spec_text = """
+meta:
+    country: us
+    model_year: 2024
+sources:
+    cps_asec: { dataset: cps, role: spine }
+    puf: { dataset: puf, role: donor }
+spine:
+    base: cps_asec
+    method: support_spine
+    support: { seed: 42 }
+    halves:
+        - { name: cps_keep, keep: all }
+        - { name: synthetic_puf, strip_to: [demographics] }
+imputation:
+    - onto: synthetic_puf
+      from: puf
+      vars:
+          - employment_income
+      condition_on: [demographics]
+variables:
+    required_export:
+        entity: person
+        role: passthrough
+        mp_spec: { method: passthrough, operation: { kind: passthrough } }
+    employment_income:
+        entity: person
+        role: impute
+        mp_spec: { method: impute, operation: { kind: impute } }
+"""
+
+    diff = compute_spec_variable_manifest_diff(
+        spec_text=spec_text,
+        contract={"required": ["required_export"]},
+    )
+
+    assert diff.ok
+    assert diff.declared_imputation_count == 1
+    assert diff.variable_manifest_count == 2
+
+
 def test_spec_variable_manifest_diff_reports_missing_and_extra_vars() -> None:
     diff = compute_spec_variable_manifest_diff(
         spec_text=_spec_text().replace("  inline_income:\n", "  extra_income:\n"),

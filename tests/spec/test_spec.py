@@ -103,7 +103,15 @@ class TestLoadValid:
         data["spine"]["method"] = "support_spine"
         data["spine"]["support"] = {"seed": 123}
 
-        with pytest.raises(SpecError, match="only one options block"):
+        with pytest.raises(SpecError, match="not legacy 'clone'"):
+            load_spec_dict(data)
+
+    def test_clone_method_rejects_support_options(self) -> None:
+        data = _valid_spec_dict()
+        data["spine"]["support"] = {"seed": 123}
+        del data["spine"]["clone"]
+
+        with pytest.raises(SpecError, match="not 'support'"):
             load_spec_dict(data)
 
     def test_fixture_imputation_steps(self) -> None:

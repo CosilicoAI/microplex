@@ -314,10 +314,16 @@ class SpineSpec(_StrictModel):
                 f"spine.method '{self.method.value}' is not supported; "
                 "use 'support_spine'."
             )
-        if self.support is not None and "clone" in self.model_fields_set:
+        explicit_clone = "clone" in self.model_fields_set
+        if self.method is SpineMethod.SUPPORT_SPINE and explicit_clone:
             raise ValueError(
-                "spine must declare only one options block: use 'support' for "
-                "method: support_spine or legacy 'clone' for method: clone."
+                "spine method: support_spine must use the 'support' options "
+                "block, not legacy 'clone'."
+            )
+        if self.method is SpineMethod.CLONE and self.support is not None:
+            raise ValueError(
+                "spine method: clone must use the legacy 'clone' options block, "
+                "not 'support'."
             )
         names = [half.name for half in self.halves]
         if len(set(names)) != len(names):
