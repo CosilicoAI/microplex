@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
@@ -46,10 +47,22 @@ class SparseTargetMatrix:
             raise ValueError("matrix rows must align to target_vector.")
         if len(names) != len(target_vector):
             raise ValueError("names must align to target_vector.")
+        duplicate_names = sorted(
+            name for name, count in Counter(names).items() if count > 1
+        )
+        if duplicate_names:
+            raise ValueError(
+                "names must be unique; duplicate target names: "
+                + ", ".join(duplicate_names)
+            )
         if metadata and len(metadata) != len(target_vector):
             raise ValueError("metadata must align to target_vector.")
         if not metadata:
             metadata = tuple({} for _ in names)
+        if not np.all(np.isfinite(target_vector)):
+            raise ValueError("target_vector must be finite.")
+        if not np.all(np.isfinite(matrix.data)):
+            raise ValueError("matrix coefficients must be finite.")
 
         object.__setattr__(self, "matrix", matrix)
         object.__setattr__(self, "target_vector", target_vector)
