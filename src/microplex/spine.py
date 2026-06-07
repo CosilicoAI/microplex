@@ -255,6 +255,10 @@ class SpineBuilder:
                 raise ValueError(
                     f"id column '{column}' must be numeric to offset clone ids."
                 )
+            min_value = base[column].min()
             max_value = base[column].max()
-            offset = 0 if pd.isna(max_value) else int(max_value) + 1
+            if pd.isna(min_value) or pd.isna(max_value):
+                offset = 0
+            else:
+                offset = max_value - min(0, min_value) + 1
             clone[column] = clone[column] + offset

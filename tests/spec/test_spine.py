@@ -73,6 +73,17 @@ class TestSplit:
         assert keep_ids == set(base["tax_unit_id"])
         assert synth_ids == set(base["tax_unit_id"] + offset)
 
+    def test_clone_ids_are_disjoint_when_base_ids_cross_zero(self) -> None:
+        base = _synthetic_base(11)
+        base["tax_unit_id"] = np.arange(-5, 6)
+        result = _builder().build(base)
+        keep_ids = set(result.halves["cps_keep"]["tax_unit_id"])
+        synth_ids = set(result.halves["synthetic"]["tax_unit_id"])
+        offset = int(base["tax_unit_id"].max() - min(0, base["tax_unit_id"].min()) + 1)
+        assert keep_ids == set(base["tax_unit_id"])
+        assert synth_ids == set(base["tax_unit_id"] + offset)
+        assert keep_ids.isdisjoint(synth_ids)
+
 
 class TestColumns:
     def test_passthrough_half_keeps_all_columns(self) -> None:
