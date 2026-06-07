@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 from scipy import sparse
 
+from microplex.calibration.clone_matrix import CloneMatrixBlock, assemble_clone_csr
 from microplex.core import EntityType
 from microplex.targets.reweighting import (
     TargetReweightingConstraint,
@@ -152,3 +153,92 @@ def compile_sparse_target_matrix(
         skipped_targets=compilation.skipped_targets,
         dtype=dtype,
     )
+
+
+def assemble_clone_sparse_target_matrix(
+    clone_matrices: Mapping[int, SparseTargetMatrix],
+    *,
+    n_records: int,
+    n_clones: int,
+    dtype: Any = np.float64,
+) -> SparseTargetMatrix:
+    """Assemble per-clone target matrices into one clone-expanded surface.
+
+    Each per-clone matrix must be compiled over exactly ``n_records`` columns
+    and must expose the same target rows in the same order. All clone indices
+    in ``[0, n_clones)`` must be present, which prevents a partial calibration
+    surface from passing as a complete eCPS-style clone matrix.
+    """
+    if n_records <= 0:
+        raise ValueError(f"n_records must be positive; got {n_records}.")
+    if n_clones <= 0:
+        raise ValueError(f"n_clones must be positive; got {n_clones}.")
+
+    expected_clones = set(range(n_clones))
+    actual_clones = set(clone_matrices)
+    if actual_clones != expected_clones:
+        missing = sorted(expected_clones - actual_clones)
+        extra = sorted(actual_clones - expected_clones)
+        raise ValueError(
+            "clone_matrices must contain exactly one matrix for each clone; "
+            f"missing={missing}, extra={extra}."
+        )
+
+    reference = clone_matrices[0]
+    blocks: list[CloneMatrixBlock] = []
+    for clone_idx in range(n_clones):
+        clone_matrix = clone_matrices[clone_idx]
+        _validate_clone_matrix_alignment(
+            clone_idx=clone_idx,
+            clone_matrix=clone_matrix,
+            reference=reference,
+            n_records=n_records,
+        )
+        coo = clone_matrix.matrix.tocoo()
+        blocks.append(
+            CloneMatrixBlock(
+                clone_idx=clone_idx,
+                row_indices=coo.row,
+                record_indices=coo.col,
+                values=coo.data,
+            )
+        )
+
+    matrix = assemble_clone_csr(
+        blocks,
+        n_targets=reference.n_targets,
+        n_records=n_records,
+        n_clones=n_clones,
+        dtype=dtype,
+    )
+    return SparseTargetMatrix(
+        matrix=matrix,
+        target_vector=reference.target_vector.astype(dtype, copy=False),
+        names=reference.names,
+        metadata=reference.metadata,
+        skipped_targets=reference.skipped_targets,
+    )
+
+
+def _validate_clone_matrix_alignment(
+    *,
+    clone_idx: int,
+    clone_matrix: SparseTargetMatrix,
+    reference: SparseTargetMatrix,
+    n_records: int,
+) -> None:
+    if clone_matrix.n_weights != n_records:
+        raise ValueError(
+            f"clone {clone_idx} matrix has {clone_matrix.n_weights} columns; "
+            f"expected n_records={n_records}."
+        )
+    if clone_matrix.names != reference.names:
+        raise ValueError(f"clone {clone_idx} target names do not match clone 0.")
+    if not np.array_equal(clone_matrix.target_vector, reference.target_vector):
+        raise ValueError(f"clone {clone_idx} target vector does not match clone 0.")
+    if clone_matrix.metadata != reference.metadata:
+        raise ValueError(f"clone {clone_idx} target metadata do not match clone 0.")
+    if clone_matrix.skipped_targets != reference.skipped_targets:
+        raise ValueError(
+            f"clone {clone_idx} skipped-target diagnostics do not match clone 0."
+        )
