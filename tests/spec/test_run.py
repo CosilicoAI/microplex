@@ -29,6 +29,10 @@ from microplex.targets import (
 )
 
 DEMOGRAPHIC_COLS = ["age", "is_male", "tax_unit_is_joint"]
+US_SPINE_KEYWORDS = (
+    "employment_income",
+    "taxable_interest_income",
+)
 
 
 def _cps(n: int = 240, seed: int = 0) -> pd.DataFrame:
@@ -159,6 +163,11 @@ def _sources() -> dict[str, pd.DataFrame]:
     return {"cps": _cps(), "puf": _puf(), "scf": _scf()}
 
 
+def _run_spec(*args, **kwargs):
+    kwargs.setdefault("spine_keywords", US_SPINE_KEYWORDS)
+    return run_spec(*args, **kwargs)
+
+
 class RecordingTargetProvider:
     def __init__(self, target_set: TargetSet) -> None:
         self.target_set = target_set
@@ -213,9 +222,28 @@ def _target_set() -> TargetSet:
 
 
 class TestRunSpec:
+    def test_spine_first_requires_explicit_pack_keywords(self) -> None:
+        spec = load_spec_dict(_spec_dict())
+        with pytest.raises(ValueError, match="requires explicit spine_keywords"):
+            run_spec(
+                spec,
+                _sources(),
+                demographic_columns=DEMOGRAPHIC_COLS,
+            )
+
+    def test_spine_first_rejects_empty_pack_keywords(self) -> None:
+        spec = load_spec_dict(_spec_dict())
+        with pytest.raises(ValueError, match="empty spine_keywords"):
+            run_spec(
+                spec,
+                _sources(),
+                demographic_columns=DEMOGRAPHIC_COLS,
+                spine_keywords=(),
+            )
+
     def test_end_to_end_runs(self) -> None:
         spec = load_spec_dict(_spec_dict())
-        result = run_spec(
+        result = _run_spec(
             spec,
             _sources(),
             demographic_columns=DEMOGRAPHIC_COLS,
@@ -233,7 +261,7 @@ class TestRunSpec:
 
     def test_output_has_expected_columns(self) -> None:
         spec = load_spec_dict(_spec_dict())
-        result = run_spec(spec, _sources(), demographic_columns=DEMOGRAPHIC_COLS)
+        result = _run_spec(spec, _sources(), demographic_columns=DEMOGRAPHIC_COLS)
         cols = set(result.frame.columns)
         expected = {
             # demographics + id (carried through)
@@ -258,7 +286,7 @@ class TestRunSpec:
 
     def test_both_halves_have_net_worth(self) -> None:
         spec = load_spec_dict(_spec_dict())
-        result = run_spec(spec, _sources(), demographic_columns=DEMOGRAPHIC_COLS)
+        result = _run_spec(spec, _sources(), demographic_columns=DEMOGRAPHIC_COLS)
         frame = result.frame
         label = result.spine.half_label_column
         for half in ("cps_keep", "synthetic_puf"):
@@ -267,7 +295,7 @@ class TestRunSpec:
 
     def test_synthetic_half_income_synthesized(self) -> None:
         spec = load_spec_dict(_spec_dict())
-        result = run_spec(spec, _sources(), demographic_columns=DEMOGRAPHIC_COLS)
+        result = _run_spec(spec, _sources(), demographic_columns=DEMOGRAPHIC_COLS)
         frame = result.frame
         label = result.spine.half_label_column
         synth = frame[frame[label] == "synthetic_puf"]
@@ -278,7 +306,7 @@ class TestRunSpec:
         """cps_keep step does NOT synthesize employment_income (passthrough)."""
         spec = load_spec_dict(_spec_dict())
         sources = _sources()
-        result = run_spec(spec, sources, demographic_columns=DEMOGRAPHIC_COLS)
+        result = _run_spec(spec, sources, demographic_columns=DEMOGRAPHIC_COLS)
         frame = result.frame
         label = result.spine.half_label_column
         kept = frame[frame[label] == "cps_keep"]
@@ -289,7 +317,7 @@ class TestRunSpec:
 
     def test_split_sums_back_in_output(self) -> None:
         spec = load_spec_dict(_spec_dict())
-        result = run_spec(spec, _sources(), demographic_columns=DEMOGRAPHIC_COLS)
+        result = _run_spec(spec, _sources(), demographic_columns=DEMOGRAPHIC_COLS)
         frame = result.frame
         recombined = frame["ss_retirement"] + frame["ss_survivors"]
         np.testing.assert_allclose(
@@ -298,7 +326,7 @@ class TestRunSpec:
 
     def test_pending_stages_reported(self) -> None:
         spec = load_spec_dict(_spec_dict())
-        result = run_spec(spec, _sources(), demographic_columns=DEMOGRAPHIC_COLS)
+        result = _run_spec(spec, _sources(), demographic_columns=DEMOGRAPHIC_COLS)
         assert result.pending_stages == PENDING_STAGES
         assert result.target_set is None
         assert "calibrate" in result.pending_stages
@@ -309,7 +337,7 @@ class TestRunSpec:
         provider = RecordingTargetProvider(_target_set())
 
         assert isinstance(provider, TargetProvider)
-        result = run_spec(
+        result = _run_spec(
             spec,
             _sources(),
             demographic_columns=DEMOGRAPHIC_COLS,
@@ -338,7 +366,7 @@ class TestRunSpec:
         provider = RecordingTargetProvider(_target_set())
         calibrator = RecordingCalibrator()
 
-        result = run_spec(
+        result = _run_spec(
             spec,
             _sources(),
             demographic_columns=DEMOGRAPHIC_COLS,
@@ -357,7 +385,7 @@ class TestRunSpec:
                 "weight_column": "household_weight",
             }
         ]
-        uncalibrated = run_spec(
+        uncalibrated = _run_spec(
             spec,
             _sources(),
             demographic_columns=DEMOGRAPHIC_COLS,
@@ -374,7 +402,7 @@ class TestRunSpec:
         calibrator = RecordingCalibrator()
 
         with pytest.raises(ValueError, match="requires a loaded target_set"):
-            run_spec(
+            _run_spec(
                 spec,
                 _sources(),
                 demographic_columns=DEMOGRAPHIC_COLS,
@@ -383,7 +411,7 @@ class TestRunSpec:
 
     def test_imputation_results_recorded(self) -> None:
         spec = load_spec_dict(_spec_dict())
-        result = run_spec(spec, _sources(), demographic_columns=DEMOGRAPHIC_COLS)
+        result = _run_spec(spec, _sources(), demographic_columns=DEMOGRAPHIC_COLS)
         # 1 (synthetic) + 1 (cps_keep) + 2 (both -> 2 halves) = 4 step-results.
         assert len(result.imputation_results) == 4
         ontos = [r.onto for r in result.imputation_results]
