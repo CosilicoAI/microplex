@@ -33,12 +33,14 @@ spine:
   clone: { seed: 0 }
   halves:
     - { name: cps_keep,       keep: all }                  # real CPS values (passthrough)
-    - { name: synthetic_puf,  strip_to: [demographics, tax_unit_id] }  # synthesize the rest
+    - { name: synthetic_puf,  strip_to: [demographics, tax_unit_id, preclone_predictors] }
 
 imputation:
   # Declarative graph. Each step = synthesize a set of vars from a donor onto a
-  # target half, conditioned on demographics + the already-imputed chain.
+  # target, conditioned on demographics + the already-imputed chain. `at: base`
+  # runs before cloning; `at: halves` (default) runs after cloning.
   # The engine runs microimpute's canonical regime-aware donor backend per step.
+  - { at: base, onto: base, from: scf, vars: PRECLONE_ASSET_BLOCK }
   - { onto: synthetic_puf, from: puf, vars: PUF_TAX_BLOCK,  order: spine_first }
   - { onto: cps_keep,      from: puf, vars: PUF_ONLY_BLOCK, condition_on: [demographics, cps_income] }
   - { onto: both,          from: scf, vars: [net_worth, ...] }
@@ -75,12 +77,13 @@ Notes:
 
 1. **`spec` (`microplex.spec`)** — Pydantic schema + loader/validator for the DSL above. The single source of truth for "what a pack declares."
 2. **`SourceRegistry`** — resolve `sources` to loaded, harmonized frames (already largely in `microplex/data_sources` + the source providers).
-3. **`SpineBuilder`** — implement §4 (clone base; one half kept; other half stripped to declared columns). Generic; no country logic.
-4. **`ImputationRunner`** — for each `imputation` step, fit microimpute's canonical regime-aware donor backend on the donor (weighted) over the step's var block, conditioned on `condition_on` (+ chain), and apply to the target half. This is the heart; microimpute already does the model. The runner just orchestrates the declared graph + entity grain.
-5. **`TransformEngine`** — apply declared `transforms` (splits/derivations) deterministically.
-6. **`ArchTargetProvider`** (moved out of `microplex-us/targets/arch.py`) — fetch + roll up Arch target records into `TargetSet`. Generic; the *values* already live in Arch (the pack just names the set).
-7. **`Calibrator`** — reweight to targets via the declared loss/method (already in core).
-8. **`Exporter`** — write the PolicyEngine dataset (the per-country model integration is the one place a thin country adapter may remain, but it should be driven by the model's own metadata, not bespoke code).
+3. **`ImputationRunner` base phase** — run `at: base` source-level imputations before cloning so pre-clone predictors are present on the base frame.
+4. **`SpineBuilder`** — implement §4 (clone the enriched base; one half kept; other half stripped to declared columns). Generic; no country logic.
+5. **`ImputationRunner` halves phase** — for each `at: halves` imputation step, fit microimpute's canonical regime-aware donor backend on the donor (weighted) over the step's var block, conditioned on `condition_on` (+ chain), and apply to the target half(s). This is the heart; microimpute already does the model. The runner just orchestrates the declared graph + entity grain.
+6. **`TransformEngine`** — apply declared `transforms` (splits/derivations) deterministically.
+7. **`ArchTargetProvider`** (moved out of `microplex-us/targets/arch.py`) — fetch + roll up Arch target records into `TargetSet`. Generic; the *values* already live in Arch (the pack just names the set).
+8. **`Calibrator`** — reweight to targets via the declared loss/method (already in core).
+9. **`Exporter`** — write the PolicyEngine dataset (the per-country model integration is the one place a thin country adapter may remain, but it should be driven by the model's own metadata, not bespoke code).
 
 ---
 

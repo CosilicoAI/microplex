@@ -11,9 +11,11 @@ from pathlib import Path
 import pytest
 
 from microplex.spec import (
+    BASE_TOKEN,
     BOTH_TOKEN,
     CalibrationMethod,
     ImputationOrder,
+    ImputationPhase,
     MicroplexSpec,
     SourceRole,
     SpecError,
@@ -97,6 +99,7 @@ class TestLoadValid:
             "taxable_interest_income",
         ]
         assert first.order is ImputationOrder.SPINE_FIRST
+        assert first.at is ImputationPhase.HALVES
         assert first.synthesize is True
 
         second = spec.imputation[1]
@@ -105,6 +108,7 @@ class TestLoadValid:
 
         third = spec.imputation[2]
         assert third.onto == BOTH_TOKEN
+        assert third.at is ImputationPhase.HALVES
         assert third.targets_both is True
 
     def test_fixture_transforms(self) -> None:
@@ -139,6 +143,39 @@ class TestLoadValid:
         spec = load_spec_dict(_valid_spec_dict())
         assert spec.meta.country == "us"
         assert len(spec.imputation) == 1
+        assert spec.imputation[0].at is ImputationPhase.HALVES
+
+    def test_base_phase_imputation_can_target_base_alias(self) -> None:
+        data = _valid_spec_dict()
+        data["imputation"].insert(
+            0,
+            {
+                "at": "base",
+                "onto": BASE_TOKEN,
+                "from": "puf",
+                "vars": ["net_worth"],
+            },
+        )
+        spec = load_spec_dict(data)
+        first = spec.imputation[0]
+        assert first.at is ImputationPhase.BASE
+        assert first.onto == BASE_TOKEN
+
+    def test_base_phase_imputation_can_target_spine_source_name(self) -> None:
+        data = _valid_spec_dict()
+        data["imputation"].insert(
+            0,
+            {
+                "at": "base",
+                "onto": "cps",
+                "from": "puf",
+                "vars": ["net_worth"],
+            },
+        )
+        spec = load_spec_dict(data)
+        first = spec.imputation[0]
+        assert first.at is ImputationPhase.BASE
+        assert first.onto == "cps"
 
     def test_minimal_spec_without_optional_sections(self) -> None:
         data = _valid_spec_dict()
@@ -282,6 +319,19 @@ class TestRejectMalformed:
     def test_imputation_onto_unknown_half(self) -> None:
         data = _valid_spec_dict()
         data["imputation"][0]["onto"] = "ghost_half"
+        with pytest.raises(SpecError, match="is not a declared half or 'both'"):
+            load_spec_dict(data)
+
+    def test_base_phase_rejects_half_target(self) -> None:
+        data = _valid_spec_dict()
+        data["imputation"][0]["at"] = "base"
+        data["imputation"][0]["onto"] = "synthetic_puf"
+        with pytest.raises(SpecError, match="at 'base' must target 'base'"):
+            load_spec_dict(data)
+
+    def test_halves_phase_rejects_base_target(self) -> None:
+        data = _valid_spec_dict()
+        data["imputation"][0]["onto"] = BASE_TOKEN
         with pytest.raises(SpecError, match="is not a declared half or 'both'"):
             load_spec_dict(data)
 

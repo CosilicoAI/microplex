@@ -34,6 +34,7 @@ import pandas as pd
 from microplex.spec import (
     DEMOGRAPHICS_TOKEN,
     ImputationOrder,
+    ImputationPhase,
     ImputationStep,
 )
 
@@ -378,6 +379,11 @@ class ImputationRunner:
         results: list[ImputationStepResult] = []
 
         for step in steps:
+            if step.at is not ImputationPhase.HALVES:
+                raise ValueError(
+                    "ImputationRunner.run only accepts at='halves' steps; "
+                    "run at='base' steps before building the spine."
+                )
             if step.from_ not in donors:
                 raise KeyError(
                     f"imputation step references unknown donor '{step.from_}'."
