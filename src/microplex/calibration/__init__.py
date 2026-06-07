@@ -29,6 +29,11 @@ import numpy as np
 import pandas as pd
 from scipy.optimize import lsq_linear, minimize
 
+from microplex.calibration.solve_policy import (  # noqa: F401
+    CalibrationSolvePolicy,
+    resolve_calibration_solve_policy,
+)
+
 
 @dataclass(frozen=True)
 class LinearConstraint:
@@ -2105,4 +2110,3 @@ try:
 except ImportError:  # microcalibrate not installed
     MicrocalibrateAdapter = None  # type: ignore[assignment]
     MicrocalibrateAdapterConfig = None  # type: ignore[assignment]
-
