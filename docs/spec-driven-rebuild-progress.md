@@ -52,8 +52,9 @@ caller-supplied `column_groups` mapping, never hard-coded.
 
 ### 3. `microplex.imputation` — `ImputationRunner` (blueprint §2 stage 4, the heart)
 For each step, fits canonical regime-aware `microimpute.Imputer` on the donor
-frame (weighted when a weight column is present), conditioned on the resolved
-`condition_on` (default: the half's demographic columns), and writes the
+frame (unweighted unless the step declares `weights: <donor column>`),
+conditioned on the resolved `condition_on` (default: the half's demographic
+columns), and writes the
 predicted columns onto the target half. **Chaining is microimpute's job** — the runner only orders the
 variable list; `spine_first_order` is the generic, documented, overridable
 heuristic (income/receipt-type keywords first, stable within tiers) so

@@ -45,6 +45,8 @@ imputation:
   - { onto: cps_keep,      from: puf, vars: PUF_ONLY_BLOCK, condition_on: [demographics, cps_income] }
   - { onto: both,          from: scf, vars: [net_worth, ...] }
   - { onto: both,          from: sipp, vars: [...] }
+  # Donor fits are unweighted by default. Set `weights: donor_weight_column`
+  # on a step only when deliberately testing a weighted donor fit.
   # passthrough is the default for anything a half already has; "synthesize"
   # is explicit. No per-variable Python.
 
@@ -79,7 +81,7 @@ Notes:
 2. **`SourceRegistry`** — resolve `sources` to loaded, harmonized frames (already largely in `microplex/data_sources` + the source providers).
 3. **`ImputationRunner` base phase** — run `at: base` source-level imputations before the spine split so pre-split predictors are present on the base frame.
 4. **`SpineBuilder`** — implement §4 (split the enriched base; one half kept; other half stripped to declared columns). Generic; no country logic.
-5. **`ImputationRunner` halves phase** — for each `at: halves` imputation step, fit microimpute's canonical regime-aware donor backend on the donor (weighted) over the step's var block, conditioned on `condition_on` (+ chain), and apply to the target half(s). This is the heart; microimpute already does the model. The runner just orchestrates the declared graph + entity grain.
+5. **`ImputationRunner` halves phase** — for each `at: halves` imputation step, fit microimpute's canonical regime-aware donor backend on the donor over the step's var block, conditioned on `condition_on` (+ chain), and apply to the target half(s). Fits are unweighted unless the step explicitly declares `weights: <donor column>`. This is the heart; microimpute already does the model. The runner just orchestrates the declared graph + entity grain.
 6. **`TransformEngine`** — apply declared `transforms` (splits/derivations) deterministically.
 7. **`ArchTargetProvider`** (moved out of `microplex-us/targets/arch.py`) — fetch + roll up Arch target records into `TargetSet`. Generic; the *values* already live in Arch (the pack just names the set).
 8. **`Calibrator`** — reweight to targets via the declared loss/method (already in core).
