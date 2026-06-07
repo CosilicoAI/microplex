@@ -43,6 +43,21 @@ class TargetFilter:
 
 
 @dataclass(frozen=True)
+class TargetSimulationModifier:
+    """A simulator modifier required before evaluating a target row."""
+
+    name: str
+    parameters: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        name = self.name.strip()
+        if not name:
+            raise ValueError("TargetSimulationModifier.name must be non-empty")
+        object.__setattr__(self, "name", name)
+        object.__setattr__(self, "parameters", dict(self.parameters))
+
+
+@dataclass(frozen=True)
 class TargetSpec:
     """Canonical representation of a calibration target."""
 
@@ -58,6 +73,7 @@ class TargetSpec:
     units: str | None = None
     description: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    sim_modifiers: tuple[TargetSimulationModifier, ...] = ()
 
     def __post_init__(self) -> None:
         entity = self.entity
@@ -74,12 +90,26 @@ class TargetSpec:
             for target_filter in self.filters
         )
 
+        normalized_sim_modifiers = tuple(
+            modifier
+            if isinstance(modifier, TargetSimulationModifier)
+            else TargetSimulationModifier(**modifier)
+            for modifier in self.sim_modifiers
+        )
+        sim_modifier_names = [modifier.name for modifier in normalized_sim_modifiers]
+        if len(set(sim_modifier_names)) != len(sim_modifier_names):
+            raise ValueError(
+                "TargetSpec sim_modifiers must have distinct names; "
+                f"got {sim_modifier_names}."
+            )
+
         if aggregation is TargetAggregation.COUNT and self.measure is not None:
             raise ValueError("Count targets must not define a measure column")
 
         object.__setattr__(self, "entity", entity)
         object.__setattr__(self, "aggregation", aggregation)
         object.__setattr__(self, "filters", normalized_filters)
+        object.__setattr__(self, "sim_modifiers", normalized_sim_modifiers)
 
     @property
     def required_features(self) -> tuple[str, ...]:
@@ -90,6 +120,16 @@ class TargetSpec:
         features.extend(target_filter.feature for target_filter in self.filters)
         ordered_unique = dict.fromkeys(features)
         return tuple(ordered_unique)
+
+    @property
+    def requires_simulation(self) -> bool:
+        """Whether this target needs a simulator-aware compiler."""
+        return bool(self.sim_modifiers)
+
+    @property
+    def sim_modifier_names(self) -> tuple[str, ...]:
+        """Ordered simulator modifier names required by this target."""
+        return tuple(modifier.name for modifier in self.sim_modifiers)
 
 
 @dataclass

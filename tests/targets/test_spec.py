@@ -6,6 +6,7 @@ from microplex.targets import (
     TargetAggregation,
     TargetFilter,
     TargetSet,
+    TargetSimulationModifier,
     TargetSpec,
 )
 
@@ -61,6 +62,52 @@ class TestTargetSpec:
         )
 
         assert target.required_features == ("snap", "state_fips")
+
+    def test_sim_modifiers_normalize_from_dicts(self):
+        target = TargetSpec(
+            name="snap_after_takeup",
+            entity=EntityType.SPM_UNIT,
+            value=1_000.0,
+            period=2024,
+            measure="snap",
+            aggregation=TargetAggregation.SUM,
+            sim_modifiers=(
+                {
+                    "name": "rerandomize_takeup",
+                    "parameters": {"program": "snap", "seed": 7},
+                },
+            ),
+        )
+
+        assert target.requires_simulation is True
+        assert target.sim_modifier_names == ("rerandomize_takeup",)
+        assert target.sim_modifiers == (
+            TargetSimulationModifier(
+                name="rerandomize_takeup",
+                parameters={"program": "snap", "seed": 7},
+            ),
+        )
+
+    def test_sim_modifiers_reject_duplicate_names(self):
+        try:
+            TargetSpec(
+                name="bad_takeup",
+                entity=EntityType.SPM_UNIT,
+                value=1_000.0,
+                period=2024,
+                measure="snap",
+                aggregation=TargetAggregation.SUM,
+                sim_modifiers=(
+                    TargetSimulationModifier("rerandomize_takeup"),
+                    TargetSimulationModifier(
+                        "rerandomize_takeup", {"program": "medicaid"}
+                    ),
+                ),
+            )
+        except ValueError as exc:
+            assert "distinct names" in str(exc)
+        else:
+            raise AssertionError("Expected ValueError for duplicate sim modifiers")
 
 
 class TestTargetSet:
