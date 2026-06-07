@@ -27,13 +27,13 @@ sources:
   acs:        { dataset: acs_2024,      role: donor }
 
 spine:
-  # The eCPS puf_clone pattern over a seeded 50/50 split (see §4).
+  # Seeded 50/50 ASEC+PUF support partition (see §4).
   base: cps_asec
-  method: clone
-  clone: { seed: 0 }
+  method: support_spine
+  support: { seed: 0 }
   halves:
     - { name: cps_keep,       keep: all }                  # real CPS values (passthrough)
-    - { name: synthetic_puf,  strip_to: [demographics, tax_unit_id, preclone_predictors] }
+    - { name: synthetic_puf,  strip_to: [demographics, tax_unit_id] }
 
 imputation:
   # Declarative graph. Each step = synthesize a set of vars from a donor onto a
@@ -93,7 +93,7 @@ Notes:
 
 | today (microplex-us) | becomes |
 | --- | --- |
-| `pipelines/us.py` spine construction (~clone) | `microplex.SpineBuilder` (generic), driven by `spine:` spec |
+| `pipelines/us.py` spine construction | `microplex.SpineBuilder` (generic), driven by `spine:` spec |
 | `pipelines/us.py` donor integration + `donor_imputers.py` | `microplex.ImputationRunner` + canonical microimpute (done), driven by `imputation:` spec |
 | `variables.py` `VariableSemanticSpec` (1,300 lines) | dissolves → per-variable `{source, passthrough\|synthesize, order}` tags in the spec; regime/chaining is microimpute's job |
 | `targets/arch.py` (7k, "Adapters from Arch records to core specs") | `microplex.targets.ArchProvider` (generic; the providers/rollups/carry-forward are not US-specific) |
@@ -109,7 +109,10 @@ This is the bug that cost the current build. The synthetic-PUF half must carry t
 - `cps_keep` half: real CPS values (passthrough). Its PUF-only tax detail (cap gains, etc.) is imputed *conditioned on* its real CPS income.
 - `synthetic_puf` half: **strip to demographics (+ tax_unit_id)**, then **synthesize the whole PUF tax-unit** (wages included) through microimpute's canonical regime-aware donor backend conditioned on demographics + the chain. Wide distributions on the first chained variables are correct — it's a barely-conditioned pure synthetic PUF. **Never keep/condition on CPS wages here.**
 
-This follows eCPS's `policyengine_us_data/calibration/puf_impute.py:puf_clone_dataset` correctness anchor while using a seeded 50/50 partition instead of 2x row doubling: one half keeps CPS values, the other half gets PUF tax variables imputed from demographic predictors. `SpineBuilder` + `ImputationRunner` implement that pattern generically; the spec declares it.
+This uses a seeded 50/50 support partition: one half keeps CPS values, the
+other half gets PUF tax variables imputed from demographic predictors.
+`SpineBuilder` + `ImputationRunner` implement that pattern generically; the
+spec declares it.
 
 ---
 
@@ -122,7 +125,7 @@ The eCPS-replacement comparison (frozen-baseline, clean target surface, the #233
 ## 6. Build order
 
 1. `microplex.spec` schema + loader (the DSL above) — foundation.
-2. `SpineBuilder` (eCPS puf_clone pattern) + `ImputationRunner` (microimpute) — the heart; get a minimal sources→spine→impute path producing a frame.
+2. `SpineBuilder` (support-spine partition) + `ImputationRunner` (microimpute) — the heart; get a minimal sources→spine→impute path producing a frame.
 3. `ArchProvider` move + `Calibrator` wiring + `Exporter`.
 4. `TransformEngine`.
 5. `microplex-us/specs/us-2024.yaml` — the pure-spec pack.

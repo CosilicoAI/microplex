@@ -25,7 +25,7 @@ correction pins the default to canonical regime-aware microimpute.
 
 ### 1. `microplex.spec` — the DSL (blueprint §1)
 Pydantic v2 schema + YAML loader for the full DSL: `meta`, `sources`
-(name→{dataset, role}), `spine` (base, method: clone, clone{seed},
+(name→{dataset, role}), `spine` (base, method: support_spine, support{seed},
 halves[{name, keep|strip_to}]), `imputation` (steps {at?, onto, from, vars,
 condition_on?, order?, synthesize?}, where `at` defaults to `halves` and
 `at: base` runs before the spine split), `transforms` (split/derive),
@@ -40,7 +40,7 @@ passthrough half, fractional split sums to 1, etc. `load_spec(path)` and
 messages.
 
 ### 2. `microplex.spine` — `SpineBuilder` (blueprint §4)
-The eCPS `puf_clone` pattern generalized over a seeded 50/50 partition. Each
+The support-spine pattern generalized over a seeded 50/50 partition. Each
 base row appears once: in either the passthrough (`keep: all`) half, which keeps
 all columns, or the synthetic (`strip_to`) half, which keeps only its declared
 columns plus ids/weights

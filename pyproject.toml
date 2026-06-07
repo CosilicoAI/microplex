@@ -42,7 +42,7 @@ dependencies = [
     "polars>=0.20",  # For CPS loading
     "httpx>=0.25",  # For data downloads
     "pyyaml>=6.0",  # For configuration files
-    "microimpute @ git+https://github.com/PolicyEngine/microimpute.git@90be828eb442c48ee86bb91bb83a75da4b0f0f89 ; python_version >= '3.12' and python_version < '3.15'",  # Canonical regime-gated donor imputation
+    "microimpute>=3.1.1 ; python_version >= '3.12' and python_version < '3.15'",  # Canonical regime-gated donor imputation
     "quantile-forest>=1.3",  # For QRF-based synthesis
     "scikit-learn>=1.3",  # For classification in zero-inflated models
     "pydantic>=2.0",  # For data models
@@ -92,6 +92,9 @@ all = [
 Homepage = "https://github.com/PolicyEngine/microplex"
 Documentation = "https://policyengine.github.io/microplex"
 Repository = "https://github.com/PolicyEngine/microplex"
+
+[project.scripts]
+microplex-check-content-package = "microplex.content_package:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/microplex"]

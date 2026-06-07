@@ -96,11 +96,12 @@ class SourceRole(StrEnum):
 class SpineMethod(StrEnum):
     """Spine construction strategy.
 
-    - ``clone``: eCPS-style PUF clone semantics over a seeded 50/50 partition.
-      Every base row appears once, in either a passthrough half or a synthetic
-      half. This is the only supported method.
+    - ``support_spine``: seeded 50/50 support partition. Every base row appears
+      once, in either a passthrough half or a synthetic half.
+    - ``clone``: legacy spelling retained for existing specs.
     """
 
+    SUPPORT_SPINE = "support_spine"
     CLONE = "clone"
 
 
@@ -159,6 +160,7 @@ class VariableOperationKind(StrEnum):
     IMPUTE = "impute"
     DERIVE = "derive"
     SPLIT = "split"
+    ASSIGN_GEO = "assign_geo"
     CLONE_GEO = "clone_geo"
     MATERIALIZE_POLICYENGINE = "materialize_policyengine"
     RERANDOMIZE_TAKEUP = "rerandomize_takeup"
@@ -217,7 +219,7 @@ class SourceSpec(_StrictModel):
 
 
 class CloneSpec(_StrictModel):
-    """Options for eCPS-style spine construction."""
+    """Options for seeded support-spine construction."""
 
     seed: int = Field(
         default=0,
@@ -281,8 +283,7 @@ class HalfSpec(_StrictModel):
 class SpineSpec(_StrictModel):
     """The spine: a base source split into exactly two halves.
 
-    This is the eCPS ``puf_clone`` pattern, generalized (see blueprint §4) and
-    applied to a deterministic 50/50 row partition: one half keeps real survey
+    This is a deterministic 50/50 support partition: one half keeps real survey
     values, the other is stripped to demographics/ids and synthesized through
     the imputation graph.
     """
@@ -293,21 +294,36 @@ class SpineSpec(_StrictModel):
         description="Name of the source to split (its role must be 'spine').",
     )
     method: SpineMethod = Field(
-        default=SpineMethod.CLONE,
-        description="Spine construction method. Only 'clone' is currently supported.",
+        default=SpineMethod.SUPPORT_SPINE,
+        description="Spine construction method.",
+    )
+    support: CloneSpec | None = Field(
+        default=None,
+        description="Options for the support_spine method.",
     )
     clone: CloneSpec = Field(
         default_factory=CloneSpec,
-        description="Options for the eCPS-style spine method.",
+        description="Legacy options name for specs still using method: clone.",
     )
     halves: list[HalfSpec] = Field(..., min_length=2, max_length=2)
 
     @model_validator(mode="after")
     def _validate_halves(self) -> SpineSpec:
-        if self.method is not SpineMethod.CLONE:
+        if self.method not in {SpineMethod.SUPPORT_SPINE, SpineMethod.CLONE}:
             raise ValueError(
                 f"spine.method '{self.method.value}' is not supported; "
-                "only 'clone' is currently valid."
+                "use 'support_spine'."
+            )
+        explicit_clone = "clone" in self.model_fields_set
+        if self.method is SpineMethod.SUPPORT_SPINE and explicit_clone:
+            raise ValueError(
+                "spine method: support_spine must use the 'support' options "
+                "block, not legacy 'clone'."
+            )
+        if self.method is SpineMethod.CLONE and self.support is not None:
+            raise ValueError(
+                "spine method: clone must use the legacy 'clone' options block, "
+                "not 'support'."
             )
         names = [half.name for half in self.halves]
         if len(set(names)) != len(names):
@@ -319,6 +335,11 @@ class SpineSpec(_StrictModel):
                 f"one stripped (strip_to) half; passthrough halves: {passthrough}."
             )
         return self
+
+    @property
+    def partition_seed(self) -> int:
+        """The deterministic support-partition seed."""
+        return (self.support or self.clone).seed
 
     @property
     def half_names(self) -> tuple[str, ...]:

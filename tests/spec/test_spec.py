@@ -87,6 +87,33 @@ class TestLoadValid:
         assert spec.spine.synthetic_half.strip_to == ["demographics", "tax_unit_id"]
         assert spec.spine.clone.seed == 0
 
+    def test_support_spine_method_uses_support_seed(self) -> None:
+        data = _valid_spec_dict()
+        data["spine"]["method"] = "support_spine"
+        data["spine"]["support"] = {"seed": 123}
+        del data["spine"]["clone"]
+
+        spec = load_spec_dict(data)
+
+        assert spec.spine.method is SpineMethod.SUPPORT_SPINE
+        assert spec.spine.partition_seed == 123
+
+    def test_support_spine_rejects_duplicate_options(self) -> None:
+        data = _valid_spec_dict()
+        data["spine"]["method"] = "support_spine"
+        data["spine"]["support"] = {"seed": 123}
+
+        with pytest.raises(SpecError, match="not legacy 'clone'"):
+            load_spec_dict(data)
+
+    def test_clone_method_rejects_support_options(self) -> None:
+        data = _valid_spec_dict()
+        data["spine"]["support"] = {"seed": 123}
+        del data["spine"]["clone"]
+
+        with pytest.raises(SpecError, match="not 'support'"):
+            load_spec_dict(data)
+
     def test_fixture_imputation_steps(self) -> None:
         spec = load_spec(FIXTURES / "us_2024.yaml")
         assert len(spec.imputation) == 3
@@ -201,6 +228,27 @@ class TestLoadValid:
         assert variable.mp_spec.operation.kind is VariableOperationKind.IMPUTE
         assert variable.mp_spec.operation.source == "puf"
         assert variable.mp_spec.operation.depends_on == ["age", "is_male"]
+
+    def test_variable_operation_accepts_geography_assignment(self) -> None:
+        data = _valid_spec_dict()
+        data["variables"] = {
+            "block_geoid": {
+                "mp_spec": {
+                    "method": "assign census block within lowest available geography",
+                    "operation": {
+                        "kind": "assign_geo",
+                        "source": "cps_asec",
+                        "encoding": "S15",
+                    },
+                }
+            }
+        }
+
+        spec = load_spec_dict(data)
+
+        operation = spec.variables["block_geoid"].mp_spec.operation
+        assert operation is not None
+        assert operation.kind is VariableOperationKind.ASSIGN_GEO
 
     def test_variable_operation_rejects_unknown_kind(self) -> None:
         data = _valid_spec_dict()

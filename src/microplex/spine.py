@@ -1,11 +1,9 @@
 """Build the spine: split a base survey frame into passthrough and synthetic halves.
 
-This is the eCPS ``puf_clone`` pattern generalized (see
-``docs/spec-driven-rebuild.md`` §4), adapted to a seeded 50/50 partition: one
-half keeps CPS values, the other half is stripped and has its tax variables
-synthesized from demographic predictors. :class:`SpineBuilder` does this
-generically, driven by the ``spine:`` section of a
-:class:`microplex.spec.MicroplexSpec`.
+This is a seeded 50/50 support partition: one half keeps survey values, the
+other half is stripped and has its tax variables synthesized from demographic
+predictors. :class:`SpineBuilder` does this generically, driven by the
+``spine:`` section of a :class:`microplex.spec.MicroplexSpec`.
 
 Crucially (the correctness anchor), the synthetic half keeps **only** the
 declared columns (demographics + entity ids, plus zeroed weights) -- its income
@@ -232,7 +230,7 @@ class SpineBuilder:
     ) -> tuple[np.ndarray, np.ndarray]:
         """Return deterministic passthrough/synthetic row positions."""
         positions = np.arange(n_rows)
-        rng = np.random.default_rng(self.spine.clone.seed)
+        rng = np.random.default_rng(self.spine.partition_seed)
         rng.shuffle(positions)
         passthrough_count = (n_rows + 1) // 2
         passthrough = np.sort(positions[:passthrough_count])
