@@ -39,11 +39,10 @@ from typing import Any, Protocol, runtime_checkable
 import pandas as pd
 
 from microplex.imputation import (
-    SPINE_FIRST_KEYWORDS,
     ImputationRunner,
     ImputationStepResult,
 )
-from microplex.spec import CalibrateSpec, MicroplexSpec
+from microplex.spec import CalibrateSpec, ImputationOrder, MicroplexSpec
 from microplex.spec_transforms import TransformEngine
 from microplex.spine import SpineBuilder, SpineBuildResult
 from microplex.targets.provider import TargetProvider, TargetQuery
@@ -157,7 +156,7 @@ def run_spec(
     column_groups: Mapping[str, Sequence[str]] | None = None,
     demographic_columns: Sequence[str] | None = None,
     weight_column: str | None = "household_weight",
-    spine_keywords: Sequence[str] = SPINE_FIRST_KEYWORDS,
+    spine_keywords: Sequence[str] | None = None,
     target_provider: TargetProvider | None = None,
     calibrator: SpecCalibrator | None = None,
     seed: int = 0,
@@ -173,7 +172,10 @@ def run_spec(
         demographic_columns: Convenience for the ``demographics`` group; takes
             precedence over ``column_groups['demographics']`` when set.
         weight_column: Sampling-weight column for weighted imputation fits.
-        spine_keywords: Keyword list for the spine-first ordering heuristic.
+        spine_keywords: Pack-specific keyword list for the spine-first ordering
+            heuristic. Required when the spec declares any ``order:
+            spine_first`` step, so country packs do not accidentally rely on
+            broad generic substrings that can mis-tier variables.
         target_provider: Optional provider used to load the spec-declared target
             surface. When omitted, targets remain an explicit pending stage.
         calibrator: Optional country-specific calibrator used to reweight the
@@ -213,10 +215,11 @@ def run_spec(
     spine_result = spine_builder.build(base)
 
     # Stage 3: imputation.
+    resolved_spine_keywords = _resolve_spine_keywords(spec, spine_keywords)
     runner = ImputationRunner(
         column_groups=resolved_groups,
         weight_column=weight_column,
-        spine_keywords=spine_keywords,
+        spine_keywords=resolved_spine_keywords,
         seed=seed,
     )
     halves, imputation_results = runner.run(
@@ -298,6 +301,32 @@ def run_spec(
         calibration_result=calibration_result,
         pending_stages=tuple(pending_stages),
     )
+
+
+def _resolve_spine_keywords(
+    spec: MicroplexSpec,
+    spine_keywords: Sequence[str] | None,
+) -> tuple[str, ...]:
+    """Return explicit pack keywords required by ``order: spine_first``.
+
+    ``spine_first`` controls the microimpute chain order and therefore the
+    statistical meaning of a spec. The low-level imputation module keeps a
+    generic default for direct use, but full spec runs must fail closed unless
+    the pack supplies its own reviewed variable-name markers.
+    """
+    if any(step.order is ImputationOrder.SPINE_FIRST for step in spec.imputation):
+        if spine_keywords is None:
+            raise ValueError(
+                "run_spec requires explicit spine_keywords when the spec declares "
+                "order: spine_first; pass pack-specific receipt/income markers "
+                "instead of relying on generic substring defaults"
+            )
+        if len(spine_keywords) == 0:
+            raise ValueError(
+                "run_spec received an empty spine_keywords list for order: "
+                "spine_first"
+            )
+    return tuple(spine_keywords or ())
 
 
 def _target_query_from_spec(spec: MicroplexSpec) -> TargetQuery:
