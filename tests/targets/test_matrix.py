@@ -15,6 +15,7 @@ from microplex.targets import (
     TargetFilter,
     TargetReweightingConstraint,
     TargetSpec,
+    assemble_clone_sparse_target_matrix,
     compile_sparse_target_matrix,
     target_constraints_to_sparse_matrix,
 )
@@ -165,4 +166,89 @@ def test_sparse_target_matrix_rejects_misaligned_names() -> None:
             matrix=sparse.csr_matrix((1, 2)),
             target_vector=np.array([1.0]),
             names=(),
+        )
+
+
+def test_assemble_clone_sparse_target_matrix_offsets_clone_columns() -> None:
+    clone_0 = SparseTargetMatrix(
+        matrix=sparse.csr_matrix(np.array([[1.0, 0.0, 2.0], [0.0, 3.0, 0.0]])),
+        target_vector=np.array([10.0, 20.0]),
+        names=("income", "count"),
+        metadata=({"family": "income"}, {"family": "demo"}),
+    )
+    clone_1 = SparseTargetMatrix(
+        matrix=sparse.csr_matrix(np.array([[0.0, 4.0, 0.0], [5.0, 0.0, 6.0]])),
+        target_vector=np.array([10.0, 20.0]),
+        names=("income", "count"),
+        metadata=({"family": "income"}, {"family": "demo"}),
+    )
+
+    assembled = assemble_clone_sparse_target_matrix(
+        {0: clone_0, 1: clone_1},
+        n_records=3,
+        n_clones=2,
+    )
+
+    assert assembled.matrix.shape == (2, 6)
+    np.testing.assert_array_equal(
+        assembled.matrix.toarray(),
+        np.array(
+            [
+                [1.0, 0.0, 2.0, 0.0, 4.0, 0.0],
+                [0.0, 3.0, 0.0, 5.0, 0.0, 6.0],
+            ]
+        ),
+    )
+    np.testing.assert_array_equal(assembled.target_vector, np.array([10.0, 20.0]))
+    assert assembled.names == ("income", "count")
+
+
+def test_assemble_clone_sparse_target_matrix_rejects_missing_clone() -> None:
+    clone_0 = SparseTargetMatrix(
+        matrix=sparse.csr_matrix((1, 2)),
+        target_vector=np.array([1.0]),
+        names=("target",),
+    )
+
+    with pytest.raises(ValueError, match="missing=\\[1\\]"):
+        assemble_clone_sparse_target_matrix({0: clone_0}, n_records=2, n_clones=2)
+
+
+def test_assemble_clone_sparse_target_matrix_rejects_mismatched_names() -> None:
+    clone_0 = SparseTargetMatrix(
+        matrix=sparse.csr_matrix((1, 2)),
+        target_vector=np.array([1.0]),
+        names=("target",),
+    )
+    clone_1 = SparseTargetMatrix(
+        matrix=sparse.csr_matrix((1, 2)),
+        target_vector=np.array([1.0]),
+        names=("other",),
+    )
+
+    with pytest.raises(ValueError, match="target names"):
+        assemble_clone_sparse_target_matrix(
+            {0: clone_0, 1: clone_1},
+            n_records=2,
+            n_clones=2,
+        )
+
+
+def test_assemble_clone_sparse_target_matrix_rejects_wrong_record_width() -> None:
+    clone_0 = SparseTargetMatrix(
+        matrix=sparse.csr_matrix((1, 2)),
+        target_vector=np.array([1.0]),
+        names=("target",),
+    )
+    clone_1 = SparseTargetMatrix(
+        matrix=sparse.csr_matrix((1, 3)),
+        target_vector=np.array([1.0]),
+        names=("target",),
+    )
+
+    with pytest.raises(ValueError, match="expected n_records"):
+        assemble_clone_sparse_target_matrix(
+            {0: clone_0, 1: clone_1},
+            n_records=2,
+            n_clones=2,
         )

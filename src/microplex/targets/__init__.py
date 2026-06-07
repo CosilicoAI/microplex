@@ -54,6 +54,7 @@ from microplex.targets.bundles import (
 from microplex.targets.database import Target, TargetCategory, TargetsDatabase
 from microplex.targets.matrix import (
     SparseTargetMatrix,
+    assemble_clone_sparse_target_matrix,
     compile_sparse_target_matrix,
     target_constraints_to_sparse_matrix,
 )
@@ -155,6 +156,7 @@ __all__ = [
     "EntityTableBinding",
     "EntityTableBundle",
     "SparseTargetMatrix",
+    "assemble_clone_sparse_target_matrix",
     "compile_sparse_target_matrix",
     "target_constraints_to_sparse_matrix",
     "EntityTableBundleReweightingResult",
