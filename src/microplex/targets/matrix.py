@@ -16,6 +16,7 @@ from scipy import sparse
 from microplex.calibration.clone_matrix import CloneMatrixBlock, assemble_clone_csr
 from microplex.core import EntityType
 from microplex.targets.reweighting import (
+    SimulationTargetCompiler,
     TargetReweightingConstraint,
     compile_target_reweighting_constraints,
 )
@@ -263,6 +264,7 @@ def compile_sparse_target_matrix(
     entity_frames: dict[EntityType, pd.DataFrame],
     entity_weight_indexes: dict[EntityType, pd.Series | np.ndarray],
     n_weights: int,
+    simulation_compiler: SimulationTargetCompiler | None = None,
     dtype: Any = np.float64,
 ) -> SparseTargetMatrix:
     """Compile canonical target specs into one sparse target matrix."""
@@ -270,6 +272,7 @@ def compile_sparse_target_matrix(
         targets=targets,
         entity_frames=entity_frames,
         entity_weight_indexes=entity_weight_indexes,
+        simulation_compiler=simulation_compiler,
     )
     return target_constraints_to_sparse_matrix(
         compilation.constraints,

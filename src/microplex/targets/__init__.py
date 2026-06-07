@@ -70,6 +70,7 @@ from microplex.targets.provider import (
 )
 from microplex.targets.reweighting import (
     EntityTableBundleReweightingResult,
+    SimulationTargetCompiler,
     SparseTargetCalibrationDiagnostics,
     SparseTargetConstraint,
     TargetConstraintCompilationResult,
@@ -170,6 +171,7 @@ __all__ = [
     "compile_sparse_target_matrix",
     "target_constraints_to_sparse_matrix",
     "EntityTableBundleReweightingResult",
+    "SimulationTargetCompiler",
     "SparseTargetConstraint",
     "SparseTargetCalibrationDiagnostics",
     "TargetReweightingConstraint",

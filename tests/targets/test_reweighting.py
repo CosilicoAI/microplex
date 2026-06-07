@@ -8,7 +8,9 @@ from microplex.targets import (
     EntityTableBinding,
     EntityTableBundle,
     FilterOperator,
+    TargetConstraintCompilationResult,
     TargetFilter,
+    TargetReweightingConstraint,
     TargetSimulationModifier,
     TargetSpec,
     apply_filter,
@@ -17,6 +19,39 @@ from microplex.targets import (
     reweight_entity_table_bundle_targets,
     reweight_to_target_constraints,
 )
+
+
+class RecordingSimulationCompiler:
+    def __init__(
+        self,
+        result: TargetConstraintCompilationResult | None = None,
+    ) -> None:
+        self.result = result
+        self.calls: list[tuple[str, ...]] = []
+
+    def compile_simulation_target_constraints(
+        self,
+        *,
+        targets,
+        entity_frames,
+        entity_weight_indexes,
+    ) -> TargetConstraintCompilationResult:
+        self.calls.append(tuple(target.name for target in targets))
+        if self.result is not None:
+            return self.result
+        target = targets[0]
+        return TargetConstraintCompilationResult(
+            constraints=(
+                TargetReweightingConstraint(
+                    name=target.name,
+                    entity=target.entity,
+                    weight_indexes=np.array([1]),
+                    coefficients=np.array([5.0]),
+                    target=target.value,
+                    metadata={"compiled_by": "simulator"},
+                ),
+            )
+        )
 
 
 def test_compile_target_reweighting_constraints_groups_to_shared_weight_vector():
@@ -228,6 +263,74 @@ def test_simulation_modifier_targets_are_skipped_until_simulator_compiler_exists
     assert compilation.skipped_targets == (
         ("snap_after_takeup", "requires_simulation_modifiers:rerandomize_takeup"),
     )
+
+
+def test_simulation_compiler_routes_modifier_targets_in_input_order():
+    compiler = RecordingSimulationCompiler()
+    targets = [
+        TargetSpec(
+            name="ordinary_income",
+            entity=EntityType.PERSON,
+            value=2.0,
+            period=2024,
+            measure="income",
+            aggregation="sum",
+        ),
+        TargetSpec(
+            name="snap_after_takeup",
+            entity=EntityType.PERSON,
+            value=10.0,
+            period=2024,
+            measure="snap",
+            aggregation="sum",
+            sim_modifiers=(
+                TargetSimulationModifier(
+                    name="rerandomize_takeup",
+                    parameters={"program": "snap"},
+                ),
+            ),
+        ),
+    ]
+
+    compilation = compile_target_reweighting_constraints(
+        targets=targets,
+        entity_frames={EntityType.PERSON: pd.DataFrame({"income": [2.0], "snap": [0.0]})},
+        entity_weight_indexes={EntityType.PERSON: np.array([0])},
+        simulation_compiler=compiler,
+    )
+
+    assert compiler.calls == [("snap_after_takeup",)]
+    assert tuple(constraint.name for constraint in compilation.constraints) == (
+        "ordinary_income",
+        "snap_after_takeup",
+    )
+    assert compilation.constraints[1].metadata == {"compiled_by": "simulator"}
+    assert compilation.skipped_targets == ()
+
+
+def test_simulation_compiler_must_account_for_every_modifier_target():
+    compiler = RecordingSimulationCompiler(TargetConstraintCompilationResult(()))
+    target = TargetSpec(
+        name="snap_after_takeup",
+        entity=EntityType.PERSON,
+        value=10.0,
+        period=2024,
+        measure="snap",
+        aggregation="sum",
+        sim_modifiers=(TargetSimulationModifier(name="rerandomize_takeup"),),
+    )
+
+    try:
+        compile_target_reweighting_constraints(
+            targets=[target],
+            entity_frames={EntityType.PERSON: pd.DataFrame({"snap": [1.0]})},
+            entity_weight_indexes={EntityType.PERSON: np.array([0])},
+            simulation_compiler=compiler,
+        )
+    except ValueError as exc:
+        assert "did not account" in str(exc)
+    else:
+        raise AssertionError("Expected ValueError for incomplete simulation compiler")
 
 
 def test_apply_filter_preserves_numeric_equality_semantics():
