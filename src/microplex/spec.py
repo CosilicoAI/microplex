@@ -48,6 +48,9 @@ __all__ = [
     "SplitTransform",
     "DeriveTransform",
     "TransformSpec",
+    "VariableCodeReference",
+    "VariableSystemProvenance",
+    "VariableSpec",
     "ArchTargetSpec",
     "TargetsSpec",
     "CalibrateSpec",
@@ -461,6 +464,98 @@ class TransformSpec(_StrictModel):
         return TransformKind.SPLIT if self.split is not None else TransformKind.DERIVE
 
 
+class VariableCodeReference(_StrictModel):
+    """A source-code pointer that explains how one system builds a variable."""
+
+    path: str = Field(
+        ...,
+        min_length=1,
+        description="Repository-relative path, or package path, to the relevant code.",
+    )
+    lines: str | None = Field(
+        default=None,
+        min_length=1,
+        description="Human-readable line reference, e.g. '36,246-248'.",
+    )
+    symbol: str | None = Field(
+        default=None,
+        min_length=1,
+        description="Function, constant, or class name containing the behavior.",
+    )
+    summary: str | None = Field(
+        default=None,
+        min_length=1,
+        description="Short explanation of the referenced code path.",
+    )
+
+
+class VariableSystemProvenance(_StrictModel):
+    """How one implementation produces a spec variable.
+
+    This is intentionally descriptive rather than executable. Country packs use
+    it as a temporary audit scaffold while porting an incumbent data pipeline
+    into the declarative spec.
+    """
+
+    method: str = Field(
+        ..., min_length=1, description="Short method label, e.g. 'PUF QRF'."
+    )
+    code: list[VariableCodeReference] = Field(
+        default_factory=list,
+        description="Source-code references backing the method label.",
+    )
+    notes: str | None = Field(
+        default=None,
+        min_length=1,
+        description="Known caveats or divergences for this system.",
+    )
+
+
+class VariableSpec(_StrictModel):
+    """Temporary per-variable audit metadata.
+
+    ``variables:`` is not used by the runtime engine yet. It exists to make
+    country-pack specs self-auditing during migrations: every declared variable
+    can carry the eCPS/incumbent code path, the legacy-MP code path, and the
+    intended spec behavior side-by-side.
+    """
+
+    entity: str | None = Field(
+        default=None,
+        min_length=1,
+        description="Optional PolicyEngine entity label for the variable.",
+    )
+    role: str | None = Field(
+        default=None,
+        min_length=1,
+        description="Optional role/category, e.g. 'puf_imputed' or 'derived'.",
+    )
+    ecps: VariableSystemProvenance | None = Field(
+        default=None,
+        description="How the incumbent eCPS / production pipeline builds it.",
+    )
+    mp_legacy: VariableSystemProvenance | None = Field(
+        default=None,
+        description="How the legacy imperative Microplex pipeline builds it.",
+    )
+    mp_spec: VariableSystemProvenance | None = Field(
+        default=None,
+        description="How this declarative spec intends to build it.",
+    )
+    temporary: bool = Field(
+        default=True,
+        description="Marks this as a migration audit scaffold, not runtime logic.",
+    )
+
+    @model_validator(mode="after")
+    def _has_some_provenance(self) -> VariableSpec:
+        if self.ecps is None and self.mp_legacy is None and self.mp_spec is None:
+            raise ValueError(
+                "variable spec must declare at least one of ecps, mp_legacy, or mp_spec."
+            )
+        return self
+
+
 class ArchTargetSpec(_StrictModel):
     """Names the Arch target set to fetch and roll up."""
 
@@ -529,6 +624,7 @@ class MicroplexSpec(_StrictModel):
     spine: SpineSpec
     imputation: list[ImputationStep] = Field(default_factory=list)
     transforms: list[TransformSpec] = Field(default_factory=list)
+    variables: dict[str, VariableSpec] = Field(default_factory=dict)
     targets: TargetsSpec | None = None
     calibrate: CalibrateSpec | None = None
 
