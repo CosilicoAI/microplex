@@ -144,6 +144,51 @@ class TestLoadValid:
         assert spec.meta.country == "us"
         assert len(spec.imputation) == 1
         assert spec.imputation[0].at is ImputationPhase.HALVES
+        assert spec.variables == {}
+
+    def test_variable_provenance_metadata_loads(self) -> None:
+        data = _valid_spec_dict()
+        data["variables"] = {
+            "employment_income": {
+                "entity": "person",
+                "role": "puf_imputed",
+                "ecps": {
+                    "method": "PUF QRF",
+                    "code": [
+                        {
+                            "path": "policyengine_us_data/storage/enhanced_cps/puf_impute.py",
+                            "lines": "36,246-248",
+                            "symbol": "IMPUTED_VARIABLES",
+                        }
+                    ],
+                },
+                "mp_legacy": {
+                    "method": "PUF donor imputation",
+                    "code": [
+                        {
+                            "path": "src/microplex_us/data_sources/puf.py",
+                            "lines": "776-778",
+                            "summary": "maps PUF E00200 to employment_income",
+                        }
+                    ],
+                },
+                "mp_spec": {
+                    "method": "synthesize from puf onto synthetic_puf",
+                    "notes": "Synthetic half must not inherit CPS wage values.",
+                },
+            }
+        }
+
+        spec = load_spec_dict(data)
+
+        variable = spec.variables["employment_income"]
+        assert variable.entity == "person"
+        assert variable.role == "puf_imputed"
+        assert variable.temporary is True
+        assert variable.ecps is not None
+        assert variable.ecps.code[0].symbol == "IMPUTED_VARIABLES"
+        assert variable.mp_legacy is not None
+        assert variable.mp_legacy.code[0].path.endswith("puf.py")
 
     def test_base_phase_imputation_can_target_base_alias(self) -> None:
         data = _valid_spec_dict()
@@ -225,6 +270,22 @@ class TestRejectMalformed:
     def test_unknown_source_field_rejected(self) -> None:
         data = _valid_spec_dict()
         data["sources"]["cps"]["typo"] = 1
+        with pytest.raises(SpecError, match="typo"):
+            load_spec_dict(data)
+
+    def test_empty_variable_provenance_rejected(self) -> None:
+        data = _valid_spec_dict()
+        data["variables"] = {"employment_income": {"entity": "person"}}
+        with pytest.raises(SpecError, match="at least one of ecps"):
+            load_spec_dict(data)
+
+    def test_unknown_variable_provenance_field_rejected(self) -> None:
+        data = _valid_spec_dict()
+        data["variables"] = {
+            "employment_income": {
+                "ecps": {"method": "PUF QRF", "typo": "not allowed"}
+            }
+        }
         with pytest.raises(SpecError, match="typo"):
             load_spec_dict(data)
 
