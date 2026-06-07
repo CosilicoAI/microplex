@@ -39,6 +39,7 @@ __all__ = [
     "ImputationOrder",
     "TransformKind",
     "CalibrationMethod",
+    "VariableOperationKind",
     "SpecMeta",
     "SourceSpec",
     "CloneSpec",
@@ -49,6 +50,7 @@ __all__ = [
     "DeriveTransform",
     "TransformSpec",
     "VariableCodeReference",
+    "VariableOperationSpec",
     "VariableSystemProvenance",
     "VariableSpec",
     "ArchTargetSpec",
@@ -141,6 +143,29 @@ class CalibrationMethod(StrEnum):
     APG = "apg"
     IPF = "ipf"
     L0 = "l0"
+
+
+class VariableOperationKind(StrEnum):
+    """Declarative operation that produces one variable in the spec runtime.
+
+    This is the migration boundary between a country content package and the
+    generic Microplex engine. Country packs may keep temporary provenance code
+    references while porting, but their intended ``mp_spec`` behavior should
+    converge on one of these operation kinds instead of executable country
+    Python.
+    """
+
+    PASSTHROUGH = "passthrough"
+    IMPUTE = "impute"
+    DERIVE = "derive"
+    SPLIT = "split"
+    CLONE_GEO = "clone_geo"
+    MATERIALIZE_POLICYENGINE = "materialize_policyengine"
+    RERANDOMIZE_TAKEUP = "rerandomize_takeup"
+    ENCODE_GEOID = "encode_geoid"
+    STRUCTURAL_EXPORT = "structural_export"
+    DEFAULT = "default"
+    OPEN_DECISION = "open_decision"
 
 
 # ---------------------------------------------------------------------------
@@ -489,16 +514,92 @@ class VariableCodeReference(_StrictModel):
     )
 
 
+class VariableOperationSpec(_StrictModel):
+    """Declarative operation that the Microplex engine should eventually run.
+
+    The schema is intentionally generic: ``kind`` is the stable operator name,
+    while the optional fields carry the country-specific operands until the
+    corresponding operator has a narrower typed model. This keeps content
+    packages declarative without pretending every US migration rule is already
+    executable.
+    """
+
+    kind: VariableOperationKind = Field(
+        ...,
+        description="Generic Microplex operation kind that produces the variable.",
+    )
+    source: str | None = Field(
+        default=None,
+        min_length=1,
+        description="Source dataset/half/frame name, e.g. 'cps_asec' or 'puf'.",
+    )
+    source_column: str | None = Field(
+        default=None,
+        min_length=1,
+        description="Input column when the operation copies or transforms one column.",
+    )
+    imputation_step: str | None = Field(
+        default=None,
+        min_length=1,
+        description="Named imputation step or donor surface this variable belongs to.",
+    )
+    transform: str | None = Field(
+        default=None,
+        min_length=1,
+        description="Named transform/operator detail, e.g. an eCPS-compatible split.",
+    )
+    expression: str | None = Field(
+        default=None,
+        min_length=1,
+        description="Declarative expression for derive-style operations.",
+    )
+    encoding: str | None = Field(
+        default=None,
+        min_length=1,
+        description="Export encoding detail, e.g. fixed-width S15 geoid bytes.",
+    )
+    handler: str | None = Field(
+        default=None,
+        min_length=1,
+        description="Registered handler name for policy/takeup/materialization operators.",
+    )
+    depends_on: list[str] = Field(
+        default_factory=list,
+        description="Variable dependencies the operation requires.",
+    )
+    temporary: bool = Field(
+        default=True,
+        description="Whether the operation is still a migration placeholder.",
+    )
+    notes: str | None = Field(
+        default=None,
+        min_length=1,
+        description="Known caveats or remaining work for this operation declaration.",
+    )
+
+    @field_validator("depends_on")
+    @classmethod
+    def _unique_dependencies(cls, value: list[str]) -> list[str]:
+        if len(set(value)) != len(value):
+            raise ValueError("variable operation depends_on contains duplicates.")
+        return value
+
+
 class VariableSystemProvenance(_StrictModel):
     """How one implementation produces a spec variable.
 
-    This is intentionally descriptive rather than executable. Country packs use
-    it as a temporary audit scaffold while porting an incumbent data pipeline
-    into the declarative spec.
+    ``method``/``code`` are intentionally descriptive audit metadata.
+    ``operation`` is the executable spec-driven direction of travel for
+    ``mp_spec`` rows: country packs should use it to name the generic Microplex
+    operator that will eventually replace the referenced Python code.
     """
 
     method: str = Field(
         ..., min_length=1, description="Short method label, e.g. 'PUF QRF'."
+    )
+    operation: VariableOperationSpec | None = Field(
+        default=None,
+        description="Optional declarative operation that implements this behavior.",
     )
     code: list[VariableCodeReference] = Field(
         default_factory=list,

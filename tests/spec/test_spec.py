@@ -21,6 +21,7 @@ from microplex.spec import (
     SpecError,
     SpineMethod,
     TransformKind,
+    VariableOperationKind,
     load_spec,
     load_spec_dict,
 )
@@ -174,6 +175,12 @@ class TestLoadValid:
                 },
                 "mp_spec": {
                     "method": "synthesize from puf onto synthetic_puf",
+                    "operation": {
+                        "kind": "impute",
+                        "source": "puf",
+                        "imputation_step": "synthetic_puf_from_puf",
+                        "depends_on": ["age", "is_male"],
+                    },
                     "notes": "Synthetic half must not inherit CPS wage values.",
                 },
             }
@@ -189,6 +196,42 @@ class TestLoadValid:
         assert variable.ecps.code[0].symbol == "IMPUTED_VARIABLES"
         assert variable.mp_legacy is not None
         assert variable.mp_legacy.code[0].path.endswith("puf.py")
+        assert variable.mp_spec is not None
+        assert variable.mp_spec.operation is not None
+        assert variable.mp_spec.operation.kind is VariableOperationKind.IMPUTE
+        assert variable.mp_spec.operation.source == "puf"
+        assert variable.mp_spec.operation.depends_on == ["age", "is_male"]
+
+    def test_variable_operation_rejects_unknown_kind(self) -> None:
+        data = _valid_spec_dict()
+        data["variables"] = {
+            "employment_income": {
+                "mp_spec": {
+                    "method": "bad operation",
+                    "operation": {"kind": "call_country_python"},
+                }
+            }
+        }
+
+        with pytest.raises(SpecError, match="operation.kind"):
+            load_spec_dict(data)
+
+    def test_variable_operation_rejects_duplicate_dependencies(self) -> None:
+        data = _valid_spec_dict()
+        data["variables"] = {
+            "employment_income": {
+                "mp_spec": {
+                    "method": "impute from puf",
+                    "operation": {
+                        "kind": "impute",
+                        "depends_on": ["age", "age"],
+                    },
+                }
+            }
+        }
+
+        with pytest.raises(SpecError, match="depends_on contains duplicates"):
+            load_spec_dict(data)
 
     def test_base_phase_imputation_can_target_base_alias(self) -> None:
         data = _valid_spec_dict()
