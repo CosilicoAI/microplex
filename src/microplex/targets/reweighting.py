@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
 import numpy as np
 import pandas as pd
@@ -57,6 +58,20 @@ class TargetConstraintCompilationResult:
     skipped_targets: tuple[tuple[str, str], ...] = ()
 
 
+@runtime_checkable
+class SimulationTargetCompiler(Protocol):
+    """Adapter protocol for targets that require simulator execution."""
+
+    def compile_simulation_target_constraints(
+        self,
+        *,
+        targets: Sequence[TargetSpec],
+        entity_frames: Mapping[EntityType, pd.DataFrame],
+        entity_weight_indexes: Mapping[EntityType, pd.Series | np.ndarray],
+    ) -> TargetConstraintCompilationResult:
+        """Compile simulator-dependent target rows into linear constraints."""
+
+
 @dataclass(frozen=True)
 class EntityTableBundleReweightingResult:
     """Result of reweighting a shared entity-table bundle."""
@@ -75,65 +90,47 @@ def compile_target_reweighting_constraints(
     targets: list[TargetSpec],
     entity_frames: dict[EntityType, pd.DataFrame],
     entity_weight_indexes: dict[EntityType, pd.Series | np.ndarray],
+    simulation_compiler: SimulationTargetCompiler | None = None,
 ) -> TargetConstraintCompilationResult:
     """Compile canonical targets into linear constraints over a shared weight vector."""
     constraints: list[TargetReweightingConstraint] = []
     skipped: list[tuple[str, str]] = []
+    simulation_targets = [target for target in targets if target.requires_simulation]
+    simulation_constraints: dict[str, TargetReweightingConstraint] = {}
+    simulation_skips: dict[str, str] = {}
+
+    if simulation_targets and simulation_compiler is not None:
+        simulation_constraints, simulation_skips = _compile_simulation_targets(
+            simulation_targets=simulation_targets,
+            simulation_compiler=simulation_compiler,
+            entity_frames=entity_frames,
+            entity_weight_indexes=entity_weight_indexes,
+        )
 
     for target in targets:
         if target.requires_simulation:
-            skipped.append(
-                (
-                    target.name,
-                    "requires_simulation_modifiers:"
-                    + ",".join(target.sim_modifier_names),
+            if target.name in simulation_constraints:
+                constraints.append(simulation_constraints[target.name])
+            elif target.name in simulation_skips:
+                skipped.append((target.name, simulation_skips[target.name]))
+            else:
+                skipped.append(
+                    (
+                        target.name,
+                        "requires_simulation_modifiers:"
+                        + ",".join(target.sim_modifier_names),
+                    )
                 )
-            )
             continue
-        frame = entity_frames.get(target.entity)
-        weight_indexes = entity_weight_indexes.get(target.entity)
-        if frame is None or weight_indexes is None:
-            skipped.append((target.name, "missing_entity_frame"))
-            continue
-        aligned_weight_indexes = _coerce_weight_indexes(weight_indexes, len(frame))
-        missing_features = [
-            feature for feature in target.required_features if feature not in frame.columns
-        ]
-        if missing_features:
-            skipped.append(
-                (target.name, f"missing_features:{','.join(sorted(missing_features))}")
-            )
-            continue
-
-        mask = _build_target_mask(frame, target)
-        coefficients = _target_coefficients(frame, target, mask)
-        if coefficients is None:
-            skipped.append((target.name, "unsupported_target"))
-            continue
-        active = coefficients != 0.0
-        if not active.any():
-            skipped.append((target.name, "zero_support"))
-            continue
-        grouped = (
-            pd.DataFrame(
-                {
-                    "weight_index": aligned_weight_indexes[active],
-                    "coefficient": coefficients.loc[active],
-                }
-            )
-            .groupby("weight_index", dropna=False)["coefficient"]
-            .sum()
+        constraint, skip_reason = _compile_frame_target_reweighting_constraint(
+            target=target,
+            entity_frames=entity_frames,
+            entity_weight_indexes=entity_weight_indexes,
         )
-        constraints.append(
-            TargetReweightingConstraint(
-                name=target.name,
-                entity=target.entity,
-                weight_indexes=grouped.index.to_numpy(dtype=int),
-                coefficients=grouped.to_numpy(dtype=float),
-                target=_constraint_target_value(target),
-                metadata=dict(target.metadata),
-            )
-        )
+        if constraint is not None:
+            constraints.append(constraint)
+        else:
+            skipped.append((target.name, skip_reason))
 
     return TargetConstraintCompilationResult(
         constraints=tuple(constraints),
@@ -145,12 +142,14 @@ def compile_entity_table_bundle_target_constraints(
     bundle: EntityTableBundle,
     *,
     targets: list[TargetSpec],
+    simulation_compiler: SimulationTargetCompiler | None = None,
 ) -> TargetConstraintCompilationResult:
     """Compile targets against a shared entity-table bundle."""
     return compile_target_reweighting_constraints(
         targets=targets,
         entity_frames=bundle.entity_frames(),
         entity_weight_indexes=bundle.entity_weight_indexes(),
+        simulation_compiler=simulation_compiler,
     )
 
 
@@ -322,6 +321,109 @@ def sparse_constraint_abs_rel_error(
 ) -> float:
     """Compatibility alias for sparse constraint relative error."""
     return constraint_abs_relative_error(constraint, weights)
+
+
+def _compile_simulation_targets(
+    *,
+    simulation_targets: Sequence[TargetSpec],
+    simulation_compiler: SimulationTargetCompiler,
+    entity_frames: Mapping[EntityType, pd.DataFrame],
+    entity_weight_indexes: Mapping[EntityType, pd.Series | np.ndarray],
+) -> tuple[dict[str, TargetReweightingConstraint], dict[str, str]]:
+    names = [target.name for target in simulation_targets]
+    if len(set(names)) != len(names):
+        raise ValueError(
+            "simulation target names must be unique so compiler output can be "
+            f"routed back to target order; got {names}."
+        )
+    expected_names = set(names)
+    result = simulation_compiler.compile_simulation_target_constraints(
+        targets=tuple(simulation_targets),
+        entity_frames=entity_frames,
+        entity_weight_indexes=entity_weight_indexes,
+    )
+    constraint_by_name: dict[str, TargetReweightingConstraint] = {}
+    skip_by_name: dict[str, str] = {}
+    for constraint in result.constraints:
+        if constraint.name in constraint_by_name:
+            raise ValueError(
+                f"simulation compiler returned duplicate constraint {constraint.name!r}"
+            )
+        constraint_by_name[constraint.name] = constraint
+    for target_name, reason in result.skipped_targets:
+        if target_name in skip_by_name:
+            raise ValueError(
+                f"simulation compiler returned duplicate skip {target_name!r}"
+            )
+        skip_by_name[target_name] = reason
+
+    returned_names = set(constraint_by_name) | set(skip_by_name)
+    unknown_names = returned_names - expected_names
+    if unknown_names:
+        raise ValueError(
+            "simulation compiler returned targets that were not requested: "
+            f"{sorted(unknown_names)}."
+        )
+    double_reported = set(constraint_by_name) & set(skip_by_name)
+    if double_reported:
+        raise ValueError(
+            "simulation compiler returned both constraints and skips for: "
+            f"{sorted(double_reported)}."
+        )
+    missing_names = expected_names - returned_names
+    if missing_names:
+        raise ValueError(
+            "simulation compiler did not account for requested targets: "
+            f"{sorted(missing_names)}."
+        )
+    return constraint_by_name, skip_by_name
+
+
+def _compile_frame_target_reweighting_constraint(
+    *,
+    target: TargetSpec,
+    entity_frames: Mapping[EntityType, pd.DataFrame],
+    entity_weight_indexes: Mapping[EntityType, pd.Series | np.ndarray],
+) -> tuple[TargetReweightingConstraint | None, str]:
+    frame = entity_frames.get(target.entity)
+    weight_indexes = entity_weight_indexes.get(target.entity)
+    if frame is None or weight_indexes is None:
+        return None, "missing_entity_frame"
+    aligned_weight_indexes = _coerce_weight_indexes(weight_indexes, len(frame))
+    missing_features = [
+        feature for feature in target.required_features if feature not in frame.columns
+    ]
+    if missing_features:
+        return None, f"missing_features:{','.join(sorted(missing_features))}"
+
+    mask = _build_target_mask(frame, target)
+    coefficients = _target_coefficients(frame, target, mask)
+    if coefficients is None:
+        return None, "unsupported_target"
+    active = coefficients != 0.0
+    if not active.any():
+        return None, "zero_support"
+    grouped = (
+        pd.DataFrame(
+            {
+                "weight_index": aligned_weight_indexes[active],
+                "coefficient": coefficients.loc[active],
+            }
+        )
+        .groupby("weight_index", dropna=False)["coefficient"]
+        .sum()
+    )
+    return (
+        TargetReweightingConstraint(
+            name=target.name,
+            entity=target.entity,
+            weight_indexes=grouped.index.to_numpy(dtype=int),
+            coefficients=grouped.to_numpy(dtype=float),
+            target=_constraint_target_value(target),
+            metadata=dict(target.metadata),
+        ),
+        "",
+    )
 
 
 def _coerce_weight_indexes(

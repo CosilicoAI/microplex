@@ -13,8 +13,10 @@ from microplex.targets import (
     SPARSE_TARGET_MATRIX_CERTIFICATE_SCHEMA,
     FilterOperator,
     SparseTargetMatrix,
+    TargetConstraintCompilationResult,
     TargetFilter,
     TargetReweightingConstraint,
+    TargetSimulationModifier,
     TargetSpec,
     assemble_clone_sparse_target_matrix,
     assert_sparse_target_matrix_certificate,
@@ -22,6 +24,28 @@ from microplex.targets import (
     compile_sparse_target_matrix,
     target_constraints_to_sparse_matrix,
 )
+
+
+class MatrixSimulationCompiler:
+    def compile_simulation_target_constraints(
+        self,
+        *,
+        targets,
+        entity_frames,
+        entity_weight_indexes,
+    ) -> TargetConstraintCompilationResult:
+        target = targets[0]
+        return TargetConstraintCompilationResult(
+            constraints=(
+                TargetReweightingConstraint(
+                    name=target.name,
+                    entity=target.entity,
+                    weight_indexes=np.array([1]),
+                    coefficients=np.array([7.0]),
+                    target=target.value,
+                ),
+            )
+        )
 
 
 def test_compile_sparse_target_matrix_emits_csr_target_surface() -> None:
@@ -107,6 +131,31 @@ def test_compile_sparse_target_matrix_preserves_skipped_targets_and_shape() -> N
     assert target_matrix.skipped_targets == (
         ("missing_measure", "missing_features:missing_income"),
     )
+
+
+def test_compile_sparse_target_matrix_uses_simulation_compiler() -> None:
+    target_matrix = compile_sparse_target_matrix(
+        targets=[
+            TargetSpec(
+                name="snap_after_takeup",
+                entity=EntityType.PERSON,
+                value=14.0,
+                period=2024,
+                measure="snap",
+                aggregation="sum",
+                sim_modifiers=(TargetSimulationModifier(name="rerandomize_takeup"),),
+            )
+        ],
+        entity_frames={EntityType.PERSON: pd.DataFrame({"snap": [0.0, 0.0]})},
+        entity_weight_indexes={EntityType.PERSON: np.array([0, 1])},
+        n_weights=2,
+        simulation_compiler=MatrixSimulationCompiler(),
+    )
+
+    assert target_matrix.names == ("snap_after_takeup",)
+    np.testing.assert_array_equal(target_matrix.target_vector, np.array([14.0]))
+    np.testing.assert_array_equal(target_matrix.matrix.toarray(), np.array([[0.0, 7.0]]))
+    assert target_matrix.skipped_targets == ()
 
 
 def test_target_constraints_to_sparse_matrix_preserves_trailing_zero_columns() -> None:
