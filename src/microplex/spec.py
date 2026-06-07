@@ -5,7 +5,7 @@ This module is the single source of truth for "what a pack declares" (see
 ``docs/spec-driven-rebuild.md`` §1). A pack ships a YAML document; the engine
 (:mod:`microplex.run`) consumes the validated :class:`MicroplexSpec` and runs
 generic stages over it. There is no logic-Python in the pack: the spec names
-sources, declares how the spine is cloned, what is imputed from what (and in
+sources, declares how the spine is split, what is imputed from what (and in
 what order), which deterministic transforms run, and which targets calibrate
 the result.
 
@@ -79,7 +79,7 @@ class SpecError(ValueError):
 class SourceRole(StrEnum):
     """The role a source plays in the build.
 
-    - ``spine``: the survey substrate that is cloned into halves. Exactly one
+    - ``spine``: the survey substrate that is split into halves. Exactly one
       source must be the spine.
     - ``donor``: a source other halves draw imputed variables from.
     """
@@ -91,9 +91,9 @@ class SourceRole(StrEnum):
 class SpineMethod(StrEnum):
     """Spine construction strategy.
 
-    - ``clone``: eCPS-style PUF clone semantics. Every base row appears once in
-      a passthrough half and once in a synthetic half. This is the only
-      supported method until an explicitly-tested partition variant exists.
+    - ``clone``: eCPS-style PUF clone semantics over a seeded 50/50 partition.
+      Every base row appears once, in either a passthrough half or a synthetic
+      half. This is the only supported method.
     """
 
     CLONE = "clone"
@@ -114,11 +114,11 @@ class ImputationOrder(StrEnum):
 
 
 class ImputationPhase(StrEnum):
-    """Where an imputation step runs in the clone pipeline.
+    """Where an imputation step runs in the spine pipeline.
 
     - ``base``: run before :class:`microplex.spine.SpineBuilder`; the output
-      becomes the base frame that is cloned into halves.
-    - ``halves``: run after cloning on the declared half (or ``both`` halves).
+      becomes the base frame that is split into halves.
+    - ``halves``: run after the split on the declared half (or ``both`` halves).
     """
 
     BASE = "base"
@@ -189,16 +189,16 @@ class SourceSpec(_StrictModel):
 
 
 class CloneSpec(_StrictModel):
-    """Options for eCPS-style clone spine construction."""
+    """Options for eCPS-style spine construction."""
 
     seed: int = Field(
         default=0,
-        description="Reserved deterministic seed for clone-stage stochastic hooks.",
+        description="Deterministic seed for the passthrough/synthetic row split.",
     )
 
 
 class HalfSpec(_StrictModel):
-    """One half of the cloned spine.
+    """One half of the split spine.
 
     Exactly one of ``keep`` / ``strip_to`` must be set:
 
@@ -251,17 +251,18 @@ class HalfSpec(_StrictModel):
 
 
 class SpineSpec(_StrictModel):
-    """The spine: a base source cloned into exactly two halves.
+    """The spine: a base source split into exactly two halves.
 
-    This is the eCPS ``puf_clone`` pattern, generalized (see blueprint §4): one
-    half keeps real survey values, the other is a cloned copy stripped to
-    demographics/ids and synthesized through the imputation graph.
+    This is the eCPS ``puf_clone`` pattern, generalized (see blueprint §4) and
+    applied to a deterministic 50/50 row partition: one half keeps real survey
+    values, the other is stripped to demographics/ids and synthesized through
+    the imputation graph.
     """
 
     base: str = Field(
         ...,
         min_length=1,
-        description="Name of the source to clone (its role must be 'spine').",
+        description="Name of the source to split (its role must be 'spine').",
     )
     method: SpineMethod = Field(
         default=SpineMethod.CLONE,
@@ -269,7 +270,7 @@ class SpineSpec(_StrictModel):
     )
     clone: CloneSpec = Field(
         default_factory=CloneSpec,
-        description="Options for the eCPS-style clone spine method.",
+        description="Options for the eCPS-style spine method.",
     )
     halves: list[HalfSpec] = Field(..., min_length=2, max_length=2)
 
@@ -318,8 +319,8 @@ class ImputationStep(_StrictModel):
     Synthesize ``vars`` onto the ``onto`` target by fitting microimpute's
     canonical regime-aware donor backend on the ``from`` donor, conditioned on
     ``condition_on`` (default: demographics) plus the already-imputed chain.
-    ``at: base`` steps run before cloning and must target ``base`` or the
-    declared spine source; ``at: halves`` steps run after cloning and must
+    ``at: base`` steps run before the spine split and must target ``base`` or the
+    declared spine source; ``at: halves`` steps run after the split and must
     target a half or ``both``. ``order`` controls the chain ordering.
     """
 
@@ -339,7 +340,7 @@ class ImputationStep(_StrictModel):
     )
     at: ImputationPhase = Field(
         default=ImputationPhase.HALVES,
-        description="Pipeline phase: 'base' before cloning or 'halves' after cloning.",
+        description="Pipeline phase: 'base' before the split or 'halves' after it.",
     )
     order: ImputationOrder = Field(
         default=ImputationOrder.SPINE_FIRST,

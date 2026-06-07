@@ -111,8 +111,8 @@ def _spec_dict() -> dict:
             ],
         },
         "imputation": [
-            # Source-level imputation runs before the spine is cloned, so both
-            # halves can retain net_worth as a post-clone predictor.
+            # Source-level imputation runs before the spine is split, so both
+            # halves can retain net_worth as a post-split predictor.
             {
                 "at": "base",
                 "onto": "base",
@@ -260,11 +260,11 @@ class TestRunSpec:
         )
         assert isinstance(result.frame, pd.DataFrame)
         base = _cps()
-        assert len(result.frame) == 2 * len(base)
+        assert len(result.frame) == len(base)
         label = result.spine.half_label_column
         assert result.frame[label].value_counts().to_dict() == {
-            "cps_keep": len(base),
-            "synthetic_puf": len(base),
+            "cps_keep": len(base) // 2,
+            "synthetic_puf": len(base) // 2,
         }
         synthetic = result.frame[result.frame[label] == "synthetic_puf"]
         assert (synthetic["household_weight"] == 0).all()

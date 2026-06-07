@@ -1,8 +1,8 @@
 """Tests for SpineBuilder (microplex.spine) on synthetic frames.
 
-Covers: eCPS-style 2x cloning, stripped columns dropped on the synthetic half
-while demographics + ids + zero weights are kept, passthrough half keeps
-everything, correct half labels, id offsets, and error cases.
+Covers: seeded 50/50 spine partitioning, stripped columns dropped on the
+synthetic half while demographics + ids + zero weights are kept, passthrough
+half keeps everything, correct half labels, id offsets, and error cases.
 """
 
 from __future__ import annotations
@@ -55,33 +55,75 @@ def _builder(spine: SpineSpec | None = None) -> SpineBuilder:
     )
 
 
+def _id_offset(base: pd.DataFrame, column: str) -> int:
+    min_value = base[column].min()
+    max_value = base[column].max()
+    if pd.isna(min_value) or pd.isna(max_value):
+        return 0
+    return int(max_value - min(0, min_value) + 1)
+
+
+def _decoded_synthetic_ids(
+    base: pd.DataFrame,
+    result,
+    *,
+    column: str = "tax_unit_id",
+) -> set[int]:
+    offset = _id_offset(base, column)
+    return set((result.halves["synthetic"][column] - offset).astype(int))
+
+
 class TestSplit:
-    def test_clones_every_base_row_twice(self) -> None:
-        base = _synthetic_base(200)
+    def test_partitions_every_base_row_once(self) -> None:
+        base = _synthetic_base(201)
         result = _builder().build(base)
-        assert len(result.frame) == 2 * len(base)
-        assert len(result.halves["cps_keep"]) == len(base)
-        assert len(result.halves["synthetic"]) == len(base)
+        assert len(result.frame) == len(base)
+        assert len(result.halves["cps_keep"]) == 101
+        assert len(result.halves["synthetic"]) == 100
 
-    def test_clone_ids_are_disjoint_offset_copies(self) -> None:
+        keep_ids = set(result.halves["cps_keep"]["tax_unit_id"].astype(int))
+        synth_source_ids = _decoded_synthetic_ids(base, result)
+        assert keep_ids.isdisjoint(synth_source_ids)
+        assert keep_ids | synth_source_ids == set(base["tax_unit_id"].astype(int))
+
+    def test_partition_membership_is_seeded_and_repeatable(self) -> None:
+        base = _synthetic_base(200)
+        first = _builder(_spine_spec(seed=7)).build(base)
+        second = _builder(_spine_spec(seed=7)).build(base)
+        different = _builder(_spine_spec(seed=8)).build(base)
+
+        first_keep = set(first.halves["cps_keep"]["tax_unit_id"].astype(int))
+        second_keep = set(second.halves["cps_keep"]["tax_unit_id"].astype(int))
+        different_keep = set(different.halves["cps_keep"]["tax_unit_id"].astype(int))
+
+        assert first_keep == second_keep
+        assert first_keep != different_keep
+
+    def test_synthetic_ids_are_disjoint_offset_copies(self) -> None:
         base = _synthetic_base(200)
         result = _builder().build(base)
-        keep_ids = set(result.halves["cps_keep"]["tax_unit_id"])
-        synth_ids = set(result.halves["synthetic"]["tax_unit_id"])
+        keep_ids = set(result.halves["cps_keep"]["tax_unit_id"].astype(int))
+        synth_ids = set(result.halves["synthetic"]["tax_unit_id"].astype(int))
         assert keep_ids.isdisjoint(synth_ids)
-        offset = int(base["tax_unit_id"].max()) + 1
-        assert keep_ids == set(base["tax_unit_id"])
-        assert synth_ids == set(base["tax_unit_id"] + offset)
+        offset = _id_offset(base, "tax_unit_id")
+        decoded_synth_ids = set(
+            (result.halves["synthetic"]["tax_unit_id"] - offset).astype(int)
+        )
+        assert keep_ids.isdisjoint(decoded_synth_ids)
+        assert keep_ids | decoded_synth_ids == set(base["tax_unit_id"].astype(int))
 
-    def test_clone_ids_are_disjoint_when_base_ids_cross_zero(self) -> None:
+    def test_synthetic_ids_are_disjoint_when_base_ids_cross_zero(self) -> None:
         base = _synthetic_base(11)
         base["tax_unit_id"] = np.arange(-5, 6)
         result = _builder().build(base)
-        keep_ids = set(result.halves["cps_keep"]["tax_unit_id"])
-        synth_ids = set(result.halves["synthetic"]["tax_unit_id"])
-        offset = int(base["tax_unit_id"].max() - min(0, base["tax_unit_id"].min()) + 1)
-        assert keep_ids == set(base["tax_unit_id"])
-        assert synth_ids == set(base["tax_unit_id"] + offset)
+        keep_ids = set(result.halves["cps_keep"]["tax_unit_id"].astype(int))
+        synth_ids = set(result.halves["synthetic"]["tax_unit_id"].astype(int))
+        offset = _id_offset(base, "tax_unit_id")
+        decoded_synth_ids = set(
+            (result.halves["synthetic"]["tax_unit_id"] - offset).astype(int)
+        )
+        assert keep_ids | decoded_synth_ids == set(base["tax_unit_id"].astype(int))
+        assert keep_ids.isdisjoint(decoded_synth_ids)
         assert keep_ids.isdisjoint(synth_ids)
 
 

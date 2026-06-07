@@ -27,7 +27,7 @@ sources:
   acs:        { dataset: acs_2024,      role: donor }
 
 spine:
-  # The eCPS puf_clone pattern, generalized + correct (see §4).
+  # The eCPS puf_clone pattern over a seeded 50/50 split (see §4).
   base: cps_asec
   method: clone
   clone: { seed: 0 }
@@ -38,7 +38,7 @@ spine:
 imputation:
   # Declarative graph. Each step = synthesize a set of vars from a donor onto a
   # target, conditioned on demographics + the already-imputed chain. `at: base`
-  # runs before cloning; `at: halves` (default) runs after cloning.
+  # runs before the spine split; `at: halves` (default) runs after it.
   # The engine runs microimpute's canonical regime-aware donor backend per step.
   - { at: base, onto: base, from: scf, vars: PRECLONE_ASSET_BLOCK }
   - { onto: synthetic_puf, from: puf, vars: PUF_TAX_BLOCK,  order: spine_first }
@@ -77,8 +77,8 @@ Notes:
 
 1. **`spec` (`microplex.spec`)** — Pydantic schema + loader/validator for the DSL above. The single source of truth for "what a pack declares."
 2. **`SourceRegistry`** — resolve `sources` to loaded, harmonized frames (already largely in `microplex/data_sources` + the source providers).
-3. **`ImputationRunner` base phase** — run `at: base` source-level imputations before cloning so pre-clone predictors are present on the base frame.
-4. **`SpineBuilder`** — implement §4 (clone the enriched base; one half kept; other half stripped to declared columns). Generic; no country logic.
+3. **`ImputationRunner` base phase** — run `at: base` source-level imputations before the spine split so pre-split predictors are present on the base frame.
+4. **`SpineBuilder`** — implement §4 (split the enriched base; one half kept; other half stripped to declared columns). Generic; no country logic.
 5. **`ImputationRunner` halves phase** — for each `at: halves` imputation step, fit microimpute's canonical regime-aware donor backend on the donor (weighted) over the step's var block, conditioned on `condition_on` (+ chain), and apply to the target half(s). This is the heart; microimpute already does the model. The runner just orchestrates the declared graph + entity grain.
 6. **`TransformEngine`** — apply declared `transforms` (splits/derivations) deterministically.
 7. **`ArchTargetProvider`** (moved out of `microplex-us/targets/arch.py`) — fetch + roll up Arch target records into `TargetSet`. Generic; the *values* already live in Arch (the pack just names the set).
@@ -107,7 +107,7 @@ This is the bug that cost the current build. The synthetic-PUF half must carry t
 - `cps_keep` half: real CPS values (passthrough). Its PUF-only tax detail (cap gains, etc.) is imputed *conditioned on* its real CPS income.
 - `synthetic_puf` half: **strip to demographics (+ tax_unit_id)**, then **synthesize the whole PUF tax-unit** (wages included) through microimpute's canonical regime-aware donor backend conditioned on demographics + the chain. Wide distributions on the first chained variables are correct — it's a barely-conditioned pure synthetic PUF. **Never keep/condition on CPS wages here.**
 
-This is exactly what eCPS's `policyengine_us_data/calibration/puf_impute.py:puf_clone_dataset` does by hand ("doubles CPS; one half keeps CPS values, the other half gets PUF tax variables imputed via QRF" from demographic predictors). `SpineBuilder` + `ImputationRunner` implement that pattern generically; the spec declares it.
+This follows eCPS's `policyengine_us_data/calibration/puf_impute.py:puf_clone_dataset` correctness anchor while using a seeded 50/50 partition instead of 2x row doubling: one half keeps CPS values, the other half gets PUF tax variables imputed from demographic predictors. `SpineBuilder` + `ImputationRunner` implement that pattern generically; the spec declares it.
 
 ---
 
