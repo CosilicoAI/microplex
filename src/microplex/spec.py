@@ -18,7 +18,7 @@ clear message rather than silently producing a wrong dataset.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
@@ -35,6 +35,7 @@ from pydantic import (
 __all__ = [
     "SourceRole",
     "SpineMethod",
+    "ImputationPhase",
     "ImputationOrder",
     "TransformKind",
     "CalibrationMethod",
@@ -54,6 +55,10 @@ __all__ = [
     "SpecError",
     "load_spec",
     "load_spec_dict",
+    "BASE_TOKEN",
+    "BOTH_TOKEN",
+    "DEMOGRAPHICS_TOKEN",
+    "KEEP_ALL_TOKEN",
 ]
 
 
@@ -71,7 +76,7 @@ class SpecError(ValueError):
 # ---------------------------------------------------------------------------
 
 
-class SourceRole(str, Enum):
+class SourceRole(StrEnum):
     """The role a source plays in the build.
 
     - ``spine``: the survey substrate that is cloned into halves. Exactly one
@@ -83,7 +88,7 @@ class SourceRole(str, Enum):
     DONOR = "donor"
 
 
-class SpineMethod(str, Enum):
+class SpineMethod(StrEnum):
     """Spine construction strategy.
 
     - ``clone``: eCPS-style PUF clone semantics. Every base row appears once in
@@ -94,7 +99,7 @@ class SpineMethod(str, Enum):
     CLONE = "clone"
 
 
-class ImputationOrder(str, Enum):
+class ImputationOrder(StrEnum):
     """Chain ordering strategy for an imputation step.
 
     - ``spine_first``: a generic ordering that puts income-bearing /
@@ -108,14 +113,26 @@ class ImputationOrder(str, Enum):
     AS_DECLARED = "as_declared"
 
 
-class TransformKind(str, Enum):
+class ImputationPhase(StrEnum):
+    """Where an imputation step runs in the clone pipeline.
+
+    - ``base``: run before :class:`microplex.spine.SpineBuilder`; the output
+      becomes the base frame that is cloned into halves.
+    - ``halves``: run after cloning on the declared half (or ``both`` halves).
+    """
+
+    BASE = "base"
+    HALVES = "halves"
+
+
+class TransformKind(StrEnum):
     """The kind of deterministic transform a rule declares."""
 
     SPLIT = "split"
     DERIVE = "derive"
 
 
-class CalibrationMethod(str, Enum):
+class CalibrationMethod(StrEnum):
     """Reweighting method the calibrator should use."""
 
     APG = "apg"
@@ -291,16 +308,19 @@ class SpineSpec(_StrictModel):
 
 
 # The special "onto" targets an imputation step may name in addition to a half.
+BASE_TOKEN = "base"
 BOTH_TOKEN = "both"
 
 
 class ImputationStep(_StrictModel):
     """One step in the declarative imputation graph.
 
-    Synthesize ``vars`` onto the ``onto`` half (or ``both`` halves) by fitting
-    microimpute's canonical regime-aware donor backend on the ``from`` donor,
-    conditioned on ``condition_on`` (default: the half's demographic columns)
-    plus the already-imputed chain. ``order`` controls the chain ordering.
+    Synthesize ``vars`` onto the ``onto`` target by fitting microimpute's
+    canonical regime-aware donor backend on the ``from`` donor, conditioned on
+    ``condition_on`` (default: demographics) plus the already-imputed chain.
+    ``at: base`` steps run before cloning and must target ``base`` or the
+    declared spine source; ``at: halves`` steps run after cloning and must
+    target a half or ``both``. ``order`` controls the chain ordering.
     """
 
     onto: str = Field(..., min_length=1, description="Target half name, or 'both'.")
@@ -316,6 +336,10 @@ class ImputationStep(_StrictModel):
             "Predictor columns/groups to condition on. Defaults to the half's "
             "demographic columns. May include the 'demographics' group token."
         ),
+    )
+    at: ImputationPhase = Field(
+        default=ImputationPhase.HALVES,
+        description="Pipeline phase: 'base' before cloning or 'halves' after cloning.",
     )
     order: ImputationOrder = Field(
         default=ImputationOrder.SPINE_FIRST,
@@ -521,12 +545,20 @@ class MicroplexSpec(_StrictModel):
                 f"spine.base '{self.spine.base}'."
             )
 
-        valid_onto = set(self.spine.half_names) | {BOTH_TOKEN}
+        valid_half_onto = set(self.spine.half_names) | {BOTH_TOKEN}
+        valid_base_onto = {BASE_TOKEN, self.spine.base}
         for index, step in enumerate(self.imputation):
-            if step.onto not in valid_onto:
+            if step.at is ImputationPhase.BASE:
+                if step.onto not in valid_base_onto:
+                    raise ValueError(
+                        f"imputation[{index}] at 'base' must target 'base' or "
+                        f"the spine source '{self.spine.base}'; got "
+                        f"onto='{step.onto}'."
+                    )
+            elif step.onto not in valid_half_onto:
                 raise ValueError(
                     f"imputation[{index}].onto '{step.onto}' is not a declared "
-                    f"half or 'both'; valid: {sorted(valid_onto)}."
+                    f"half or 'both'; valid: {sorted(valid_half_onto)}."
                 )
             if step.from_ not in self.sources:
                 raise ValueError(

@@ -28,7 +28,7 @@ from microplex.imputation import (
     order_variables,
     spine_first_order,
 )
-from microplex.spec import ImputationOrder, ImputationStep
+from microplex.spec import ImputationOrder, ImputationPhase, ImputationStep
 
 DEMOGRAPHIC_COLS = ["age", "is_male"]
 
@@ -447,6 +447,21 @@ class TestRunGraph:
         runner = _runner()
         step = ImputationStep(onto="synthetic", **{"from": "ghost"}, vars=["x"])
         with pytest.raises(KeyError, match="unknown donor"):
+            runner.run(
+                [step],
+                halves={"synthetic": _recipient()},
+                donors={"puf": _donor()},
+            )
+
+    def test_run_rejects_base_phase_steps(self) -> None:
+        runner = _runner()
+        step = ImputationStep(
+            at=ImputationPhase.BASE,
+            onto="base",
+            **{"from": "puf"},
+            vars=["employment_income"],
+        )
+        with pytest.raises(ValueError, match="only accepts at='halves'"):
             runner.run(
                 [step],
                 halves={"synthetic": _recipient()},

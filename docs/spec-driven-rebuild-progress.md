@@ -26,12 +26,14 @@ the default to canonical regime-aware microimpute.
 ### 1. `microplex.spec` — the DSL (blueprint §1)
 Pydantic v2 schema + YAML loader for the full DSL: `meta`, `sources`
 (name→{dataset, role}), `spine` (base, method: clone, clone{seed},
-halves[{name, keep|strip_to}]), `imputation` (steps {onto, from, vars,
-condition_on?, order?, synthesize?}), `transforms` (split/derive),
+halves[{name, keep|strip_to}]), `imputation` (steps {at?, onto, from, vars,
+condition_on?, order?, synthesize?}, where `at` defaults to `halves` and
+`at: base` runs before cloning), `transforms` (split/derive),
 `targets` ({arch:{country,model_year}}), `calibrate` ({loss, method,
 target_records?}). Strict (`extra="forbid"`) with cross-reference validation:
 exactly one spine source, `spine.base` resolves and is the spine source,
-imputation `onto` references a declared half or `both`, `from` references a
+imputation `at: halves` `onto` references a declared half or `both`,
+`at: base` `onto` references `base` or the spine source, `from` references a
 declared source, exactly-one `keep`/`strip_to` per half, exactly one
 passthrough half, fractional split sums to 1, etc. `load_spec(path)` and
 `load_spec_dict(mapping)` raise a single `SpecError` with field-pathed
@@ -80,16 +82,17 @@ transforms see earlier outputs; `apply()` never mutates input.
 > deliberate, separately-reviewed change.
 
 ### 5. `microplex.run` — `run_spec` (blueprint §2, §6)
-Sequences the wired stages: `resolve_sources` → `SpineBuilder` →
-`ImputationRunner` → `TransformEngine`. Returns a `RunResult` with the
-post-transform stacked frame, the spine result, per-half frames, per-step
-imputation outcomes, and, when a `TargetProvider` is supplied, the
+Sequences the wired stages: `resolve_sources` → `at: base` `ImputationRunner`
+→ `SpineBuilder` → `at: halves` `ImputationRunner` → `TransformEngine`.
+Returns a `RunResult` with the post-transform stacked frame, the pre-clone
+base frame after source-level imputations, the spine result, per-half frames,
+per-step imputation outcomes, and, when a `TargetProvider` is supplied, the
 spec-declared `TargetSet`. The end-to-end smoke test runs the full sequence on
-tiny synthetic CPS/PUF/SCF frames and asserts the output column set, that both
-halves get `net_worth` (a `both` step), that the synthetic half's income is
-synthesized while the kept half's real income is preserved (passthrough), that a
-split sums back, and that the target provider receives the declared Arch
-country/model-year/profile query.
+tiny synthetic CPS/PUF/SCF frames and asserts the output column set, that a
+base-imputed `net_worth` predictor survives cloning into both halves, that the
+synthetic half's income is synthesized while the kept half's real income is
+preserved (passthrough), that a split sums back, and that the target provider
+receives the declared Arch country/model-year/profile query.
 
 ## Notable correctness fix found while building
 

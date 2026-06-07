@@ -5,15 +5,19 @@ spec-driven engine (see ``docs/spec-driven-rebuild.md`` §2) over a validated
 :class:`~microplex.spec.MicroplexSpec`:
 
 1. **Sources** — resolve the spec's declared sources to loaded frames.
-2. **Spine** (:class:`~microplex.spine.SpineBuilder`) — clone the base into a
-   passthrough half and a stripped synthetic half.
-3. **Imputation** (:class:`~microplex.imputation.ImputationRunner`) — synthesize
-   the declared variable graph onto the halves via canonical microimpute.
-4. **Transforms** (:class:`~microplex.spec_transforms.TransformEngine`) — apply
+2. **Base imputation** (:class:`~microplex.imputation.ImputationRunner`) — run
+   any ``at: base`` steps before cloning, so source-level predictors are present
+   on both halves.
+3. **Spine** (:class:`~microplex.spine.SpineBuilder`) — clone the enriched base
+   into a passthrough half and a stripped synthetic half.
+4. **Half imputation** (:class:`~microplex.imputation.ImputationRunner`) —
+   synthesize the ``at: halves`` variable graph onto the halves via canonical
+   microimpute.
+5. **Transforms** (:class:`~microplex.spec_transforms.TransformEngine`) — apply
    declared split/derive rules to the stacked frame.
-5. **Targets** (:class:`~microplex.targets.TargetProvider`) — when a provider is
+6. **Targets** (:class:`~microplex.targets.TargetProvider`) — when a provider is
    supplied, load the spec-declared target surface and attach it to the result.
-6. **Calibration** (:class:`SpecCalibrator`) — when both a target provider and a
+7. **Calibration** (:class:`SpecCalibrator`) — when both a target provider and a
    calibrator are supplied, reweight the post-transform frame to the loaded
    target surface.
 
@@ -42,7 +46,13 @@ from microplex.imputation import (
     ImputationRunner,
     ImputationStepResult,
 )
-from microplex.spec import CalibrateSpec, ImputationOrder, MicroplexSpec
+from microplex.spec import (
+    CalibrateSpec,
+    ImputationOrder,
+    ImputationPhase,
+    ImputationStep,
+    MicroplexSpec,
+)
 from microplex.spec_transforms import TransformEngine
 from microplex.spine import SpineBuilder, SpineBuildResult
 from microplex.targets.provider import TargetProvider, TargetQuery
@@ -98,6 +108,8 @@ class RunResult:
     Attributes:
         frame: The final post-transform stacked frame (both spine halves).
         spine: The :class:`~microplex.spine.SpineBuildResult` from stage 2.
+        base: The spine-source frame after all ``at: base`` imputation steps
+            and before cloning.
         halves: The per-half frames after imputation (before stacking for
             transforms), keyed by half name.
         imputation_results: Per-(step, half) imputation outcomes.
@@ -112,6 +124,7 @@ class RunResult:
 
     frame: pd.DataFrame
     spine: SpineBuildResult
+    base: pd.DataFrame
     halves: dict[str, pd.DataFrame]
     imputation_results: list[ImputationStepResult] = field(default_factory=list)
     target_set: TargetSet | None = None
@@ -201,7 +214,7 @@ def run_spec(
 
     # Stage 1: sources.
     frames = resolve_sources(spec, sources)
-    base = frames[spec.spine_source]
+    base = frames[spec.spine_source].copy()
     donors = {name: frames[name] for name in spec.sources}
     logger.info(
         "run_spec: %d sources, spine base '%s' (%d rows)",
@@ -210,11 +223,9 @@ def run_spec(
         len(base),
     )
 
-    # Stage 2: spine.
-    spine_builder = SpineBuilder(spec.spine, column_groups=resolved_groups)
-    spine_result = spine_builder.build(base)
-
-    # Stage 3: imputation.
+    # Stage 2: base imputation. These source-level steps run before cloning, and
+    # the updated base is what the spine builder clones. Keep the donor mapping
+    # in sync so later steps can use the enriched spine source as a donor.
     resolved_spine_keywords = _resolve_spine_keywords(spec, spine_keywords)
     runner = ImputationRunner(
         column_groups=resolved_groups,
@@ -222,11 +233,32 @@ def run_spec(
         spine_keywords=resolved_spine_keywords,
         seed=seed,
     )
-    halves, imputation_results = runner.run(
-        spec.imputation,
+    base_steps = [
+        step for step in spec.imputation if step.at is ImputationPhase.BASE
+    ]
+    half_steps = [
+        step for step in spec.imputation if step.at is ImputationPhase.HALVES
+    ]
+    base, base_imputation_results = _run_base_imputation_steps(
+        base_steps,
+        base=base,
+        donors=donors,
+        runner=runner,
+        spine_source=spec.spine_source,
+    )
+    donors[spec.spine_source] = base
+
+    # Stage 3: spine.
+    spine_builder = SpineBuilder(spec.spine, column_groups=resolved_groups)
+    spine_result = spine_builder.build(base)
+
+    # Stage 4: half imputation.
+    halves, half_imputation_results = runner.run(
+        half_steps,
         halves=spine_result.halves,
         donors=donors,
     )
+    imputation_results = [*base_imputation_results, *half_imputation_results]
 
     # Re-stack the (imputed) halves in the spine's declared order so the
     # transform stage sees the full frame, with the half-label column intact.
@@ -295,12 +327,42 @@ def run_spec(
     return RunResult(
         frame=final_frame,
         spine=spine_result,
+        base=base,
         halves=halves,
         imputation_results=imputation_results,
         target_set=target_set,
         calibration_result=calibration_result,
         pending_stages=tuple(pending_stages),
     )
+
+
+def _run_base_imputation_steps(
+    steps: Sequence[ImputationStep],
+    *,
+    base: pd.DataFrame,
+    donors: Mapping[str, pd.DataFrame],
+    runner: ImputationRunner,
+    spine_source: str,
+) -> tuple[pd.DataFrame, list[ImputationStepResult]]:
+    """Run ``at: base`` imputation steps before cloning.
+
+    The base frame mutates across steps so later source-level imputations can
+    condition on earlier ones. Results record the concrete spine source name,
+    even when a spec uses the declarative ``onto: base`` alias.
+    """
+    working = base.copy()
+    results: list[ImputationStepResult] = []
+    for step in steps:
+        if step.from_ not in donors:
+            raise KeyError(f"imputation step references unknown donor '{step.from_}'.")
+        working, result = runner.run_step(
+            step,
+            donor=donors[step.from_],
+            target=working,
+        )
+        result.onto = spine_source
+        results.append(result)
+    return working, results
 
 
 def _resolve_spine_keywords(

@@ -1,8 +1,9 @@
 """End-to-end smoke test for run_spec (microplex.run) on tiny synthetic sources.
 
-Runs the full wired sequence (sources -> spine -> imputation -> transforms) on
-small in-memory frames and asserts the output frame has the expected columns
-and structure, and that the not-yet-wired stages are reported as pending.
+Runs the full wired sequence (sources -> base imputation -> spine ->
+half imputation -> transforms) on small in-memory frames and asserts the output
+frame has the expected columns and structure, and that the not-yet-wired stages
+are reported as pending.
 """
 
 from __future__ import annotations
@@ -57,6 +58,7 @@ def _puf(n: int = 400, seed: int = 1) -> pd.DataFrame:
     rng = np.random.default_rng(seed)
     age = rng.integers(18, 90, n).astype(float)
     emp = (age * 1200 + rng.normal(0, 8000, n)).clip(min=0)
+    net_worth = age * 6000 + emp * 1.5 + rng.normal(0, 60000, n)
     return pd.DataFrame(
         {
             "age": age,
@@ -67,6 +69,7 @@ def _puf(n: int = 400, seed: int = 1) -> pd.DataFrame:
                 min=0
             ),
             "taxable_interest_income": rng.uniform(0, 4000, n),
+            "net_worth": net_worth,
             "household_weight": rng.uniform(500, 8000, n),
         }
     )
@@ -103,11 +106,19 @@ def _spec_dict() -> dict:
                 {"name": "cps_keep", "keep": "all"},
                 {
                     "name": "synthetic_puf",
-                    "strip_to": ["demographics", "tax_unit_id"],
+                    "strip_to": ["demographics", "tax_unit_id", "net_worth"],
                 },
             ],
         },
         "imputation": [
+            # Source-level imputation runs before the spine is cloned, so both
+            # halves can retain net_worth as a post-clone predictor.
+            {
+                "at": "base",
+                "onto": "base",
+                "from": "scf",
+                "vars": ["net_worth"],
+            },
             # Synthesize the full PUF tax block onto the stripped half.
             {
                 "onto": "synthetic_puf",
@@ -117,6 +128,7 @@ def _spec_dict() -> dict:
                     "long_term_capital_gains",
                     "taxable_interest_income",
                 ],
+                "condition_on": ["demographics", "net_worth"],
                 "order": "spine_first",
                 "synthesize": True,
             },
@@ -127,8 +139,6 @@ def _spec_dict() -> dict:
                 "vars": ["long_term_capital_gains"],
                 "condition_on": ["demographics", "employment_income"],
             },
-            # net_worth onto both halves.
-            {"onto": "both", "from": "scf", "vars": ["net_worth"]},
         ],
         "transforms": [
             {
@@ -293,6 +303,13 @@ class TestRunSpec:
             sub = frame[frame[label] == half]
             assert sub["net_worth"].notna().all(), f"{half} missing net_worth"
 
+    def test_base_phase_imputation_runs_before_spine_clone(self) -> None:
+        spec = load_spec_dict(_spec_dict())
+        result = _run_spec(spec, _sources(), demographic_columns=DEMOGRAPHIC_COLS)
+        assert result.base["net_worth"].notna().all()
+        for half_name, half in result.spine.halves.items():
+            assert half["net_worth"].notna().all(), f"{half_name} missing net_worth"
+
     def test_synthetic_half_income_synthesized(self) -> None:
         spec = load_spec_dict(_spec_dict())
         result = _run_spec(spec, _sources(), demographic_columns=DEMOGRAPHIC_COLS)
@@ -412,11 +429,10 @@ class TestRunSpec:
     def test_imputation_results_recorded(self) -> None:
         spec = load_spec_dict(_spec_dict())
         result = _run_spec(spec, _sources(), demographic_columns=DEMOGRAPHIC_COLS)
-        # 1 (synthetic) + 1 (cps_keep) + 2 (both -> 2 halves) = 4 step-results.
-        assert len(result.imputation_results) == 4
+        # 1 (base) + 1 (synthetic) + 1 (cps_keep) = 3 step-results.
+        assert len(result.imputation_results) == 3
         ontos = [r.onto for r in result.imputation_results]
-        assert ontos.count("cps_keep") == 2  # one explicit + one from 'both'
-        assert ontos.count("synthetic_puf") == 2
+        assert ontos == ["cps", "synthetic_puf", "cps_keep"]
 
 
 class TestResolveSources:
