@@ -9,6 +9,7 @@ import pandas as pd
 import pytest
 from scipy import sparse
 
+from microplex.spec import CalibrateSpec, CalibrationMethod
 from microplex.targets import SparseTargetMatrix
 
 
@@ -40,7 +41,9 @@ def _load_adapter_with_fake_calibration(monkeypatch, captured: dict):
     return importlib.import_module("microplex.calibration.microcalibrate_adapter")
 
 
-def test_microcalibrate_adapter_fits_certified_sparse_target_matrix(monkeypatch) -> None:
+def test_microcalibrate_adapter_fits_certified_sparse_target_matrix(
+    monkeypatch,
+) -> None:
     captured: dict = {}
     adapter_module = _load_adapter_with_fake_calibration(monkeypatch, captured)
 
@@ -106,5 +109,64 @@ def test_microcalibrate_adapter_rejects_weight_length_mismatch(monkeypatch) -> N
     adapter = adapter_module.MicrocalibrateAdapter()
     with pytest.raises(ValueError, match="initial_weights length"):
         adapter.fit_sparse_target_matrix(np.array([1.0]), target_matrix)
+
+    assert "kwargs" not in captured
+
+
+def test_microcalibrate_adapter_applies_sparse_matrix_solve_policy(
+    monkeypatch,
+) -> None:
+    captured: dict = {}
+    adapter_module = _load_adapter_with_fake_calibration(monkeypatch, captured)
+
+    target_matrix = SparseTargetMatrix(
+        matrix=sparse.csr_matrix(np.array([[1.0, 0.0], [0.0, 2.0]])),
+        target_vector=np.array([5.0, 8.0]),
+        names=("count", "income"),
+    )
+    adapter = adapter_module.MicrocalibrateAdapter()
+
+    result = adapter.fit_sparse_target_matrix_with_policy(
+        np.array([1.0, 2.0]),
+        target_matrix,
+        calibrate=CalibrateSpec(
+            loss="pe_native_bucketed_huber_v1",
+            method=CalibrationMethod.APG,
+            target_records=1,
+        ),
+        certificate=target_matrix.certificate(),
+    )
+
+    np.testing.assert_array_equal(result.weights, np.array([2.0, 3.0]))
+    assert result.policy.solver == "microcalibrate_apg_l0_prune"
+    assert result.policy.target_records == 1
+    assert result.validation["converged"] is False
+    assert result.certificate.to_dict() == target_matrix.certificate().to_dict()
+    assert result.diagnostics()["policy"]["regularize_with_l0"] is True
+    assert captured["kwargs"]["regularize_with_l0"] is True
+    assert adapter.config.regularize_with_l0 is False
+
+
+def test_microcalibrate_adapter_policy_rejects_empty_target_surface_before_fit(
+    monkeypatch,
+) -> None:
+    captured: dict = {}
+    adapter_module = _load_adapter_with_fake_calibration(monkeypatch, captured)
+    target_matrix = SparseTargetMatrix(
+        matrix=sparse.csr_matrix((0, 2)),
+        target_vector=np.array([]),
+        names=(),
+    )
+
+    adapter = adapter_module.MicrocalibrateAdapter()
+    with pytest.raises(ValueError, match="target_count must be positive"):
+        adapter.fit_sparse_target_matrix_with_policy(
+            np.array([1.0, 2.0]),
+            target_matrix,
+            calibrate=CalibrateSpec(
+                loss="pe_native_bucketed_huber_v1",
+                method=CalibrationMethod.APG,
+            ),
+        )
 
     assert "kwargs" not in captured

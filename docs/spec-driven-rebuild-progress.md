@@ -115,6 +115,13 @@ and an optional minimum-records-per-target floor. This gives manifests and
 country adapters one stable place to log solver/pruning semantics instead of
 letting a build infer them ad hoc.
 
+`MicrocalibrateAdapter.fit_sparse_target_matrix_with_policy(...)` now applies
+that policy directly to a certified `SparseTargetMatrix`: it validates the
+certificate, rejects invalid solver/pruning requests before fitting, flips
+microcalibrate's L0 regularization only through the resolved policy, and returns
+weights plus stable policy/certificate/validation diagnostics for stage
+manifests.
+
 ## Notable correctness fix found while building
 
 `ImputationRunner` initially passed only `[predictors + imputed_vars]` to
@@ -136,9 +143,9 @@ result. If no provider is supplied, `targets` remains pending. No weights or
 calibrated datasets are fabricated. Remaining TODOs:
 
 - **`calibrate` (Calibrator):** reweight to targets via the declared
-  loss/method. Core now has a strict solve-policy resolver; the remaining work
-  is wiring the compiled sparse target matrix and country entity tables through
-  the selected solver.
+  loss/method. Core now has a strict solve-policy resolver plus a policy-aware
+  certified sparse-matrix microcalibrate adapter; the remaining work is wiring
+  country entity-table compilation into that entry point from the spec runner.
 - **`export` (Exporter):** write the PolicyEngine dataset.
 
 ## Stretch goal (Arch provider move) — assessed and deferred, not attempted

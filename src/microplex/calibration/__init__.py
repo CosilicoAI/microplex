@@ -2106,7 +2106,9 @@ try:
     from microplex.calibration.microcalibrate_adapter import (  # noqa: F401
         MicrocalibrateAdapter,
         MicrocalibrateAdapterConfig,
+        SparseTargetMatrixCalibrationResult,
     )
 except ImportError:  # microcalibrate not installed
     MicrocalibrateAdapter = None  # type: ignore[assignment]
     MicrocalibrateAdapterConfig = None  # type: ignore[assignment]
+    SparseTargetMatrixCalibrationResult = None  # type: ignore[assignment]
