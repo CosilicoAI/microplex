@@ -15,14 +15,21 @@ get the adapter when the extra is present and a clean no-op otherwise.
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Sequence
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pandas as pd
 from microcalibrate import Calibration
 
 from microplex.calibration import LinearConstraint
+
+if TYPE_CHECKING:
+    from microplex.targets import (
+        SparseTargetMatrix,
+        SparseTargetMatrixCertificate,
+    )
 
 
 @dataclass(frozen=True)
@@ -125,44 +132,74 @@ class MicrocalibrateAdapter:
                     f"({n_records},) matching the data length."
                 )
 
-        # float32 keeps the adapter's peak allocation at half the
-        # float64 default; microcalibrate casts to float32 anyway, so
-        # this is a free precision-compatible win.
         estimate_matrix = pd.DataFrame(
-            {
-                c.name: np.asarray(c.coefficients, dtype=np.float32)
-                for c in linear_constraints
-            }
+            np.column_stack(
+                [
+                    np.asarray(c.coefficients, dtype=np.float32)
+                    for c in linear_constraints
+                ]
+            ),
+            columns=target_names,
         )
 
-        calibrator = Calibration(
+        fitted_weights = self._fit_estimate_matrix(
             weights=initial_weights,
+            target_names=target_names,
             targets=targets,
-            target_names=np.array(target_names),
             estimate_matrix=estimate_matrix,
-            epochs=self.config.epochs,
-            learning_rate=self.config.learning_rate,
-            noise_level=self.config.noise_level,
-            dropout_rate=self.config.dropout_rate,
-            device=self.config.device,
-            seed=self.config.seed,
-            regularize_with_l0=self.config.regularize_with_l0,
-            l0_lambda=self.config.l0_lambda,
-            init_mean=self.config.init_mean,
-            temperature=self.config.temperature,
-            sparse_learning_rate=self.config.sparse_learning_rate,
-            batch_size=self.config.batch_size,
         )
-
-        performance_df = calibrator.calibrate()
-        self._last_calibration = calibrator
-        self._last_constraint_names = target_names
-        self._last_targets = targets
-        self._last_performance = performance_df
 
         result = data.copy()
-        result[weight_col] = calibrator.weights
+        result[weight_col] = fitted_weights
         return result
+
+    def fit_sparse_target_matrix(
+        self,
+        initial_weights: pd.Series | np.ndarray,
+        target_matrix: SparseTargetMatrix,
+        *,
+        certificate: SparseTargetMatrixCertificate | Mapping[str, Any] | None = None,
+    ) -> np.ndarray:
+        """Calibrate one certified sparse target matrix directly.
+
+        This is the fail-closed path for release builds: compile the
+        production-eCPS target surface once, persist its certificate, then pass
+        that exact sparse surface to the solver. If a later run changes target
+        names, targets, metadata, skipped diagnostics, matrix structure, or
+        coefficients, the optional certificate check raises before fitting.
+        """
+        if certificate is not None:
+            target_matrix.assert_matches_certificate(certificate)
+
+        weights = np.asarray(initial_weights, dtype=float)
+        if weights.ndim != 1:
+            raise ValueError("initial_weights must be one-dimensional.")
+        if len(weights) != target_matrix.n_weights:
+            raise ValueError(
+                "initial_weights length must match target_matrix.n_weights; "
+                f"got {len(weights)} and {target_matrix.n_weights}."
+            )
+
+        if target_matrix.n_targets == 0:
+            self._last_calibration = None
+            self._last_constraint_names = []
+            self._last_targets = np.empty(0, dtype=float)
+            self._last_performance = None
+            return weights.copy()
+
+        # Preserve the sparse target surface as far as pandas allows. This
+        # avoids rebuilding linear constraints and keeps the coefficient matrix
+        # tied to the target certificate used by the release gate.
+        estimate_matrix = pd.DataFrame.sparse.from_spmatrix(
+            target_matrix.matrix.transpose().tocsr(),
+            columns=list(target_matrix.names),
+        )
+        return self._fit_estimate_matrix(
+            weights=weights,
+            target_names=list(target_matrix.names),
+            targets=target_matrix.target_vector,
+            estimate_matrix=estimate_matrix,
+        )
 
     def validate(self, calibrated: pd.DataFrame | None = None) -> dict[str, Any]:
         """Return validation metrics in the shape the legacy pipeline expects.
@@ -216,6 +253,41 @@ class MicrocalibrateAdapter:
     def performance_history(self) -> pd.DataFrame | None:
         """Per-epoch performance log from microcalibrate, if available."""
         return self._last_performance
+
+    def _fit_estimate_matrix(
+        self,
+        *,
+        weights: np.ndarray,
+        target_names: list[str],
+        targets: np.ndarray,
+        estimate_matrix: pd.DataFrame,
+    ) -> np.ndarray:
+        """Run microcalibrate against a precompiled estimate matrix."""
+        calibrator = Calibration(
+            weights=weights,
+            targets=np.asarray(targets, dtype=float),
+            target_names=np.array(target_names),
+            estimate_matrix=estimate_matrix,
+            epochs=self.config.epochs,
+            learning_rate=self.config.learning_rate,
+            noise_level=self.config.noise_level,
+            dropout_rate=self.config.dropout_rate,
+            device=self.config.device,
+            seed=self.config.seed,
+            regularize_with_l0=self.config.regularize_with_l0,
+            l0_lambda=self.config.l0_lambda,
+            init_mean=self.config.init_mean,
+            temperature=self.config.temperature,
+            sparse_learning_rate=self.config.sparse_learning_rate,
+            batch_size=self.config.batch_size,
+        )
+
+        performance_df = calibrator.calibrate()
+        self._last_calibration = calibrator
+        self._last_constraint_names = list(target_names)
+        self._last_targets = np.asarray(targets, dtype=float)
+        self._last_performance = performance_df
+        return np.asarray(calibrator.weights, dtype=float).copy()
 
 
 __all__ = [

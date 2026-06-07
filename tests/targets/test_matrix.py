@@ -172,6 +172,31 @@ def test_sparse_target_matrix_rejects_misaligned_names() -> None:
         )
 
 
+def test_sparse_target_matrix_rejects_duplicate_names() -> None:
+    with pytest.raises(ValueError, match="duplicate target names"):
+        SparseTargetMatrix(
+            matrix=sparse.csr_matrix(np.array([[1.0, 0.0], [0.0, 1.0]])),
+            target_vector=np.array([1.0, 2.0]),
+            names=("target", "target"),
+        )
+
+
+def test_sparse_target_matrix_rejects_nonfinite_values() -> None:
+    with pytest.raises(ValueError, match="target_vector"):
+        SparseTargetMatrix(
+            matrix=sparse.csr_matrix(np.array([[1.0, 0.0]])),
+            target_vector=np.array([np.inf]),
+            names=("target",),
+        )
+
+    with pytest.raises(ValueError, match="matrix coefficients"):
+        SparseTargetMatrix(
+            matrix=sparse.csr_matrix(np.array([[np.nan, 0.0]])),
+            target_vector=np.array([1.0]),
+            names=("target",),
+        )
+
+
 def test_assemble_clone_sparse_target_matrix_offsets_clone_columns() -> None:
     clone_0 = SparseTargetMatrix(
         matrix=sparse.csr_matrix(np.array([[1.0, 0.0, 2.0], [0.0, 3.0, 0.0]])),
