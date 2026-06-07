@@ -137,9 +137,8 @@ class ImputationStepResult:
         skipped_missing_in_donor: Requested vars not present in the donor frame.
         predictors: The declared chain mapping (var -> chained predictor list),
             for inspection/testing. Empty if nothing numeric was imputed.
-        regimes: The fitted sign-regime mapping exposed by canonical
-            ``microimpute.Imputer`` when available. Empty for injected custom
-            backends that do not expose ``regimes_``.
+        regimes: The fitted sign-regime mapping from ``microimpute.Imputer``
+            (``{var: regime}``). Empty when nothing numeric was imputed.
     """
 
     onto: str
@@ -165,11 +164,7 @@ class ImputationRunner:
         weight_column: Name of a sampling-weight column. When present in a donor
             frame, the fit is weighted. ``None`` disables weighting.
         spine_keywords: Keyword list for :func:`spine_first_order`.
-        imputer_factory: Callable returning a fresh microimpute-compatible
-            imputer per step. Defaults to constructing the canonical
-            regime-aware ``microimpute.Imputer`` lazily so the dependency is
-            only required when the runner actually runs.
-        seed: Seed forwarded to the default imputer factory.
+        seed: Seed forwarded to ``microimpute.Imputer``.
 
     Notes:
         The runner is country-agnostic. It never special-cases a variable name;
@@ -183,7 +178,6 @@ class ImputationRunner:
         demographic_columns: Sequence[str] | None = None,
         weight_column: str | None = "household_weight",
         spine_keywords: Sequence[str] = SPINE_FIRST_KEYWORDS,
-        imputer_factory=None,
         seed: int = 0,
     ) -> None:
         self.column_groups = {
@@ -194,7 +188,6 @@ class ImputationRunner:
         self.weight_column = weight_column
         self.spine_keywords = tuple(spine_keywords)
         self.seed = seed
-        self._imputer_factory = imputer_factory
 
     # ------------------------------------------------------------------
     # Public API
@@ -412,32 +405,25 @@ class ImputationRunner:
     # ------------------------------------------------------------------
 
     def _make_imputer(self):
-        """Construct a fresh imputer for one step."""
-        if self._imputer_factory is not None:
-            return self._imputer_factory()
+        """Construct a fresh canonical ``microimpute.Imputer`` for one step.
+
+        ``microimpute.Imputer`` is the only imputer: regime-gated, QRF-based,
+        and always chains numeric targets in declared order. There is no
+        fallback and no alternate backend.
+        """
         # Lazy import so microimpute is only required when actually running.
-        # The canonical Imputer is regime-gated, QRF-based, and always chains
-        # numeric targets in declared order. Bare QRF is injectable for
-        # experiments, but it is not the release-default path.
         from microimpute import Imputer
 
-        imputer = Imputer(seed=self.seed, log_level="WARNING")
-        if hasattr(imputer, "seed"):
-            imputer.seed = self.seed
-        return imputer
+        return Imputer(seed=self.seed, log_level="WARNING")
 
     @staticmethod
     def _extract_regimes(fitted, imputed_variables: Sequence[str]) -> dict[str, str]:
-        """Extract fitted sign regimes when the backend exposes them."""
-        regimes = getattr(fitted, "regimes_", None)
-        if regimes is None:
-            return {}
-        if callable(regimes):
-            regimes = regimes()
+        """Extract the fitted sign regimes from ``microimpute.Imputer``."""
+        wanted = set(imputed_variables)
         return {
             var: str(regime)
-            for var, regime in dict(regimes).items()
-            if var in set(imputed_variables)
+            for var, regime in dict(fitted.regimes_).items()
+            if var in wanted
         }
 
     @staticmethod

@@ -158,7 +158,6 @@ def run_spec(
     demographic_columns: Sequence[str] | None = None,
     weight_column: str | None = "household_weight",
     spine_keywords: Sequence[str] = SPINE_FIRST_KEYWORDS,
-    imputer_factory=None,
     target_provider: TargetProvider | None = None,
     calibrator: SpecCalibrator | None = None,
     seed: int = 0,
@@ -175,15 +174,13 @@ def run_spec(
             precedence over ``column_groups['demographics']`` when set.
         weight_column: Sampling-weight column for weighted imputation fits.
         spine_keywords: Keyword list for the spine-first ordering heuristic.
-        imputer_factory: Optional callable returning a fresh imputer per step
-            (defaults to canonical regime-aware ``microimpute.Imputer``).
         target_provider: Optional provider used to load the spec-declared target
             surface. When omitted, targets remain an explicit pending stage.
         calibrator: Optional country-specific calibrator used to reweight the
             post-transform frame to the loaded target surface. Requires both
             ``spec.targets`` and ``target_provider`` so calibration never runs
             against an implicit or freshly recomputed target surface.
-        seed: Seed forwarded to the default imputer.
+        seed: Seed forwarded to ``microimpute.Imputer``.
 
     Returns:
         A :class:`RunResult`. ``frame`` is the post-transform stacked frame;
@@ -220,7 +217,6 @@ def run_spec(
         column_groups=resolved_groups,
         weight_column=weight_column,
         spine_keywords=spine_keywords,
-        imputer_factory=imputer_factory,
         seed=seed,
     )
     halves, imputation_results = runner.run(
@@ -249,8 +245,7 @@ def run_spec(
         target_set = target_provider.load_target_set(target_query)
         pending_stages.remove("targets")
         logger.info(
-            "run_spec: loaded %d targets for profile '%s' "
-            "(calibration profile '%s')",
+            "run_spec: loaded %d targets for profile '%s' (calibration profile '%s')",
             len(target_set.targets),
             spec.targets.arch.target_profile,
             spec.targets.arch.resolved_calibration_target_profile,
