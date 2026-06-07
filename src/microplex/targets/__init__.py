@@ -102,6 +102,7 @@ from microplex.targets.spec import (
     TargetAggregation,
     TargetFilter,
     TargetSet,
+    TargetSimulationModifier,
     TargetSpec,
 )
 
@@ -112,6 +113,7 @@ __all__ = [
     "FilterOperator",
     "TargetAggregation",
     "TargetFilter",
+    "TargetSimulationModifier",
     "BenchmarkArtifactValidationResult",
     "validate_benchmark_artifact_manifest",
     "assert_valid_benchmark_artifact_manifest",

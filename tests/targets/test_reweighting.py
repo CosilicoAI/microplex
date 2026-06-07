@@ -9,6 +9,7 @@ from microplex.targets import (
     EntityTableBundle,
     FilterOperator,
     TargetFilter,
+    TargetSimulationModifier,
     TargetSpec,
     apply_filter,
     compile_target_reweighting_constraints,
@@ -199,6 +200,34 @@ def test_constraint_abs_relative_error_uses_finite_zero_target_denominator():
     ).constraints[0]
 
     assert constraint_abs_relative_error(constraint, np.array([1.0])) == 2.0
+
+
+def test_simulation_modifier_targets_are_skipped_until_simulator_compiler_exists():
+    compilation = compile_target_reweighting_constraints(
+        targets=[
+            TargetSpec(
+                name="snap_after_takeup",
+                entity=EntityType.PERSON,
+                value=10.0,
+                period=2024,
+                measure="snap",
+                aggregation="sum",
+                sim_modifiers=(
+                    TargetSimulationModifier(
+                        name="rerandomize_takeup",
+                        parameters={"program": "snap"},
+                    ),
+                ),
+            )
+        ],
+        entity_frames={EntityType.PERSON: pd.DataFrame({"snap": [1.0, 2.0]})},
+        entity_weight_indexes={EntityType.PERSON: np.array([0, 1])},
+    )
+
+    assert compilation.constraints == ()
+    assert compilation.skipped_targets == (
+        ("snap_after_takeup", "requires_simulation_modifiers:rerandomize_takeup"),
+    )
 
 
 def test_apply_filter_preserves_numeric_equality_semantics():

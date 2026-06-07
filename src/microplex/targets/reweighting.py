@@ -81,6 +81,15 @@ def compile_target_reweighting_constraints(
     skipped: list[tuple[str, str]] = []
 
     for target in targets:
+        if target.requires_simulation:
+            skipped.append(
+                (
+                    target.name,
+                    "requires_simulation_modifiers:"
+                    + ",".join(target.sim_modifier_names),
+                )
+            )
+            continue
         frame = entity_frames.get(target.entity)
         weight_indexes = entity_weight_indexes.get(target.entity)
         if frame is None or weight_indexes is None:
