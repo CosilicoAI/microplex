@@ -6,10 +6,10 @@ spec-driven engine (see ``docs/spec-driven-rebuild.md`` §2) over a validated
 
 1. **Sources** — resolve the spec's declared sources to loaded frames.
 2. **Base imputation** (:class:`~microplex.imputation.ImputationRunner`) — run
-   any ``at: base`` steps before cloning, so source-level predictors are present
-   on both halves.
-3. **Spine** (:class:`~microplex.spine.SpineBuilder`) — clone the enriched base
-   into a passthrough half and a stripped synthetic half.
+   any ``at: base`` steps before the spine split, so source-level predictors are
+   present on both halves.
+3. **Spine** (:class:`~microplex.spine.SpineBuilder`) — split the enriched base
+   into passthrough and stripped synthetic halves.
 4. **Half imputation** (:class:`~microplex.imputation.ImputationRunner`) —
    synthesize the ``at: halves`` variable graph onto the halves via canonical
    microimpute.
@@ -109,7 +109,7 @@ class RunResult:
         frame: The final post-transform stacked frame (both spine halves).
         spine: The :class:`~microplex.spine.SpineBuildResult` from stage 2.
         base: The spine-source frame after all ``at: base`` imputation steps
-            and before cloning.
+            and before the split.
         halves: The per-half frames after imputation (before stacking for
             transforms), keyed by half name.
         imputation_results: Per-(step, half) imputation outcomes.
@@ -223,9 +223,10 @@ def run_spec(
         len(base),
     )
 
-    # Stage 2: base imputation. These source-level steps run before cloning, and
-    # the updated base is what the spine builder clones. Keep the donor mapping
-    # in sync so later steps can use the enriched spine source as a donor.
+    # Stage 2: base imputation. These source-level steps run before the spine
+    # split, and the updated base is what the spine builder partitions. Keep the
+    # donor mapping in sync so later steps can use the enriched spine source as
+    # a donor.
     resolved_spine_keywords = _resolve_spine_keywords(spec, spine_keywords)
     runner = ImputationRunner(
         column_groups=resolved_groups,
@@ -233,12 +234,8 @@ def run_spec(
         spine_keywords=resolved_spine_keywords,
         seed=seed,
     )
-    base_steps = [
-        step for step in spec.imputation if step.at is ImputationPhase.BASE
-    ]
-    half_steps = [
-        step for step in spec.imputation if step.at is ImputationPhase.HALVES
-    ]
+    base_steps = [step for step in spec.imputation if step.at is ImputationPhase.BASE]
+    half_steps = [step for step in spec.imputation if step.at is ImputationPhase.HALVES]
     base, base_imputation_results = _run_base_imputation_steps(
         base_steps,
         base=base,
@@ -344,7 +341,7 @@ def _run_base_imputation_steps(
     runner: ImputationRunner,
     spine_source: str,
 ) -> tuple[pd.DataFrame, list[ImputationStepResult]]:
-    """Run ``at: base`` imputation steps before cloning.
+    """Run ``at: base`` imputation steps before the spine split.
 
     The base frame mutates across steps so later source-level imputations can
     condition on earlier ones. Results record the concrete spine source name,
@@ -385,8 +382,7 @@ def _resolve_spine_keywords(
             )
         if len(spine_keywords) == 0:
             raise ValueError(
-                "run_spec received an empty spine_keywords list for order: "
-                "spine_first"
+                "run_spec received an empty spine_keywords list for order: spine_first"
             )
     return tuple(spine_keywords or ())
 

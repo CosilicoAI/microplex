@@ -1,11 +1,10 @@
-"""Build the spine: clone a base survey frame into passthrough and synthetic halves.
+"""Build the spine: split a base survey frame into passthrough and synthetic halves.
 
 This is the eCPS ``puf_clone`` pattern generalized (see
-``docs/spec-driven-rebuild.md`` §4). The reference implementation
-(``policyengine_us_data/calibration/puf_impute.py:puf_clone_dataset``) doubles
-CPS by hand: one half keeps CPS values, the other half has its tax variables
-synthesized from demographic predictors. :class:`SpineBuilder` does the same
-thing generically, driven by the ``spine:`` section of a
+``docs/spec-driven-rebuild.md`` §4), adapted to a seeded 50/50 partition: one
+half keeps CPS values, the other half is stripped and has its tax variables
+synthesized from demographic predictors. :class:`SpineBuilder` does this
+generically, driven by the ``spine:`` section of a
 :class:`microplex.spec.MicroplexSpec`.
 
 Crucially (the correctness anchor), the synthetic half keeps **only** the
@@ -21,6 +20,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
+import numpy as np
 import pandas as pd
 
 from microplex.spec import DEMOGRAPHICS_TOKEN, HalfSpec, SpineSpec
@@ -55,12 +55,12 @@ class SpineBuildResult:
 
 
 class SpineBuilder:
-    """Clone a base frame into a passthrough half and a synthetic half.
+    """Split a base frame into a passthrough half and a synthetic half.
 
-    The passthrough half keeps all base columns. The synthetic half is a cloned
-    copy of every base row, stripped to declared columns, with numeric id
-    columns offset and weight columns set to zero. This mirrors PE-US-data's
-    PUF clone shape: original records first, synthetic PUF copies second.
+    The passthrough half keeps all base columns for its seeded slice of rows.
+    The synthetic half gets the complementary row slice, stripped to declared
+    columns, with numeric id columns offset and weight columns set to zero.
+    Each base row appears exactly once across the two halves.
 
     Args:
         spine: The validated :class:`~microplex.spec.SpineSpec`.
@@ -69,8 +69,8 @@ class SpineBuilder:
             ``strip_to`` references a group token. Entries in ``strip_to`` that
             are not group tokens are treated as literal column names.
         id_columns: ID columns whose synthetic-half values should be offset so
-            clone entities cannot collide with original entities. Defaults to
-            all base columns ending in ``"_id"``.
+            synthetic entities cannot collide with original entities. Defaults
+            to all base columns ending in ``"_id"``.
         weight_columns: Weight columns to retain on the synthetic half and set
             to ``clone_weight_value``. Defaults to all base columns ending in
             ``"_weight"``.
@@ -79,7 +79,7 @@ class SpineBuilder:
 
     Notes:
         This class is country-agnostic. It never inspects column *meaning* — it
-        only clones rows and selects/drops columns by name. The demographic
+        only partitions rows and selects/drops columns by name. The demographic
         column set is injected by the caller, not hard-coded.
     """
 
@@ -109,7 +109,7 @@ class SpineBuilder:
     # ------------------------------------------------------------------
 
     def build(self, base: pd.DataFrame) -> SpineBuildResult:
-        """Clone ``base`` into the declared passthrough and synthetic halves.
+        """Split ``base`` into the declared passthrough and synthetic halves.
 
         Args:
             base: The base survey frame (one row per spine entity).
@@ -131,13 +131,22 @@ class SpineBuilder:
         normalized = base.reset_index(drop=True)
         passthrough_half = self.spine.passthrough_half
         synthetic_half = self.spine.synthetic_half
+        passthrough_rows, synthetic_rows = self._partition_row_positions(
+            len(normalized)
+        )
 
         halves: dict[str, pd.DataFrame] = {}
         halves[passthrough_half.name] = self._materialize_half(
-            normalized, passthrough_half, synthetic=False
+            normalized.iloc[passthrough_rows],
+            passthrough_half,
+            synthetic=False,
+            reference_base=normalized,
         )
         halves[synthetic_half.name] = self._materialize_half(
-            normalized, synthetic_half, synthetic=True
+            normalized.iloc[synthetic_rows],
+            synthetic_half,
+            synthetic=True,
+            reference_base=normalized,
         )
 
         stacked = pd.concat(
@@ -194,12 +203,13 @@ class SpineBuilder:
         half: HalfSpec,
         *,
         synthetic: bool,
+        reference_base: pd.DataFrame,
     ) -> pd.DataFrame:
         """Select/drop columns for one half and append the label column."""
         if half.is_passthrough:
             out = rows.copy()
         else:
-            keep = self._columns_for_synthetic_half(rows, half)
+            keep = self._columns_for_synthetic_half(reference_base, half)
             missing = [c for c in keep if c not in rows.columns]
             if missing:
                 raise ValueError(
@@ -209,12 +219,25 @@ class SpineBuilder:
             out = rows.loc[:, keep].copy()
         out = out.reset_index(drop=True)
         if synthetic:
-            self._offset_id_columns(out, rows)
-            for column in self._weight_columns(rows):
+            self._offset_id_columns(out, reference_base)
+            for column in self._weight_columns(reference_base):
                 if column in out.columns:
                     out[column] = self.clone_weight_value
         out[self.half_label_column] = half.name
         return out
+
+    def _partition_row_positions(
+        self,
+        n_rows: int,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Return deterministic passthrough/synthetic row positions."""
+        positions = np.arange(n_rows)
+        rng = np.random.default_rng(self.spine.clone.seed)
+        rng.shuffle(positions)
+        passthrough_count = (n_rows + 1) // 2
+        passthrough = np.sort(positions[:passthrough_count])
+        synthetic = np.sort(positions[passthrough_count:])
+        return passthrough, synthetic
 
     def _columns_for_synthetic_half(
         self,
@@ -247,13 +270,13 @@ class SpineBuilder:
         clone: pd.DataFrame,
         base: pd.DataFrame,
     ) -> None:
-        """Offset synthetic-half id columns so original/clone ids are disjoint."""
+        """Offset synthetic-half id columns so original/synthetic ids are disjoint."""
         for column in self._id_columns(base):
             if column not in clone.columns:
                 continue
             if not pd.api.types.is_numeric_dtype(clone[column]):
                 raise ValueError(
-                    f"id column '{column}' must be numeric to offset clone ids."
+                    f"id column '{column}' must be numeric to offset synthetic ids."
                 )
             min_value = base[column].min()
             max_value = base[column].max()

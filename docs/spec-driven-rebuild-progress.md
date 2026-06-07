@@ -8,9 +8,9 @@ Status as of this overnight session. Branch: `claude/spec-driven-engine`
 
 The five foundation modules from the build brief are complete: each is
 implemented, unit-tested on small **synthetic** frames (no real CPS/PUF data
-build — that's a later phase), and pushed. Codex PR #18 then corrected the
-spine to explicit eCPS clone semantics. The follow-up runner correction pins
-the default to canonical regime-aware microimpute.
+build — that's a later phase), and pushed. The spine now uses a seeded 50/50
+split with the eCPS synthetic-half correctness anchor. The follow-up runner
+correction pins the default to canonical regime-aware microimpute.
 
 | # | Module | Class / entry point | Tests | Status |
 |---|--------|--------------------|-------|--------|
@@ -28,7 +28,7 @@ Pydantic v2 schema + YAML loader for the full DSL: `meta`, `sources`
 (name→{dataset, role}), `spine` (base, method: clone, clone{seed},
 halves[{name, keep|strip_to}]), `imputation` (steps {at?, onto, from, vars,
 condition_on?, order?, synthesize?}, where `at` defaults to `halves` and
-`at: base` runs before cloning), `transforms` (split/derive),
+`at: base` runs before the spine split), `transforms` (split/derive),
 `targets` ({arch:{country,model_year}}), `calibrate` ({loss, method,
 target_records?}). Strict (`extra="forbid"`) with cross-reference validation:
 exactly one spine source, `spine.base` resolves and is the spine source,
@@ -40,9 +40,10 @@ passthrough half, fractional split sums to 1, etc. `load_spec(path)` and
 messages.
 
 ### 2. `microplex.spine` — `SpineBuilder` (blueprint §4)
-The eCPS `puf_clone` pattern generalized. Clones every base row into two
-copies: the passthrough (`keep: all`) half keeps all columns, while the
-synthetic (`strip_to`) half keeps only its declared columns plus ids/weights
+The eCPS `puf_clone` pattern generalized over a seeded 50/50 partition. Each
+base row appears once: in either the passthrough (`keep: all`) half, which keeps
+all columns, or the synthetic (`strip_to`) half, which keeps only its declared
+columns plus ids/weights
 (so its income tail is synthesized from scratch, not inherited — the
 correctness anchor). Synthetic ids are offset and synthetic weights start at
 zero. Appends a half-label column.
@@ -84,12 +85,12 @@ transforms see earlier outputs; `apply()` never mutates input.
 ### 5. `microplex.run` — `run_spec` (blueprint §2, §6)
 Sequences the wired stages: `resolve_sources` → `at: base` `ImputationRunner`
 → `SpineBuilder` → `at: halves` `ImputationRunner` → `TransformEngine`.
-Returns a `RunResult` with the post-transform stacked frame, the pre-clone
+Returns a `RunResult` with the post-transform stacked frame, the pre-split
 base frame after source-level imputations, the spine result, per-half frames,
 per-step imputation outcomes, and, when a `TargetProvider` is supplied, the
 spec-declared `TargetSet`. The end-to-end smoke test runs the full sequence on
 tiny synthetic CPS/PUF/SCF frames and asserts the output column set, that a
-base-imputed `net_worth` predictor survives cloning into both halves, that the
+base-imputed `net_worth` predictor survives the split into both halves, that the
 synthetic half's income is synthesized while the kept half's real income is
 preserved (passthrough), that a split sums back, and that the target provider
 receives the declared Arch country/model-year/profile query.
