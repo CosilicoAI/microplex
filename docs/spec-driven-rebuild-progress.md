@@ -96,16 +96,24 @@ synthetic half's income is synthesized while the kept half's real income is
 preserved (passthrough), that a split sums back, and that the target provider
 receives the declared Arch country/model-year/profile query.
 
+### 6. `microplex.stage_manifest` — strict stage artifact manifests
+Build stages can now write a self-verifying JSON manifest with schema version,
+stage id, declared seeds, parameters, metadata, and per-artifact relative path,
+size, and SHA-256. Load/resume code can call
+`assert_stage_manifest(..., root=...)` before reusing a checkpoint; missing
+files, changed bytes, absolute paths, and `..` path escapes fail closed. This is
+the generic core primitive that replaces ad hoc US-only manifest checks as the
+fresh pipeline adds SourceRegistry, calibration, and export stages.
+
 ## Notable correctness fix found while building
 
 `ImputationRunner` initially passed only `[predictors + imputed_vars]` to
-`Imputer.fit`. microimpute routes **non-numeric** (categorical/boolean) targets
-to an auxiliary imputer that reads `weight_col` off `X_train` *by name*, so a
-weighted fit with any non-numeric target raised
-`"Weight column 'household_weight' not found in training data"`. Fixed by
-including the weight column in the training frame even though it is neither a
-predictor nor an imputed variable. Covered by the boolean-target path in the
-imputation tests.
+`Imputer.fit`. If a step explicitly declares `weights: <donor column>`,
+microimpute routes **non-numeric** (categorical/boolean) targets to an auxiliary
+imputer that reads `weight_col` off `X_train` *by name*, so the declared weight
+column must be included in the training frame even though it is neither a
+predictor nor an imputed variable. Omitted `weights` remains unweighted, by
+design.
 
 ## Deliberately NOT wired (clear TODOs, not faked)
 
