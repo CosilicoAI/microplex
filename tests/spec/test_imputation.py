@@ -72,6 +72,26 @@ def _runner(**kwargs) -> ImputationRunner:
     return ImputationRunner(**defaults)
 
 
+class _RecordingImputer:
+    def __init__(self) -> None:
+        self.fit_kwargs: dict | None = None
+        self.regimes_: dict[str, str] = {}
+
+    def fit(self, **kwargs):
+        self.fit_kwargs = kwargs
+        return self
+
+    def predict(self, target: pd.DataFrame) -> pd.DataFrame:
+        imputed_variables = self.fit_kwargs["imputed_variables"]
+        return pd.DataFrame(
+            {
+                variable: np.arange(len(target), dtype=float)
+                for variable in imputed_variables
+            },
+            index=target.index,
+        )
+
+
 # ---------------------------------------------------------------------------
 # Ordering heuristic
 # ---------------------------------------------------------------------------
@@ -176,6 +196,15 @@ class TestConditionOn:
     def test_demographic_columns_arg_takes_precedence(self) -> None:
         runner = ImputationRunner(demographic_columns=["a", "b"])
         assert runner.demographic_columns == ["a", "b"]
+
+    def test_blank_weights_normalizes_to_unweighted(self) -> None:
+        step = ImputationStep(
+            onto="synthetic",
+            **{"from": "puf"},
+            vars=["employment_income"],
+            weights="",
+        )
+        assert step.weights is None
 
 
 # ---------------------------------------------------------------------------
@@ -356,18 +385,52 @@ class TestRunStep:
         assert "not_in_donor" not in new_target.columns
         assert "employment_income" in result.imputed
 
-    def test_weighted_fit_when_weight_present(self) -> None:
-        """Smoke: a weight column in the donor doesn't break the fit."""
+    def test_default_fit_is_unweighted_even_when_donor_has_weights(self) -> None:
         runner = _runner()
+        recorder = _RecordingImputer()
+        runner._make_imputer = lambda: recorder
         step = ImputationStep(
             onto="synthetic",
             **{"from": "puf"},
             vars=["employment_income"],
             synthesize=True,
         )
+        runner.run_step(step, donor=_donor(), target=_recipient())
+
+        assert recorder.fit_kwargs is not None
+        assert recorder.fit_kwargs["weight_col"] is None
+        assert "household_weight" not in recorder.fit_kwargs["X_train"].columns
+
+    def test_weighted_fit_when_step_declares_weights(self) -> None:
+        runner = _runner()
+        recorder = _RecordingImputer()
+        runner._make_imputer = lambda: recorder
+        step = ImputationStep(
+            onto="synthetic",
+            **{"from": "puf"},
+            vars=["employment_income"],
+            weights="household_weight",
+            synthesize=True,
+        )
         new_target, result = runner.run_step(step, donor=_donor(), target=_recipient())
+
+        assert recorder.fit_kwargs is not None
+        assert recorder.fit_kwargs["weight_col"] == "household_weight"
+        assert "household_weight" in recorder.fit_kwargs["X_train"].columns
         assert result.imputed == ["employment_income"]
         assert new_target["employment_income"].notna().all()
+
+    def test_missing_declared_weights_column_raises(self) -> None:
+        runner = _runner()
+        step = ImputationStep(
+            onto="synthetic",
+            **{"from": "puf"},
+            vars=["employment_income"],
+            weights="missing_weight",
+            synthesize=True,
+        )
+        with pytest.raises(ValueError, match="donor is missing weights column"):
+            runner.run_step(step, donor=_donor(), target=_recipient())
 
     def test_missing_predictor_in_donor_raises(self) -> None:
         runner = _runner()

@@ -346,6 +346,13 @@ class ImputationStep(_StrictModel):
         default=ImputationOrder.SPINE_FIRST,
         description="Chain ordering strategy.",
     )
+    weights: str | None = Field(
+        default=None,
+        description=(
+            "Optional donor column to use as sample weights when fitting this "
+            "step. Omitted or blank means an unweighted donor fit."
+        ),
+    )
     synthesize: bool = Field(
         default=False,
         description=(
@@ -361,6 +368,13 @@ class ImputationStep(_StrictModel):
     def _unique_vars(cls, value: list[str]) -> list[str]:
         if len(set(value)) != len(value):
             raise ValueError("imputation step 'vars' contains duplicates.")
+        return value
+
+    @field_validator("weights", mode="before")
+    @classmethod
+    def _blank_weights_are_unweighted(cls, value: object) -> object:
+        if isinstance(value, str) and value.strip() == "":
+            return None
         return value
 
     @property

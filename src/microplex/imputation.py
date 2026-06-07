@@ -8,9 +8,9 @@ the model — regime-gated, QRF-based, sequentially-chained imputation. The
 runner only orchestrates the *declared graph*:
 
 - For each :class:`~microplex.spec.ImputationStep`, fit microimpute's canonical
-  regime-aware ``Imputer`` on the donor frame (weighted if a weight column is
-  present) over the step's variable list, conditioned on ``condition_on``
-  (default: the target half's demographic columns).
+  regime-aware ``Imputer`` on the donor frame over the step's variable list,
+  conditioned on ``condition_on`` (default: the target half's demographic
+  columns). Fits are unweighted unless the step declares ``weights``.
 - microimpute chains internally: numeric ``imputed_variables`` are conditioned
   sequentially on the originals plus the previously-imputed targets, in list
   order. So the runner's only job for chaining is to *order* the variable list;
@@ -162,8 +162,9 @@ class ImputationRunner:
             ``condition_on`` (the half's demographics). May also be supplied via
             ``column_groups["demographics"]``; this argument is a convenience and
             takes precedence when set.
-        weight_column: Name of a sampling-weight column. When present in a donor
-            frame, the fit is weighted. ``None`` disables weighting.
+        weight_column: Retained for backwards-compatible runner construction.
+            Donor fits are unweighted unless an imputation step declares
+            ``weights``.
         spine_keywords: Keyword list for :func:`spine_first_order`.
         seed: Seed forwarded to ``microimpute.Imputer``.
 
@@ -309,17 +310,11 @@ class ImputationRunner:
             return new_target, result
 
         imputer = self._make_imputer()
-        weight_col = (
-            self.weight_column
-            if (self.weight_column and self.weight_column in donor.columns)
-            else None
-        )
+        weight_col = self._resolve_step_weight_column(step, donor)
 
-        # Include the weight column in the training frame so microimpute can
-        # resolve it by name. Its non-numeric (categorical/boolean) target path
-        # forwards weight_col to an auxiliary imputer that reads it off X_train,
-        # so the column must be present even though it is neither a predictor
-        # nor an imputed variable.
+        # Include an explicitly declared weight column in the training frame so
+        # microimpute can resolve it by name. Omitted step.weights means the fit
+        # is intentionally unweighted, even if the donor has survey weights.
         train_cols = [*predictors, *to_impute]
         if weight_col is not None and weight_col not in train_cols:
             train_cols.append(weight_col)
@@ -346,6 +341,21 @@ class ImputationRunner:
             " (weighted)" if weight_col else "",
         )
         return new_target, result
+
+    def _resolve_step_weight_column(
+        self,
+        step: ImputationStep,
+        donor: pd.DataFrame,
+    ) -> str | None:
+        if step.weights is None:
+            return None
+        weight_col = step.weights
+        if weight_col not in donor.columns:
+            raise ValueError(
+                f"step onto='{step.onto}' from='{step.from_}': donor is missing "
+                f"weights column '{weight_col}'."
+            )
+        return weight_col
 
     def run(
         self,
