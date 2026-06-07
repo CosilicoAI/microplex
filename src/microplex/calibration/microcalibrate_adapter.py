@@ -16,7 +16,7 @@ get the adapter when the extra is present and a clean no-op otherwise.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
@@ -24,6 +24,11 @@ import pandas as pd
 from microcalibrate import Calibration
 
 from microplex.calibration import LinearConstraint
+from microplex.calibration.solve_policy import (
+    CalibrationSolvePolicy,
+    resolve_calibration_solve_policy,
+)
+from microplex.spec import CalibrateSpec
 
 if TYPE_CHECKING:
     from microplex.targets import (
@@ -58,6 +63,24 @@ class MicrocalibrateAdapterConfig:
     # under ~200 MB at k = 500 constraints (100_000 * 500 * 4 B).
     # None = full-batch, which can OOM past ~500k records.
     batch_size: int | None = 100_000
+
+
+@dataclass(frozen=True)
+class SparseTargetMatrixCalibrationResult:
+    """Result of a policy-aware sparse target matrix calibration."""
+
+    weights: np.ndarray
+    policy: CalibrationSolvePolicy
+    certificate: SparseTargetMatrixCertificate
+    validation: dict[str, Any]
+
+    def diagnostics(self) -> dict[str, Any]:
+        """Stable diagnostics payload for manifests and release logs."""
+        return {
+            "policy": self.policy.diagnostics(),
+            "certificate": self.certificate.to_dict(),
+            "validation": dict(self.validation),
+        }
 
 
 class MicrocalibrateAdapter:
@@ -201,6 +224,56 @@ class MicrocalibrateAdapter:
             estimate_matrix=estimate_matrix,
         )
 
+    def fit_sparse_target_matrix_with_policy(
+        self,
+        initial_weights: pd.Series | np.ndarray,
+        target_matrix: SparseTargetMatrix,
+        *,
+        calibrate: CalibrateSpec,
+        certificate: SparseTargetMatrixCertificate | Mapping[str, Any] | None = None,
+        min_records_per_target: float | None = None,
+    ) -> SparseTargetMatrixCalibrationResult:
+        """Calibrate a certified sparse target matrix using a resolved spec policy.
+
+        This is the release-build adapter path: the country pack compiles one
+        sparse target matrix, persists its certificate, then asks core to
+        resolve the declared ``calibrate`` section and pass that exact matrix to
+        microcalibrate. Policy validation happens before fitting, so an empty
+        target surface, impossible prune count, or incompatible solver/pruning
+        declaration cannot silently fall through to an ad hoc solve.
+        """
+        policy = resolve_calibration_solve_policy(
+            calibrate,
+            n_records=target_matrix.n_weights,
+            target_count=target_matrix.n_targets,
+            min_records_per_target=min_records_per_target,
+        )
+        resolved_certificate = (
+            target_matrix.certificate() if certificate is None else certificate
+        )
+        target_matrix.assert_matches_certificate(resolved_certificate)
+
+        original_config = self.config
+        self.config = replace(
+            self.config,
+            **policy.microcalibrate_config_overrides(),
+        )
+        try:
+            fitted_weights = self.fit_sparse_target_matrix(
+                initial_weights,
+                target_matrix,
+                certificate=resolved_certificate,
+            )
+        finally:
+            self.config = original_config
+
+        return SparseTargetMatrixCalibrationResult(
+            weights=fitted_weights,
+            policy=policy,
+            certificate=target_matrix.certificate(),
+            validation=self.validate(),
+        )
+
     def validate(self, calibrated: pd.DataFrame | None = None) -> dict[str, Any]:
         """Return validation metrics in the shape the legacy pipeline expects.
 
@@ -293,4 +366,5 @@ class MicrocalibrateAdapter:
 __all__ = [
     "MicrocalibrateAdapter",
     "MicrocalibrateAdapterConfig",
+    "SparseTargetMatrixCalibrationResult",
 ]
