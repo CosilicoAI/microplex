@@ -105,6 +105,16 @@ files, changed bytes, absolute paths, and `..` path escapes fail closed. This is
 the generic core primitive that replaces ad hoc US-only manifest checks as the
 fresh pipeline adds SourceRegistry, calibration, and export stages.
 
+### 7. `microplex.calibration.solve_policy` — explicit calibration solve policy
+Calibration requests now resolve through a small fail-closed policy object
+before a solver runs. APG without `target_records` is dense microcalibrate;
+APG with `target_records` means "APG + L0 prune"; `method: l0` requires an
+explicit `target_records`; and IPF rejects `target_records`. The policy also
+rejects empty target surfaces, prune counts larger than the available records,
+and an optional minimum-records-per-target floor. This gives manifests and
+country adapters one stable place to log solver/pruning semantics instead of
+letting a build infer them ad hoc.
+
 ## Notable correctness fix found while building
 
 `ImputationRunner` initially passed only `[predictors + imputed_vars]` to
@@ -126,7 +136,9 @@ result. If no provider is supplied, `targets` remains pending. No weights or
 calibrated datasets are fabricated. Remaining TODOs:
 
 - **`calibrate` (Calibrator):** reweight to targets via the declared
-  loss/method (core already has `Calibrator`/`Reweighter`/`SparseCalibrator`).
+  loss/method. Core now has a strict solve-policy resolver; the remaining work
+  is wiring the compiled sparse target matrix and country entity tables through
+  the selected solver.
 - **`export` (Exporter):** write the PolicyEngine dataset.
 
 ## Stretch goal (Arch provider move) — assessed and deferred, not attempted
