@@ -39,6 +39,9 @@ __all__ = [
     "with_component_sum_records",
     "default_geo_level",
     "default_normalize_source",
+    "latest_carry_forward",
+    "ssa_carry_forward_rank",
+    "is_ssa_carry_forward_candidate",
 ]
 
 
@@ -106,6 +109,95 @@ def default_normalize_source(source: str) -> str:
     generic default just canonicalizes case/separators.
     """
     return str(source).upper().replace("-", "_")
+
+
+RankFn = Callable[[ArchTargetRecord], tuple[Any, ...]]
+CandidateFn = Callable[[ArchTargetRecord], bool]
+CellKeyFn = Callable[[ArchTargetRecord], Any]
+CarryForwardFn = Callable[[ArchTargetRecord, int], ArchTargetRecord]
+SortKeyFn = Callable[[ArchTargetRecord], Any]
+
+
+def latest_carry_forward(
+    records: Sequence[ArchTargetRecord],
+    *,
+    target_year: int,
+    is_candidate: CandidateFn,
+    cell_key: CellKeyFn,
+    rank: RankFn,
+    carry_forward: CarryForwardFn,
+    sort_key: SortKeyFn | None = None,
+) -> list[ArchTargetRecord]:
+    """Keep the highest-ranked candidate per cell, carrying stale cells forward.
+
+    Generic port of the legacy SSA latest-carry-forward: a source publishes the
+    same target cell across periods with a lag, so within each cell we keep the
+    single highest-``rank`` candidate (period not in the future), then remap any
+    kept record whose period predates ``target_year`` via ``carry_forward``.
+
+    Representation-specific pieces are injected: ``is_candidate`` (eligibility,
+    e.g. SSA + carry-forward variables), ``cell_key`` (target-cell identity,
+    which depends on the canonical target representation; return ``None`` to
+    skip a record), ``rank`` (preference within a cell — higher wins; see
+    :func:`ssa_carry_forward_rank`), ``carry_forward`` (remap a stale record to
+    ``target_year``), and an optional ``sort_key`` for deterministic output.
+    """
+    latest: dict[Any, tuple[tuple[Any, ...], ArchTargetRecord]] = {}
+    for record in records:
+        if record.period > target_year:
+            continue
+        if not is_candidate(record):
+            continue
+        key = cell_key(record)
+        if key is None:
+            continue
+        record_rank = rank(record)
+        current = latest.get(key)
+        if current is None or record_rank > current[0]:
+            latest[key] = (record_rank, record)
+    kept = [record for _, record in latest.values()]
+    if sort_key is not None:
+        kept.sort(key=sort_key)
+    return [
+        record if record.period == target_year else carry_forward(record, target_year)
+        for record in kept
+    ]
+
+
+def ssa_carry_forward_rank(record: ArchTargetRecord) -> tuple[Any, ...]:
+    """Default SSA carry-forward preference rank (higher wins).
+
+    Faithful port: prefer the latest period, then an "annual statistical report"
+    source table, then any source table, then the ``ssi_total_payments``
+    variable, then the larger target id (stable tiebreak).
+    """
+    source_table = str(record.source_table or "").lower()
+    return (
+        int(record.period),
+        "annual statistical report" in source_table,
+        bool(record.source_table),
+        record.variable == "ssi_total_payments",
+        int(record.target_id),
+    )
+
+
+def is_ssa_carry_forward_candidate(
+    record: ArchTargetRecord,
+    *,
+    variables: Sequence[str],
+    source: str = "SSA",
+    normalize_source: NormalizeSourceFn = default_normalize_source,
+) -> bool:
+    """Default SSA carry-forward eligibility.
+
+    SSA source, a declared carry-forward ``variables`` member, and an
+    AMOUNT/COUNT target. ``variables`` is the injected US set.
+    """
+    return (
+        normalize_source(record.source) == source
+        and record.variable in set(variables)
+        and record.target_type in {"AMOUNT", "COUNT"}
+    )
 
 
 def _component_sum_record_key(
