@@ -126,30 +126,46 @@ def download_puf(cache_dir: Path | None = None) -> tuple[Path, Path]:
 
     Returns paths to downloaded PUF and demographics CSV files.
     """
-    if not HF_AVAILABLE:
-        raise ImportError("huggingface_hub required: pip install huggingface_hub")
-
     if cache_dir is None:
         cache_dir = Path.home() / ".cache" / "microplex"
     cache_dir.mkdir(parents=True, exist_ok=True)
 
-    # Download PUF 2015
-    puf_path = hf_hub_download(
-        repo_id="policyengine/irs-soi-puf",
-        filename="puf_2015.csv",
-        repo_type="model",
-        local_dir=cache_dir,
-    )
+    local_puf_path = cache_dir / "puf_2015.csv"
+    local_demo_path = cache_dir / "demographics_2015.csv"
+    if local_puf_path.exists() and local_demo_path.exists():
+        return local_puf_path, local_demo_path
 
-    # Download demographics file
-    demo_path = hf_hub_download(
-        repo_id="policyengine/irs-soi-puf",
-        filename="demographics_2015.csv",
-        repo_type="model",
-        local_dir=cache_dir,
-    )
+    if not HF_AVAILABLE:
+        raise FileNotFoundError(_restricted_puf_missing_message(cache_dir))
+
+    try:
+        # Download PUF 2015
+        puf_path = hf_hub_download(
+            repo_id="policyengine/irs-soi-puf",
+            filename="puf_2015.csv",
+            repo_type="model",
+            local_dir=cache_dir,
+        )
+
+        # Download demographics file
+        demo_path = hf_hub_download(
+            repo_id="policyengine/irs-soi-puf",
+            filename="demographics_2015.csv",
+            repo_type="model",
+            local_dir=cache_dir,
+        )
+    except Exception as exc:  # pragma: no cover - depends on external auth
+        raise FileNotFoundError(_restricted_puf_missing_message(cache_dir)) from exc
 
     return Path(puf_path), Path(demo_path)
+
+
+def _restricted_puf_missing_message(cache_dir: Path) -> str:
+    return (
+        "Could not locate restricted IRS PUF files. Place puf_2015.csv "
+        f"and demographics_2015.csv in {cache_dir}, or pass explicit "
+        "puf_path and demographics_path to load_puf/PUFSourceProvider."
+    )
 
 
 def load_puf_raw(
@@ -338,6 +354,8 @@ def load_puf(
     target_year: int = 2024,
     expand_persons: bool = True,
     cache_dir: Path | None = None,
+    puf_path: Path | None = None,
+    demographics_path: Path | None = None,
 ) -> pd.DataFrame:
     """Load and process PUF for multi-survey fusion.
 
@@ -345,12 +363,29 @@ def load_puf(
         target_year: Year to uprate to
         expand_persons: If True, expand tax units to person records
         cache_dir: Directory to cache downloaded files
+        puf_path: Optional explicit local PUF CSV path. The IRS PUF is
+            restricted-access, so local handoff paths are first-class.
+        demographics_path: Optional explicit local demographics CSV path.
 
     Returns:
         DataFrame with common variable names, ready for stacking with CPS
     """
-    # Download if needed
-    puf_path, demo_path = download_puf(cache_dir)
+    # Download if needed, or use explicitly supplied restricted-access files.
+    if puf_path is None:
+        puf_path, demo_path = download_puf(cache_dir)
+    else:
+        puf_path = Path(puf_path)
+        if not puf_path.exists():
+            raise FileNotFoundError(f"PUF file not found at {puf_path}")
+        if demographics_path is None:
+            candidate = puf_path.with_name("demographics_2015.csv")
+            demo_path = candidate if candidate.exists() else None
+        else:
+            demo_path = Path(demographics_path)
+    if demographics_path is not None:
+        demo_path = Path(demographics_path)
+        if not demo_path.exists():
+            raise FileNotFoundError(f"PUF demographics file not found at {demo_path}")
 
     # Load raw data
     raw = load_puf_raw(puf_path, demo_path)
@@ -404,6 +439,8 @@ class PUFSourceProvider:
 
     target_year: int = 2024
     cache_dir: Path | None = None
+    puf_path: Path | None = None
+    demographics_path: Path | None = None
     loader: Callable[..., pd.DataFrame] = load_puf
     source_name: str = "puf"
 
@@ -411,7 +448,7 @@ class PUFSourceProvider:
     def descriptor(self) -> SourceDescriptor:
         return SourceDescriptor(
             name=self.source_name,
-            shareability=Shareability.PUBLIC,
+            shareability=Shareability.RESTRICTED,
             time_structure=TimeStructure.CROSS_SECTION,
             archetype=SourceArchetype.TAX_MICRODATA,
             population="US tax units",
@@ -427,11 +464,16 @@ class PUFSourceProvider:
         )
 
     def load_frame(self, query: SourceQuery | None = None) -> ObservationFrame:
-        table = self.loader(
-            target_year=self.target_year,
-            expand_persons=False,
-            cache_dir=self.cache_dir,
-        ).copy()
+        loader_kwargs = {
+            "target_year": self.target_year,
+            "expand_persons": False,
+            "cache_dir": self.cache_dir,
+        }
+        if self.puf_path is not None:
+            loader_kwargs["puf_path"] = self.puf_path
+        if self.demographics_path is not None:
+            loader_kwargs["demographics_path"] = self.demographics_path
+        table = self.loader(**loader_kwargs).copy()
         if "tax_unit_id" not in table.columns:
             table.insert(0, "tax_unit_id", pd.RangeIndex(len(table), name="tax_unit_id"))
         if "weight" not in table.columns:
@@ -441,7 +483,7 @@ class PUFSourceProvider:
         frame = ObservationFrame(
             source=SourceDescriptor(
                 name=self.source_name,
-                shareability=Shareability.PUBLIC,
+                shareability=Shareability.RESTRICTED,
                 time_structure=TimeStructure.CROSS_SECTION,
                 archetype=SourceArchetype.TAX_MICRODATA,
                 population="US tax units",

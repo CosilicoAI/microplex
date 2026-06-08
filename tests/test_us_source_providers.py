@@ -5,6 +5,7 @@ import polars as pl
 
 from microplex.core import EntityType
 from microplex.core.sources import SourceQuery
+from microplex.data_sources import us_registry
 from microplex.data_sources.cps import (
     CPSAsecSourceProvider,
     CPSDataset,
@@ -123,6 +124,34 @@ def test_puf_provider_materializes_valid_tax_unit_table() -> None:
     assert table["year"].tolist() == [2024, 2024]
 
 
+def test_puf_provider_forwards_explicit_restricted_access_paths(tmp_path) -> None:
+    puf_path = tmp_path / "puf_2015.csv"
+    demographics_path = tmp_path / "demographics_2015.csv"
+    puf_path.write_text("MARS,S006\n1,100\n")
+    demographics_path.write_text("RECID,age\n1,40\n")
+    captured = {}
+
+    def _recording_puf_loader(**kwargs):
+        captured.update(kwargs)
+        return _puf_frame(
+            target_year=kwargs["target_year"],
+            expand_persons=kwargs["expand_persons"],
+            cache_dir=kwargs["cache_dir"],
+        )
+
+    provider = PUFSourceProvider(
+        target_year=2024,
+        puf_path=puf_path,
+        demographics_path=demographics_path,
+        loader=_recording_puf_loader,
+    )
+
+    provider.load_frame(SourceQuery(period=2024))
+
+    assert captured["puf_path"] == puf_path
+    assert captured["demographics_path"] == demographics_path
+
+
 def test_us_asec_puf_registry_uses_spec_dataset_ids(monkeypatch) -> None:
     monkeypatch.setattr(
         "microplex.data_sources.us_registry.CPSAsecSourceProvider",
@@ -216,6 +245,7 @@ def test_provider_descriptors_advertise_loaded_entity_schema() -> None:
     }
     assert set(SHARED_VARS).issubset(cps_descriptor.variables_for(EntityType.TAX_UNIT))
     assert set(SHARED_VARS).issubset(puf_descriptor.variables_for(EntityType.TAX_UNIT))
+    assert not puf_descriptor.shareability.allows_direct_release
 
 
 def test_cps_loader_knows_current_asec_release_url() -> None:
@@ -258,3 +288,25 @@ def test_cps_processed_cache_rejects_stale_person_only_cache(tmp_path) -> None:
         assert "household cache is missing" in str(exc)
     else:  # pragma: no cover - defensive assertion for fail-closed behavior
         raise AssertionError("stale person-only CPS cache should fail closed")
+
+
+def test_us_registry_forwards_explicit_puf_paths(monkeypatch, tmp_path) -> None:
+    puf_path = tmp_path / "puf_2015.csv"
+    demographics_path = tmp_path / "demographics_2015.csv"
+    puf_path.write_text("MARS,S006\n1,100\n")
+    demographics_path.write_text("RECID,age\n1,40\n")
+    captured = {}
+
+    class RecordingPUFProvider:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr(us_registry, "PUFSourceProvider", RecordingPUFProvider)
+
+    us_registry.create_us_asec_puf_source_registry(
+        puf_path=puf_path,
+        puf_demographics_path=demographics_path,
+    )
+
+    assert captured["puf_path"] == puf_path
+    assert captured["demographics_path"] == demographics_path
