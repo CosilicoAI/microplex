@@ -9,8 +9,16 @@ import pandas as pd
 import pytest
 from scipy import sparse
 
+from microplex.core import EntityType
 from microplex.spec import CalibrateSpec, CalibrationMethod
-from microplex.targets import SparseTargetMatrix
+from microplex.targets import (
+    EntityTableBinding,
+    EntityTableBundle,
+    SparseTargetMatrix,
+    TargetAggregation,
+    TargetSet,
+    TargetSpec,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -169,4 +177,167 @@ def test_microcalibrate_adapter_policy_rejects_empty_target_surface_before_fit(
             ),
         )
 
+    assert "kwargs" not in captured
+
+
+def _entity_table_bundle() -> EntityTableBundle:
+    households = pd.DataFrame(
+        {
+            "household_id": [10, 20],
+            "household_weight": [1.0, 2.0],
+        }
+    )
+    persons = pd.DataFrame(
+        {
+            "person_id": [1, 2, 3],
+            "household_id": [10, 10, 20],
+            "employment_income": [2.0, 3.0, 4.0],
+        }
+    )
+    return EntityTableBundle(
+        weight_entity=EntityType.HOUSEHOLD,
+        weight_column="household_weight",
+        bindings={
+            EntityType.HOUSEHOLD: EntityTableBinding(
+                frame=households,
+                id_column="household_id",
+            ),
+            EntityType.PERSON: EntityTableBinding(
+                frame=persons,
+                id_column="person_id",
+                weight_link_column="household_id",
+                synced_weight_column="person_weight",
+            ),
+        },
+    )
+
+
+def _income_target_set() -> TargetSet:
+    return TargetSet(
+        [
+            TargetSpec(
+                name="employment_income_sum",
+                entity=EntityType.PERSON,
+                value=20.0,
+                period=2024,
+                measure="employment_income",
+                aggregation=TargetAggregation.SUM,
+            )
+        ]
+    )
+
+
+def _income_target_with_missing_feature_set() -> TargetSet:
+    return TargetSet(
+        [
+            TargetSpec(
+                name="employment_income_sum",
+                entity=EntityType.PERSON,
+                value=20.0,
+                period=2024,
+                measure="employment_income",
+                aggregation=TargetAggregation.SUM,
+            ),
+            TargetSpec(
+                name="missing_feature_sum",
+                entity=EntityType.PERSON,
+                value=1.0,
+                period=2024,
+                measure="not_present",
+                aggregation=TargetAggregation.SUM,
+            ),
+        ]
+    )
+
+
+def test_entity_table_bundle_microcalibrator_compiles_and_syncs_weights(
+    monkeypatch,
+) -> None:
+    captured: dict = {}
+    adapter_module = _load_adapter_with_fake_calibration(monkeypatch, captured)
+
+    calibrator = adapter_module.EntityTableBundleMicrocalibrator()
+    result = calibrator.calibrate_bundle(
+        _entity_table_bundle(),
+        target_set=_income_target_set(),
+        calibrate=CalibrateSpec(
+            loss="pe_native_bucketed_huber_v1",
+            method=CalibrationMethod.APG,
+        ),
+    )
+
+    household_weights = result.bundle.table_for(EntityType.HOUSEHOLD)[
+        "household_weight"
+    ]
+    person_weights = result.bundle.table_for(EntityType.PERSON)["person_weight"]
+
+    np.testing.assert_array_equal(household_weights.to_numpy(), np.array([2.0, 3.0]))
+    np.testing.assert_array_equal(person_weights.to_numpy(), np.array([2.0, 2.0, 3.0]))
+    assert result.target_matrix.names == ("employment_income_sum",)
+    np.testing.assert_array_equal(
+        result.target_matrix.matrix.toarray(),
+        np.array([[5.0, 4.0]]),
+    )
+    assert result.diagnostics()["weight_entity"] == "household"
+    assert result.diagnostics()["policy"]["solver"] == "microcalibrate_apg"
+    assert result.diagnostics()["skipped_targets"] == []
+    assert captured["kwargs"]["target_names"].tolist() == ["employment_income_sum"]
+
+
+def test_entity_table_bundle_microcalibrator_rejects_stale_certificate_before_fit(
+    monkeypatch,
+) -> None:
+    captured: dict = {}
+    adapter_module = _load_adapter_with_fake_calibration(monkeypatch, captured)
+
+    bundle = _entity_table_bundle()
+    target_set = _income_target_set()
+    calibrator = adapter_module.EntityTableBundleMicrocalibrator()
+    first = calibrator.calibrate_bundle(
+        bundle,
+        target_set=target_set,
+        calibrate=CalibrateSpec(
+            loss="pe_native_bucketed_huber_v1",
+            method=CalibrationMethod.APG,
+        ),
+    )
+    stale_certificate = first.target_matrix.certificate().to_dict()
+    stale_certificate["target_vector_sha256"] = "stale"
+    captured.clear()
+
+    with pytest.raises(ValueError, match="Sparse target matrix certificate mismatch"):
+        calibrator.calibrate_bundle(
+            bundle,
+            target_set=target_set,
+            calibrate=CalibrateSpec(
+                loss="pe_native_bucketed_huber_v1",
+                method=CalibrationMethod.APG,
+            ),
+            certificate=stale_certificate,
+        )
+
+    assert "kwargs" not in captured
+
+
+def test_entity_table_bundle_microcalibrator_rejects_skipped_targets_before_fit(
+    monkeypatch,
+) -> None:
+    captured: dict = {}
+    adapter_module = _load_adapter_with_fake_calibration(monkeypatch, captured)
+
+    calibrator = adapter_module.EntityTableBundleMicrocalibrator()
+    with pytest.raises(ValueError) as excinfo:
+        calibrator.calibrate_bundle(
+            _entity_table_bundle(),
+            target_set=_income_target_with_missing_feature_set(),
+            calibrate=CalibrateSpec(
+                loss="pe_native_bucketed_huber_v1",
+                method=CalibrationMethod.APG,
+            ),
+        )
+
+    message = str(excinfo.value)
+    assert "Sparse target compilation skipped target(s)" in message
+    assert "missing_feature_sum" in message
+    assert "missing_features:not_present" in message
     assert "kwargs" not in captured

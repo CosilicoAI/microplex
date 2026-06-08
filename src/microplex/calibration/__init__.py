@@ -2104,11 +2104,15 @@ class HardConcreteCalibrator:
 # namespace.
 try:
     from microplex.calibration.microcalibrate_adapter import (  # noqa: F401
+        EntityTableBundleCalibrationResult,
+        EntityTableBundleMicrocalibrator,
         MicrocalibrateAdapter,
         MicrocalibrateAdapterConfig,
         SparseTargetMatrixCalibrationResult,
     )
 except ImportError:  # microcalibrate not installed
+    EntityTableBundleCalibrationResult = None  # type: ignore[assignment]
+    EntityTableBundleMicrocalibrator = None  # type: ignore[assignment]
     MicrocalibrateAdapter = None  # type: ignore[assignment]
     MicrocalibrateAdapterConfig = None  # type: ignore[assignment]
     SparseTargetMatrixCalibrationResult = None  # type: ignore[assignment]
