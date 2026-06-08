@@ -90,6 +90,8 @@ _LAZY_EXPORTS = {
     "Survey": "microplex.dgp",
     "EvalResult": "microplex.dgp",
     "run_multi_source_benchmark": "microplex.dgp",
+    "RegisteredSourceProvider": "microplex.source_registry",
+    "SourceRegistry": "microplex.source_registry",
 }
 
 
@@ -183,4 +185,7 @@ __all__ = [
     "Survey",
     "EvalResult",
     "run_multi_source_benchmark",
+    # Spec source loading
+    "RegisteredSourceProvider",
+    "SourceRegistry",
 ]

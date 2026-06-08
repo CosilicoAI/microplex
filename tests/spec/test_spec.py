@@ -78,6 +78,14 @@ class TestLoadValid:
         assert spec.spine_source == "cps_asec"
         assert spec.donor_sources == ("puf", "scf")
 
+    def test_source_can_declare_entity_table_for_registry(self) -> None:
+        data = _valid_spec_dict()
+        data["sources"]["cps"]["entity"] = "person"
+
+        spec = load_spec_dict(data)
+
+        assert spec.sources["cps"].entity == "person"
+
     def test_fixture_spine_halves(self) -> None:
         spec = load_spec(FIXTURES / "us_2024.yaml")
         assert spec.spine.half_names == ("cps_keep", "synthetic_puf")

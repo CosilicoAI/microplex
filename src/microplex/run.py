@@ -49,6 +49,7 @@ from microplex.imputation import (
     ImputationRunner,
     ImputationStepResult,
 )
+from microplex.source_registry import SourceRegistry
 from microplex.spec import (
     CalibrateSpec,
     ImputationOrder,
@@ -142,14 +143,13 @@ class RunResult:
 
 def resolve_sources(
     spec: MicroplexSpec,
-    sources: Mapping[str, pd.DataFrame],
+    sources: Mapping[str, pd.DataFrame] | SourceRegistry,
 ) -> dict[str, pd.DataFrame]:
     """Validate and return the loaded source frames for a spec.
 
-    This is the seam where a full provider-backed ``SourceRegistry`` would
-    load + harmonize the datasets named in ``spec.sources[*].dataset``. For now
-    the caller supplies already-loaded frames keyed by the spec's *source
-    names*; this function only checks that every declared source is present.
+    ``sources`` can be either an already-loaded mapping keyed by source name
+    or a provider-backed :class:`~microplex.source_registry.SourceRegistry`
+    keyed by the spec's ``sources[*].dataset`` ids.
 
     Args:
         spec: The validated spec.
@@ -161,6 +161,9 @@ def resolve_sources(
     Raises:
         KeyError: if a declared source has no frame.
     """
+    if isinstance(sources, SourceRegistry):
+        return sources.resolve_sources(spec)
+
     missing = [name for name in spec.sources if name not in sources]
     if missing:
         raise KeyError(
@@ -172,7 +175,7 @@ def resolve_sources(
 
 def run_spec(
     spec: MicroplexSpec,
-    sources: Mapping[str, pd.DataFrame],
+    sources: Mapping[str, pd.DataFrame] | SourceRegistry,
     *,
     column_groups: Mapping[str, Sequence[str]] | None = None,
     demographic_columns: Sequence[str] | None = None,

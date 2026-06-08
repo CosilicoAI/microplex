@@ -16,12 +16,21 @@ import pandas as pd
 import pytest
 
 from microplex.core import EntityType
+from microplex.core.sources import (
+    EntityObservation,
+    ObservationFrame,
+    Shareability,
+    SourceDescriptor,
+    StaticSourceProvider,
+    TimeStructure,
+)
 from microplex.run import (
     PENDING_STAGES,
     SpecCalibrationResult,
     resolve_sources,
     run_spec,
 )
+from microplex.source_registry import SourceRegistry
 from microplex.spec import load_spec_dict
 from microplex.targets import (
     TargetAggregation,
@@ -203,6 +212,55 @@ def _sources() -> dict[str, pd.DataFrame]:
     return {"cps": _cps(), "puf": _puf(), "scf": _scf()}
 
 
+def _registry_provider(dataset: str, frame: pd.DataFrame) -> StaticSourceProvider:
+    table = frame.copy()
+    table.insert(0, "source_record_id", np.arange(len(table)))
+    source = SourceDescriptor(
+        name=dataset,
+        shareability=Shareability.PUBLIC,
+        time_structure=TimeStructure.CROSS_SECTION,
+        observations=(
+            EntityObservation(
+                entity=EntityType.TAX_UNIT,
+                key_column="source_record_id",
+                variable_names=tuple(
+                    column for column in table.columns if column != "source_record_id"
+                ),
+                weight_column="household_weight"
+                if "household_weight" in table.columns
+                else None,
+            ),
+        ),
+    )
+    return StaticSourceProvider(
+        ObservationFrame(
+            source=source,
+            tables={EntityType.TAX_UNIT: table},
+        )
+    )
+
+
+def _source_registry() -> SourceRegistry:
+    return (
+        SourceRegistry()
+        .register(
+            "cps_2024",
+            _registry_provider("cps_2024", _cps()),
+            default_entity=EntityType.TAX_UNIT,
+        )
+        .register(
+            "puf_2024",
+            _registry_provider("puf_2024", _puf()),
+            default_entity=EntityType.TAX_UNIT,
+        )
+        .register(
+            "scf_2022",
+            _registry_provider("scf_2022", _scf()),
+            default_entity=EntityType.TAX_UNIT,
+        )
+    )
+
+
 def _run_spec(*args, **kwargs):
     kwargs.setdefault("spine_keywords", US_SPINE_KEYWORDS)
     return run_spec(*args, **kwargs)
@@ -313,6 +371,19 @@ class TestRunSpec:
         }
         synthetic = result.frame[result.frame[label] == "synthetic_puf"]
         assert (synthetic["household_weight"] == 0).all()
+
+    def test_end_to_end_runs_from_source_registry(self) -> None:
+        spec = load_spec_dict(_spec_dict())
+
+        result = _run_spec(
+            spec,
+            _source_registry(),
+            demographic_columns=DEMOGRAPHIC_COLS,
+        )
+
+        assert isinstance(result.frame, pd.DataFrame)
+        assert len(result.frame) == len(_cps())
+        assert result.frame["employment_income"].notna().all()
 
     def test_output_has_expected_columns(self) -> None:
         spec = load_spec_dict(_spec_dict())
