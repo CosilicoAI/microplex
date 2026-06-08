@@ -40,22 +40,29 @@ from __future__ import annotations
 import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
 import pandas as pd
 
 from microplex.core import EntityType
+from microplex.data_sources.source_impute import (
+    SourceImputeManifest,
+    compile_source_impute_steps_from_manifest,
+)
 from microplex.imputation import (
     ImputationRunner,
     ImputationStepResult,
 )
 from microplex.source_registry import SourceRegistry
 from microplex.spec import (
+    BOTH_TOKEN,
     CalibrateSpec,
     ImputationOrder,
     ImputationPhase,
     ImputationStep,
     MicroplexSpec,
+    VariableOperationKind,
 )
 from microplex.spec_transforms import TransformEngine
 from microplex.spine import SpineBuilder, SpineBuildResult
@@ -189,6 +196,9 @@ def run_spec(
     calibration_certificate: Mapping[str, Any] | None = None,
     calibration_min_records_per_target: float | None = None,
     allow_skipped_calibration_targets: bool = False,
+    source_impute_manifest: SourceImputeManifest | str | Path | None = None,
+    source_impute_blocks: Sequence[str] | None = None,
+    source_impute_imputation_steps: Sequence[str] | None = None,
     seed: int = 0,
 ) -> RunResult:
     """Run the wired stages of the spec-driven engine end-to-end.
@@ -227,6 +237,14 @@ def run_spec(
         allow_skipped_calibration_targets: Explicit opt-in for partial target
             surfaces. Defaults to ``False`` so skipped target rows fail before
             fitting.
+        source_impute_manifest: Optional source-impute block manifest. When
+            supplied, executable ``variables[*].mp_spec.operation`` rows backed
+            by the manifest run after the spine/half imputation stage and before
+            transforms. The support halves must already have ``block_geoid``.
+        source_impute_blocks: Optional manifest block names to execute. This
+            narrows the manifest before compiling operations.
+        source_impute_imputation_steps: Optional operation step names to execute
+            after the optional block filter is applied.
         seed: Seed forwarded to ``microimpute.Imputer``.
 
     Returns:
@@ -287,7 +305,36 @@ def run_spec(
         halves=spine_result.halves,
         donors=donors,
     )
-    imputation_results = [*base_imputation_results, *half_imputation_results]
+    source_impute_results: list[ImputationStepResult] = []
+    if source_impute_manifest is not None:
+        full_source_manifest = _load_source_impute_manifest(source_impute_manifest)
+        source_manifest = _filter_source_impute_manifest(
+            full_source_manifest,
+            blocks=source_impute_blocks,
+        )
+        source_steps = _source_impute_steps(
+            spec,
+            source_manifest,
+            full_manifest=full_source_manifest,
+            imputation_steps=source_impute_imputation_steps,
+            manifest_was_filtered=source_impute_blocks is not None,
+        )
+        if source_steps:
+            _require_post_geography_halves(halves)
+            halves, source_impute_results = runner.run(
+                source_steps,
+                halves=halves,
+                donors=donors,
+            )
+            logger.info(
+                "run_spec: ran %d post-geography source-impute result(s)",
+                len(source_impute_results),
+            )
+    imputation_results = [
+        *base_imputation_results,
+        *half_imputation_results,
+        *source_impute_results,
+    ]
 
     # Re-stack the (imputed) halves in the spine's declared order so the
     # transform stage sees the full frame, with the half-label column intact.
@@ -507,6 +554,150 @@ def _run_base_imputation_steps(
         result.onto = spine_source
         results.append(result)
     return working, results
+
+
+def _load_source_impute_manifest(
+    manifest: SourceImputeManifest | str | Path,
+) -> SourceImputeManifest:
+    return (
+        manifest
+        if isinstance(manifest, SourceImputeManifest)
+        else SourceImputeManifest.from_path(manifest)
+    )
+
+
+def _filter_source_impute_manifest(
+    manifest: SourceImputeManifest,
+    *,
+    blocks: Sequence[str] | None,
+) -> SourceImputeManifest:
+    if blocks is None:
+        return manifest
+    return SourceImputeManifest(
+        blocks={block_name: manifest.block(block_name) for block_name in blocks}
+    )
+
+
+def _source_impute_steps(
+    spec: MicroplexSpec,
+    manifest: SourceImputeManifest,
+    *,
+    full_manifest: SourceImputeManifest,
+    imputation_steps: Sequence[str] | None,
+    manifest_was_filtered: bool,
+) -> list[ImputationStep]:
+    if manifest_was_filtered:
+        return _compile_selected_block_source_impute_steps(
+            spec,
+            selected_manifest=manifest,
+            full_manifest=full_manifest,
+            imputation_steps=imputation_steps,
+        )
+    return compile_source_impute_steps_from_manifest(
+        spec,
+        manifest,
+        imputation_steps=imputation_steps,
+    )
+
+
+def _compile_selected_block_source_impute_steps(
+    spec: MicroplexSpec,
+    *,
+    selected_manifest: SourceImputeManifest,
+    full_manifest: SourceImputeManifest,
+    imputation_steps: Sequence[str] | None,
+) -> list[ImputationStep]:
+    requested = set(imputation_steps) if imputation_steps is not None else None
+    if requested == set():
+        return []
+    selected_surveys = {
+        block.survey_name for block in selected_manifest.blocks.values()
+    }
+    grouped_variables: dict[tuple[str, str], list[str]] = {}
+    grouped_blocks: dict[tuple[str, str], Any] = {}
+    unresolved: list[str] = []
+
+    for variable_name, variable in spec.variables.items():
+        operation = variable.mp_spec.operation if variable.mp_spec else None
+        if operation is None or operation.kind is not VariableOperationKind.IMPUTE:
+            continue
+        if operation.imputation_step is None or operation.source is None:
+            continue
+        if requested is not None and operation.imputation_step not in requested:
+            continue
+
+        selected_blocks = [
+            block
+            for block in selected_manifest.blocks.values()
+            if operation.source == block.survey_name
+            and variable_name in block.target_variables
+        ]
+        if len(selected_blocks) > 1:
+            block_names = [block.name for block in selected_blocks]
+            raise ValueError(
+                "source-impute variable operation is ambiguous across selected "
+                f"manifest blocks: {variable_name} appears in {block_names}"
+            )
+        if selected_blocks:
+            block = selected_blocks[0]
+            key = (operation.imputation_step, block.name)
+            grouped_variables.setdefault(key, []).append(variable_name)
+            grouped_blocks[key] = block
+            continue
+
+        if operation.source not in selected_surveys:
+            continue
+        full_blocks = [
+            block
+            for block in full_manifest.blocks.values()
+            if operation.source == block.survey_name
+            and variable_name in block.target_variables
+        ]
+        if full_blocks:
+            continue
+        unresolved.append(
+            f"{variable_name} ({operation.imputation_step} from "
+            f"{operation.source}: not a manifest target)"
+        )
+
+    if unresolved:
+        raise ValueError(
+            "source-impute variable operations are not backed by manifest target "
+            f"variables: {unresolved}"
+        )
+
+    return [
+        ImputationStep(
+            onto=BOTH_TOKEN,
+            **{"from": block.survey_name},
+            vars=variables,
+            condition_on=list(block.predictors),
+            at=ImputationPhase.HALVES,
+            order=ImputationOrder.AS_DECLARED,
+        )
+        for key, variables in grouped_variables.items()
+        for block in [grouped_blocks[key]]
+    ]
+
+
+def _require_post_geography_halves(halves: Mapping[str, pd.DataFrame]) -> None:
+    for half_name, half in halves.items():
+        if "block_geoid" not in half.columns:
+            raise ValueError(
+                "source-impute execution requires post-geography halves with "
+                f"block_geoid; half {half_name!r} is missing block_geoid"
+            )
+        block_geoid = half["block_geoid"]
+        if block_geoid.isna().any():
+            raise ValueError(
+                "source-impute execution requires non-null block_geoid values; "
+                f"half {half_name!r} contains null block_geoid"
+            )
+        if not block_geoid.astype("string").str.len().eq(15).all():
+            raise ValueError(
+                "source-impute execution requires 15-character block_geoid values; "
+                f"half {half_name!r} has malformed block_geoid"
+            )
 
 
 def _resolve_spine_keywords(

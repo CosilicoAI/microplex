@@ -24,6 +24,7 @@ from microplex.core.sources import (
     StaticSourceProvider,
     TimeStructure,
 )
+from microplex.data_sources.source_impute import SourceImputeBlock, SourceImputeManifest
 from microplex.run import (
     PENDING_STAGES,
     SpecCalibrationResult,
@@ -129,6 +130,12 @@ def _scf(n: int = 300, seed: int = 2) -> pd.DataFrame:
     )
 
 
+def _with_block_geoids(frame: pd.DataFrame) -> pd.DataFrame:
+    out = frame.copy()
+    out["block_geoid"] = [f"06001020100{i % 10}{i % 10:03d}" for i in range(len(out))]
+    return out
+
+
 def _spec_dict() -> dict:
     return {
         "meta": {"country": "us", "model_year": 2024},
@@ -210,6 +217,172 @@ def _spec_dict() -> dict:
 
 def _sources() -> dict[str, pd.DataFrame]:
     return {"cps": _cps(), "puf": _puf(), "scf": _scf()}
+
+
+def _sources_with_block_geography() -> dict[str, pd.DataFrame]:
+    sources = _sources()
+    sources["cps"] = _with_block_geoids(sources["cps"])
+    sources["scf"] = sources["scf"].assign(
+        source_impute_asset=lambda frame: frame["net_worth"] * 0.5
+    )
+    return sources
+
+
+def _source_impute_spec_dict() -> dict:
+    data = _spec_dict()
+    data["spine"]["halves"][1]["strip_to"] = [
+        "demographics",
+        "tax_unit_id",
+        "net_worth",
+        "block_geoid",
+    ]
+    data.setdefault("variables", {})["source_impute_asset"] = {
+        "mp_spec": {
+            "method": "impute source asset from SCF after geography",
+            "operation": {
+                "kind": "impute",
+                "source": "scf",
+                "imputation_step": "scf_source_impute",
+            },
+        }
+    }
+    return data
+
+
+def _source_impute_manifest(
+    *,
+    target_variables: tuple[str, ...] = ("source_impute_asset",),
+) -> SourceImputeManifest:
+    return SourceImputeManifest(
+        blocks={
+            "scf": SourceImputeBlock(
+                name="scf",
+                survey_name="scf",
+                default_year=2022,
+                dataset_id=None,
+                archetype="wealth",
+                dataset_loader=None,
+                raw_loader=None,
+                required_monthcode=None,
+                annualized_variables=(),
+                household_count_variables=(),
+                household_variables=(),
+                person_variables=("age", "source_impute_asset"),
+                target_variables=target_variables,
+                predictors=("age",),
+            )
+        }
+    )
+
+
+def _sources_with_sipp_block_geography() -> dict[str, pd.DataFrame]:
+    sources = _sources_with_block_geography()
+    rng = np.random.default_rng(12)
+    sources["sipp"] = pd.DataFrame(
+        {
+            "age": rng.integers(18, 80, 220).astype(float),
+            "tip_income": rng.uniform(0, 2500, 220),
+            "bank_account_assets": rng.uniform(0, 50_000, 220),
+        }
+    )
+    return sources
+
+
+def _sipp_source_impute_spec_dict() -> dict:
+    data = _source_impute_spec_dict()
+    data["sources"]["sipp"] = {"dataset": "sipp_2023", "role": "donor"}
+    data["variables"]["tip_income"] = {
+        "mp_spec": {
+            "method": "impute tips from SIPP after geography",
+            "operation": {
+                "kind": "impute",
+                "source": "sipp",
+                "imputation_step": "sipp_source_impute",
+            },
+        }
+    }
+    data["variables"]["bank_account_assets"] = {
+        "mp_spec": {
+            "method": "impute account assets from SIPP after geography",
+            "operation": {
+                "kind": "impute",
+                "source": "sipp",
+                "imputation_step": "sipp_source_impute",
+            },
+        }
+    }
+    return data
+
+
+def _sipp_source_impute_manifest() -> SourceImputeManifest:
+    return SourceImputeManifest(
+        blocks={
+            "sipp_tips": SourceImputeBlock(
+                name="sipp_tips",
+                survey_name="sipp",
+                default_year=2023,
+                dataset_id=None,
+                archetype="income",
+                dataset_loader=None,
+                raw_loader=None,
+                required_monthcode=None,
+                annualized_variables=(),
+                household_count_variables=(),
+                household_variables=(),
+                person_variables=("age", "tip_income"),
+                target_variables=("tip_income",),
+                predictors=("age",),
+            ),
+            "sipp_assets": SourceImputeBlock(
+                name="sipp_assets",
+                survey_name="sipp",
+                default_year=2023,
+                dataset_id=None,
+                archetype="wealth",
+                dataset_loader=None,
+                raw_loader=None,
+                required_monthcode=None,
+                annualized_variables=(),
+                household_count_variables=(),
+                household_variables=(),
+                person_variables=("age", "bank_account_assets"),
+                target_variables=("bank_account_assets",),
+                predictors=("age",),
+            ),
+        }
+    )
+
+
+class RecordingImputer:
+    def __init__(self, calls: list[dict]) -> None:
+        self.calls = calls
+        self.fit_kwargs: dict | None = None
+        self.regimes_: dict[str, str] = {}
+
+    def fit(self, **kwargs):
+        self.fit_kwargs = kwargs
+        self.calls.append(kwargs)
+        self.regimes_ = {variable: "TEST" for variable in kwargs["imputed_variables"]}
+        return self
+
+    def predict(self, target: pd.DataFrame) -> pd.DataFrame:
+        assert self.fit_kwargs is not None
+        return pd.DataFrame(
+            {
+                variable: np.arange(len(target), dtype=float) + 1000.0
+                for variable in self.fit_kwargs["imputed_variables"]
+            },
+            index=target.index,
+        )
+
+
+def _install_recording_imputer(monkeypatch) -> list[dict]:
+    calls: list[dict] = []
+    monkeypatch.setattr(
+        "microplex.imputation.ImputationRunner._make_imputer",
+        lambda self: RecordingImputer(calls),
+    )
+    return calls
 
 
 def _registry_provider(dataset: str, frame: pd.DataFrame) -> StaticSourceProvider:
@@ -562,7 +735,9 @@ class TestRunSpec:
 
         assert result.pending_stages == ("export",)
         assert result.calibration_result is not None
-        assert result.entity_table_bundle is result.calibration_result.entity_table_bundle
+        assert (
+            result.entity_table_bundle is result.calibration_result.entity_table_bundle
+        )
         assert result.entity_table_bundle is not None
         assert result.calibration_result.diagnostics["weight_entity"] == "tax_unit"
         assert result.calibration_result.diagnostics["skipped_targets"] == []
@@ -674,6 +849,162 @@ class TestRunSpec:
         assert len(result.imputation_results) == 3
         ontos = [r.onto for r in result.imputation_results]
         assert ontos == ["cps", "synthetic_puf", "cps_keep"]
+
+    def test_source_impute_manifest_requires_post_geography_halves(
+        self,
+        monkeypatch,
+    ) -> None:
+        _install_recording_imputer(monkeypatch)
+        data = _source_impute_spec_dict()
+        data["spine"]["halves"][1]["strip_to"].remove("block_geoid")
+        spec = load_spec_dict(data)
+
+        with pytest.raises(ValueError, match="post-geography halves"):
+            _run_spec(
+                spec,
+                _sources_with_block_geography(),
+                demographic_columns=DEMOGRAPHIC_COLS,
+                source_impute_manifest=_source_impute_manifest(),
+            )
+
+    def test_source_impute_manifest_rejects_null_block_geoids(
+        self,
+        monkeypatch,
+    ) -> None:
+        _install_recording_imputer(monkeypatch)
+        spec = load_spec_dict(_source_impute_spec_dict())
+        sources = _sources_with_block_geography()
+        sources["cps"].loc[0, "block_geoid"] = None
+
+        with pytest.raises(ValueError, match="non-null block_geoid"):
+            _run_spec(
+                spec,
+                sources,
+                demographic_columns=DEMOGRAPHIC_COLS,
+                source_impute_manifest=_source_impute_manifest(),
+            )
+
+    def test_source_impute_manifest_rejects_malformed_block_geoids(
+        self,
+        monkeypatch,
+    ) -> None:
+        _install_recording_imputer(monkeypatch)
+        spec = load_spec_dict(_source_impute_spec_dict())
+        sources = _sources_with_block_geography()
+        sources["cps"].loc[0, "block_geoid"] = "12345"
+
+        with pytest.raises(ValueError, match="15-character block_geoid"):
+            _run_spec(
+                spec,
+                sources,
+                demographic_columns=DEMOGRAPHIC_COLS,
+                source_impute_manifest=_source_impute_manifest(),
+            )
+
+    def test_source_impute_manifest_runs_after_spine_geography(
+        self,
+        monkeypatch,
+    ) -> None:
+        calls = _install_recording_imputer(monkeypatch)
+        spec = load_spec_dict(_source_impute_spec_dict())
+
+        result = _run_spec(
+            spec,
+            _sources_with_block_geography(),
+            demographic_columns=DEMOGRAPHIC_COLS,
+            source_impute_manifest=_source_impute_manifest(),
+        )
+
+        frame = result.frame
+        assert frame["block_geoid"].notna().all()
+        assert frame["source_impute_asset"].notna().all()
+        source_impute_results = [
+            result
+            for result in result.imputation_results
+            if result.imputed == ["source_impute_asset"]
+        ]
+        assert [result.onto for result in source_impute_results] == [
+            "cps_keep",
+            "synthetic_puf",
+        ]
+        source_impute_calls = [
+            call
+            for call in calls
+            if call["imputed_variables"] == ["source_impute_asset"]
+        ]
+        assert len(source_impute_calls) == 2
+        assert all(call["predictors"] == ["age"] for call in source_impute_calls)
+
+    def test_source_impute_step_filter_applies_after_block_filter(
+        self,
+        monkeypatch,
+    ) -> None:
+        calls = _install_recording_imputer(monkeypatch)
+        spec = load_spec_dict(_source_impute_spec_dict())
+
+        result = _run_spec(
+            spec,
+            _sources_with_block_geography(),
+            demographic_columns=DEMOGRAPHIC_COLS,
+            source_impute_manifest=_source_impute_manifest(),
+            source_impute_blocks=("scf",),
+            source_impute_imputation_steps=(),
+        )
+
+        assert "source_impute_asset" not in result.frame.columns
+        assert not any(
+            call["imputed_variables"] == ["source_impute_asset"] for call in calls
+        )
+
+    def test_source_impute_block_filter_keeps_shared_survey_blocks_separate(
+        self,
+        monkeypatch,
+    ) -> None:
+        calls = _install_recording_imputer(monkeypatch)
+        spec = load_spec_dict(_sipp_source_impute_spec_dict())
+
+        result = _run_spec(
+            spec,
+            _sources_with_sipp_block_geography(),
+            demographic_columns=DEMOGRAPHIC_COLS,
+            source_impute_manifest=_sipp_source_impute_manifest(),
+            source_impute_blocks=("sipp_tips",),
+            source_impute_imputation_steps=("sipp_source_impute",),
+        )
+
+        assert result.frame["tip_income"].notna().all()
+        assert "bank_account_assets" not in result.frame.columns
+        sipp_tip_calls = [
+            call for call in calls if call["imputed_variables"] == ["tip_income"]
+        ]
+        assert len(sipp_tip_calls) == 2
+        assert all(call["predictors"] == ["age"] for call in sipp_tip_calls)
+        assert not any(
+            call["imputed_variables"] == ["bank_account_assets"] for call in calls
+        )
+
+    def test_source_impute_step_filter_keeps_strict_manifest_target_validation(
+        self,
+        monkeypatch,
+    ) -> None:
+        calls = _install_recording_imputer(monkeypatch)
+        spec = load_spec_dict(_source_impute_spec_dict())
+
+        with pytest.raises(ValueError, match="not a manifest target"):
+            _run_spec(
+                spec,
+                _sources_with_block_geography(),
+                demographic_columns=DEMOGRAPHIC_COLS,
+                source_impute_manifest=_source_impute_manifest(
+                    target_variables=("different_asset",)
+                ),
+                source_impute_blocks=("scf",),
+                source_impute_imputation_steps=("scf_source_impute",),
+            )
+
+        assert not any(
+            call["imputed_variables"] == ["source_impute_asset"] for call in calls
+        )
 
 
 class TestResolveSources:
