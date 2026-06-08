@@ -24,7 +24,10 @@ from microplex.core.sources import (
     apply_source_query,
 )
 
-_SUPPORTED_BUILDER_KINDS = frozenset({"single_person_households", "household_rows"})
+_SUPPORTED_BUILDER_KINDS = frozenset(
+    {"single_person_households", "household_rows", "raw_person_rows"}
+)
+_RAW_CSV_CHUNK_ROWS = 200_000
 
 
 @dataclass(frozen=True)
@@ -37,6 +40,10 @@ class SourceImputeBlock:
     dataset_id: str | None
     archetype: str | None
     dataset_loader: Mapping[str, Any] | None
+    raw_loader: Mapping[str, Any] | None
+    required_monthcode: int | None
+    annualized_variables: tuple[str, ...]
+    household_count_variables: tuple[str, ...]
     household_variables: tuple[str, ...]
     person_variables: tuple[str, ...]
     target_variables: tuple[str, ...]
@@ -50,6 +57,12 @@ class SourceImputeBlock:
             raise ValueError(
                 f"source-impute block {name!r} dataset_loader must be an object"
             )
+        raw_loader = raw.get("raw_loader")
+        if raw_loader is not None and not isinstance(raw_loader, Mapping):
+            raise ValueError(
+                f"source-impute block {name!r} raw_loader must be an object"
+            )
+        required_monthcode = raw.get("required_monthcode")
         return cls(
             name=name,
             survey_name=str(raw["survey_name"]),
@@ -57,6 +70,12 @@ class SourceImputeBlock:
             dataset_id=str(raw["dataset_id"]) if raw.get("dataset_id") else None,
             archetype=raw.get("archetype"),
             dataset_loader=dataset_loader,
+            raw_loader=raw_loader,
+            required_monthcode=(
+                int(required_monthcode) if required_monthcode is not None else None
+            ),
+            annualized_variables=tuple(raw.get("annualized_variables") or ()),
+            household_count_variables=tuple(raw.get("household_count_variables") or ()),
             household_variables=tuple(raw.get("household_variables") or ()),
             person_variables=tuple(raw.get("person_variables") or ()),
             target_variables=tuple(raw.get("target_variables") or ()),
@@ -110,15 +129,22 @@ class ManifestSourceImputeProvider:
     dataset_path: str | Path | None = None
     max_rows: int | None = None
     source_name: str | None = None
+    block_names: tuple[str, ...] | None = None
 
     @property
     def descriptor(self) -> SourceDescriptor:
-        block = self._block()
-        return _descriptor_for_block(block, self.source_name or block.survey_name)
+        blocks = self._blocks()
+        source_name = self.source_name or blocks[0].survey_name
+        if len(blocks) == 1:
+            return _descriptor_for_block(blocks[0], source_name)
+        return _descriptor_for_blocks(blocks, source_name)
 
     def load_frame(self, query: SourceQuery | None = None) -> ObservationFrame:
         """Load the source block into a validated observation frame."""
-        block = self._block()
+        blocks = self._blocks()
+        if not blocks:
+            raise ValueError("ManifestSourceImputeProvider requires at least one block")
+        block = blocks[0]
         period = int(query.period) if query is not None and query.period else None
         normalized_query = (
             SourceQuery(
@@ -128,34 +154,55 @@ class ManifestSourceImputeProvider:
             if query is not None and query.period is not None
             else query
         )
-        table = load_source_impute_block_table(
-            block,
-            dataset_path=self._dataset_path(block),
-            max_rows=self.max_rows,
-            period=period or block.default_year,
+        tables = [
+            load_source_impute_block_table(
+                source_block,
+                dataset_path=self._dataset_path(source_block),
+                max_rows=self.max_rows,
+                period=period or source_block.default_year,
+            )
+            for source_block in blocks
+        ]
+        table = (
+            tables[0]
+            if len(tables) == 1
+            else _concat_source_impute_tables(blocks, tables)
         )
         source_name = self.source_name or block.survey_name
         frame = ObservationFrame(
-            source=_descriptor_for_table(block, table, source_name),
+            source=_descriptor_for_table_blocks(blocks, table, source_name),
             tables={EntityType.PERSON: table},
         )
         frame.validate()
         return apply_source_query(frame, normalized_query)
 
     def _block(self) -> SourceImputeBlock:
-        return SourceImputeManifest.from_path(self.manifest_path).block(self.block_name)
+        return self._blocks()[0]
+
+    def _blocks(self) -> tuple[SourceImputeBlock, ...]:
+        manifest = SourceImputeManifest.from_path(self.manifest_path)
+        block_names = self.block_names or (self.block_name,)
+        return tuple(manifest.block(block_name) for block_name in block_names)
 
     def _dataset_path(self, block: SourceImputeBlock) -> Path:
         if self.dataset_path is not None:
+            if self.block_names and len(self.block_names) > 1:
+                raise ValueError(
+                    "dataset_path can only be used with a single source-impute block"
+                )
             path = Path(self.dataset_path)
         else:
-            if block.dataset_loader is None:
+            loader = _supported_loader(block)
+            if "filename" in loader:
+                filename = str(loader["filename"])
+            elif "class_name" in loader:
+                class_name = str(loader["class_name"])
+                filename = _dataset_filename_from_class_name(class_name)
+            else:
                 raise NotImplementedError(
-                    f"source-impute block {block.name!r} has no dataset_loader"
+                    f"source-impute block {block.name!r} has no dataset filename"
                 )
             storage_dir = Path(self.storage_dir) if self.storage_dir else Path.cwd()
-            class_name = str(block.dataset_loader["class_name"])
-            filename = _dataset_filename_from_class_name(class_name)
             path = storage_dir / filename
         if not path.exists():
             raise FileNotFoundError(f"source-impute dataset not found: {path}")
@@ -186,6 +233,13 @@ def load_source_impute_block_table(
             dataset_path=Path(dataset_path),
             max_rows=max_rows,
         )
+    elif builder_kind == "raw_person_rows":
+        table = _load_raw_person_rows_table(
+            block,
+            loader,
+            dataset_path=Path(dataset_path),
+            max_rows=max_rows,
+        )
     else:  # pragma: no cover - guarded by _supported_loader
         raise NotImplementedError(
             f"source-impute builder_kind {builder_kind!r} is not implemented"
@@ -199,10 +253,15 @@ def validate_source_impute_block_supported(block: SourceImputeBlock) -> None:
 
 
 def _supported_loader(block: SourceImputeBlock) -> Mapping[str, Any]:
-    loader = block.dataset_loader
-    if loader is None:
+    if block.dataset_loader is not None:
+        loader = block.dataset_loader
+    elif block.raw_loader is not None:
+        loader = {"builder_kind": "raw_person_rows", **block.raw_loader}
+        if "int_columns" in loader and "int_person_columns" not in loader:
+            loader["int_person_columns"] = loader["int_columns"]
+    else:
         raise NotImplementedError(
-            f"source-impute block {block.name!r} has no dataset_loader"
+            f"source-impute block {block.name!r} has no dataset_loader or raw_loader"
         )
     builder_kind = str(loader.get("builder_kind") or "")
     if builder_kind not in _SUPPORTED_BUILDER_KINDS:
@@ -357,6 +416,84 @@ def _load_household_rows_table(
     return table
 
 
+def _load_raw_person_rows_table(
+    block: SourceImputeBlock,
+    loader: Mapping[str, Any],
+    *,
+    dataset_path: Path,
+    max_rows: int | None,
+) -> pd.DataFrame:
+    household_count_maps = _raw_household_count_maps(
+        block,
+        loader=loader,
+        dataset_path=dataset_path,
+        max_rows=max_rows,
+    )
+    raw = _read_raw_csv_person_rows(
+        dataset_path,
+        loader=loader,
+        max_rows=max_rows,
+        required_monthcode=block.required_monthcode,
+    )
+    raw = _filter_required_monthcode(raw, block.required_monthcode)
+    if raw.empty:
+        raise ValueError(
+            f"source-impute raw block {block.name!r} contains no rows after filters"
+        )
+    if max_rows is not None:
+        raw = raw.head(max_rows).copy()
+
+    direct_columns = _string_mapping(loader.get("direct_columns"))
+    table = pd.DataFrame(index=raw.index)
+    for target, source in direct_columns.items():
+        _require_raw_columns(raw, [source], context=f"direct column {target!r}")
+        table[target] = raw[source]
+
+    for target, token in _string_mapping(loader.get("sum_columns_contains")).items():
+        matching = [column for column in raw.columns if token in str(column)]
+        if not matching:
+            raise ValueError(
+                f"source-impute raw block {block.name!r} found no columns "
+                f"containing {token!r} for {target!r}"
+            )
+        table[target] = raw.loc[:, matching].fillna(0).sum(axis=1)
+
+    for target, spec in _nested_mapping(loader.get("indicator_columns")).items():
+        source = str(spec.get("column", ""))
+        if not source:
+            raise ValueError(f"indicator column {target!r} missing source column")
+        _require_raw_columns(raw, [source], context=f"indicator column {target!r}")
+        table[target] = raw[source] == spec.get("equals")
+
+    _fillna_columns(table, loader)
+
+    for column in block.annualized_variables:
+        column = str(column)
+        if column in table.columns:
+            table[column] = table[column] * 12
+
+    household_id_parts = _string_sequence(loader.get("household_id_parts"))
+    person_id_parts = _string_sequence(loader.get("person_id_parts"))
+    _require_raw_columns(raw, household_id_parts, context="household_id_parts")
+    _require_raw_columns(raw, person_id_parts, context="person_id_parts")
+    table["household_id"] = _compose_key(raw, household_id_parts, column="household_id")
+    table["person_id"] = _compose_key(raw, person_id_parts, column="person_id")
+    table["tax_unit_id"] = table["household_id"]
+
+    for column, value in (loader.get("constant_columns") or {}).items():
+        table[str(column)] = value
+
+    _add_raw_household_count_variables(
+        block,
+        raw=raw,
+        table=table,
+        household_id_parts=household_id_parts,
+        count_maps=household_count_maps,
+    )
+    _copy_person_columns(table, {"copy_person_columns": loader.get("copy_columns")})
+    return table.reset_index(drop=True)
+
+
 def _finalize_source_impute_table(
     block: SourceImputeBlock,
     loader: Mapping[str, Any],
@@ -480,6 +617,116 @@ def _read_h5_person_household_arrays(
     return available, person_values, household_values, full_person_values
 
 
+def _read_raw_csv_person_rows(
+    path: Path,
+    *,
+    loader: Mapping[str, Any],
+    max_rows: int | None,
+    required_monthcode: int | None,
+) -> pd.DataFrame:
+    read_kwargs = _raw_csv_read_kwargs(loader)
+    if max_rows is not None and required_monthcode is None:
+        read_kwargs["nrows"] = max_rows
+        return pd.read_csv(path, **read_kwargs)
+    if max_rows is not None:
+        chunks: list[pd.DataFrame] = []
+        empty_template: pd.DataFrame | None = None
+        for chunk in pd.read_csv(path, chunksize=_RAW_CSV_CHUNK_ROWS, **read_kwargs):
+            filtered = _filter_required_monthcode(chunk, required_monthcode)
+            if empty_template is None:
+                empty_template = filtered.head(0)
+            if filtered.empty:
+                continue
+            chunks.append(filtered)
+            if sum(len(chunk) for chunk in chunks) >= max_rows:
+                break
+        if not chunks:
+            return empty_template if empty_template is not None else pd.DataFrame()
+        return pd.concat(chunks, ignore_index=True).head(max_rows)
+    return pd.read_csv(path, **read_kwargs)
+
+
+def _raw_csv_read_kwargs(loader: Mapping[str, Any]) -> dict[str, Any]:
+    usecols = _string_sequence(loader.get("usecols"))
+    read_kwargs: dict[str, Any] = {}
+    delimiter = loader.get("delimiter")
+    if delimiter:
+        read_kwargs["sep"] = str(delimiter)
+    if usecols:
+        read_kwargs["usecols"] = usecols
+    return read_kwargs
+
+
+def _filter_required_monthcode(
+    raw: pd.DataFrame, required_monthcode: int | None
+) -> pd.DataFrame:
+    if required_monthcode is None:
+        return raw
+    if "MONTHCODE" not in raw.columns:
+        raise ValueError(
+            "source-impute raw loader requires MONTHCODE for required_monthcode"
+        )
+    month = pd.to_numeric(raw["MONTHCODE"], errors="coerce")
+    return raw.loc[month == required_monthcode].copy()
+
+
+def _raw_household_count_maps(
+    block: SourceImputeBlock,
+    *,
+    loader: Mapping[str, Any],
+    dataset_path: Path,
+    max_rows: int | None,
+) -> dict[str, dict[Any, int]]:
+    if not block.household_count_variables or max_rows is None:
+        return {}
+    direct_columns = _string_mapping(loader.get("direct_columns"))
+    age_source = direct_columns.get("age")
+    if age_source is None:
+        raise ValueError(
+            f"source-impute block {block.name!r} cannot derive household counts "
+            "without a raw age source"
+        )
+    household_id_parts = _string_sequence(loader.get("household_id_parts"))
+    needed_columns = set(household_id_parts) | {age_source}
+    if block.required_monthcode is not None:
+        needed_columns.add("MONTHCODE")
+    read_kwargs = _raw_csv_read_kwargs({**loader, "usecols": sorted(needed_columns)})
+    counts = {variable: {} for variable in block.household_count_variables}
+    saw_rows = False
+    for chunk in pd.read_csv(
+        dataset_path, chunksize=_RAW_CSV_CHUNK_ROWS, **read_kwargs
+    ):
+        chunk = _filter_required_monthcode(chunk, block.required_monthcode)
+        if chunk.empty:
+            continue
+        saw_rows = True
+        _require_raw_columns(chunk, household_id_parts, context="household_id_parts")
+        _require_raw_columns(chunk, [age_source], context="household count age")
+        household_key = _compose_key(chunk, household_id_parts, column="household_id")
+        age = pd.to_numeric(chunk[age_source], errors="coerce")
+        if age.isna().any():
+            raise ValueError(
+                f"source-impute block {block.name!r} cannot derive household counts "
+                "from non-numeric ages"
+            )
+        for variable in block.household_count_variables:
+            threshold = _count_under_threshold(str(variable))
+            grouped = (
+                (age < threshold)
+                .groupby(household_key, sort=False)
+                .sum()
+                .astype("int64")
+            )
+            variable_counts = counts[str(variable)]
+            for key, value in grouped.items():
+                variable_counts[key] = variable_counts.get(key, 0) + int(value)
+    if not saw_rows:
+        raise ValueError(
+            f"source-impute raw block {block.name!r} contains no rows after filters"
+        )
+    return {str(variable): mapping for variable, mapping in counts.items()}
+
+
 def _read_h5_dataset(dataset, *, max_rows: int | None) -> np.ndarray:
     if len(dataset.shape) != 1:
         raise ValueError(
@@ -582,6 +829,82 @@ def _coerce_int_column(values: pd.Series, *, column: str) -> np.ndarray:
     return rounded.astype("int64")
 
 
+def _compose_key(
+    raw: pd.DataFrame, parts: tuple[str, ...], *, column: str
+) -> pd.Series:
+    if not parts:
+        raise ValueError(f"source-impute {column} requires at least one part")
+    if raw.loc[:, list(parts)].isna().any(axis=None):
+        raise ValueError(f"source-impute {column} contains null keys")
+    if len(parts) == 1:
+        key = raw[parts[0]]
+    else:
+        key = raw.loc[:, list(parts)].astype(str).agg("|".join, axis=1)
+    return pd.Series(key, index=raw.index)
+
+
+def _add_raw_household_count_variables(
+    block: SourceImputeBlock,
+    *,
+    raw: pd.DataFrame,
+    table: pd.DataFrame,
+    household_id_parts: tuple[str, ...],
+    count_maps: Mapping[str, Mapping[Any, int]] | None = None,
+) -> None:
+    if not block.household_count_variables:
+        return
+    household_key = _compose_key(raw, household_id_parts, column="household_id")
+    if count_maps:
+        for variable in block.household_count_variables:
+            variable = str(variable)
+            counts = pd.Series(count_maps.get(variable, {}))
+            mapped_counts = household_key.map(counts)
+            if mapped_counts.isna().any():
+                missing = sorted(
+                    {
+                        str(value)
+                        for value in household_key[mapped_counts.isna()].head(5)
+                    }
+                )
+                raise ValueError(
+                    f"source-impute block {block.name!r} missing full household "
+                    f"counts for {variable!r}: {missing}"
+                )
+            table[variable] = mapped_counts.astype("int64")
+        return
+    if "age" not in table.columns:
+        raise ValueError(
+            f"source-impute block {block.name!r} cannot derive household counts "
+            "without an age column"
+        )
+    age = pd.to_numeric(table["age"], errors="coerce")
+    if age.isna().any():
+        raise ValueError(
+            f"source-impute block {block.name!r} cannot derive household counts "
+            "from non-numeric ages"
+        )
+    for variable in block.household_count_variables:
+        threshold = _count_under_threshold(str(variable))
+        counts = (age < threshold).groupby(household_key, sort=False).transform("sum")
+        table[str(variable)] = counts.astype("int64")
+
+
+def _count_under_threshold(variable: str) -> int:
+    prefix = "count_under_"
+    if not variable.startswith(prefix):
+        raise ValueError(
+            f"Unsupported household_count_variables entry {variable!r}; "
+            "expected count_under_<age>"
+        )
+    threshold = variable.removeprefix(prefix)
+    if not threshold.isdigit():
+        raise ValueError(
+            f"Unsupported household_count_variables entry {variable!r}; "
+            "expected numeric age threshold"
+        )
+    return int(threshold)
+
+
 def _household_index(values: np.ndarray, *, column: str) -> pd.Index:
     index = pd.Index(values, name=column)
     if index.hasnans:
@@ -679,6 +1002,21 @@ def _copy_person_columns(table: pd.DataFrame, loader: Mapping[str, Any]) -> None
         table[target] = table[source]
 
 
+def _fillna_columns(table: pd.DataFrame, loader: Mapping[str, Any]) -> None:
+    fill_values = loader.get("fillna_columns")
+    if fill_values is None:
+        return
+    if not isinstance(fill_values, Mapping):
+        raise ValueError("source-impute fillna_columns must be an object")
+    for column, value in fill_values.items():
+        column = str(column)
+        if column not in table.columns:
+            raise ValueError(
+                f"Cannot fill source-impute column {column!r}; column missing"
+            )
+        table[column] = table[column].fillna(value)
+
+
 def _apply_mapped_value_table(
     values: np.ndarray,
     *,
@@ -732,6 +1070,30 @@ def _add_single_person_ids(table: pd.DataFrame) -> None:
             table[column] = ids
 
 
+def _concat_source_impute_tables(
+    blocks: Sequence[SourceImputeBlock],
+    tables: Sequence[pd.DataFrame],
+) -> pd.DataFrame:
+    table = pd.concat(tables, ignore_index=True, sort=False)
+    if table.empty:
+        block_names = [block.name for block in blocks]
+        raise ValueError(f"source-impute blocks {block_names} loaded no rows")
+    if table["person_id"].isna().any():
+        raise ValueError("combined source-impute table contains null person_id")
+    if table["person_id"].duplicated().any():
+        duplicates = sorted(
+            {
+                str(value)
+                for value in table["person_id"][table["person_id"].duplicated()].head(5)
+            }
+        )
+        raise ValueError(
+            "combined source-impute table contains duplicate person_id values: "
+            f"{duplicates}"
+        )
+    return table
+
+
 def _descriptor_for_block(
     block: SourceImputeBlock, source_name: str
 ) -> SourceDescriptor:
@@ -767,8 +1129,53 @@ def _descriptor_for_block(
     )
 
 
+def _descriptor_for_blocks(
+    blocks: Sequence[SourceImputeBlock], source_name: str
+) -> SourceDescriptor:
+    variables = tuple(
+        dict.fromkeys(
+            variable
+            for block in blocks
+            for variable in (
+                *block.person_variables,
+                *block.household_variables,
+                *block.predictors,
+                *block.target_variables,
+                "household_id",
+                "tax_unit_id",
+            )
+        )
+    )
+    return SourceDescriptor(
+        name=source_name,
+        shareability=Shareability.PUBLIC,
+        time_structure=TimeStructure.CROSS_SECTION,
+        archetype=_source_archetype(blocks[0].archetype),
+        population=f"US {blocks[0].survey_name.upper()} source-imputation donor",
+        observations=(
+            EntityObservation(
+                entity=EntityType.PERSON,
+                key_column="person_id",
+                variable_names=tuple(
+                    name for name in variables if name not in {"person_id", "weight"}
+                ),
+                weight_column="weight",
+                period_column="year",
+            ),
+        ),
+    )
+
+
 def _descriptor_for_table(
     block: SourceImputeBlock,
+    table: pd.DataFrame,
+    source_name: str,
+) -> SourceDescriptor:
+    return _descriptor_for_table_blocks((block,), table, source_name)
+
+
+def _descriptor_for_table_blocks(
+    blocks: Sequence[SourceImputeBlock],
     table: pd.DataFrame,
     source_name: str,
 ) -> SourceDescriptor:
@@ -778,8 +1185,8 @@ def _descriptor_for_table(
         name=source_name,
         shareability=Shareability.PUBLIC,
         time_structure=TimeStructure.CROSS_SECTION,
-        archetype=_source_archetype(block.archetype),
-        population=f"US {block.survey_name.upper()} source-imputation donor",
+        archetype=_source_archetype(blocks[0].archetype),
+        population=f"US {blocks[0].survey_name.upper()} source-imputation donor",
         observations=(
             EntityObservation(
                 entity=EntityType.PERSON,
@@ -814,6 +1221,25 @@ def _string_mapping(raw: Any) -> dict[str, str]:
     if not isinstance(raw, Mapping):
         raise ValueError("source-impute mapping must be an object")
     return {str(key): str(value) for key, value in raw.items()}
+
+
+def _string_sequence(raw: Any) -> tuple[str, ...]:
+    if raw is None:
+        return ()
+    if not isinstance(raw, Sequence) or isinstance(raw, str):
+        raise ValueError("source-impute sequence must be a list")
+    return tuple(str(value) for value in raw)
+
+
+def _require_raw_columns(
+    raw: pd.DataFrame,
+    columns: Sequence[str],
+    *,
+    context: str,
+) -> None:
+    missing = sorted(set(columns) - set(raw.columns))
+    if missing:
+        raise ValueError(f"source-impute raw {context} missing columns: {missing}")
 
 
 def _nested_mapping(raw: Any) -> dict[str, dict[str, Any]]:
