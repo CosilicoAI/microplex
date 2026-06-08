@@ -5,10 +5,15 @@ from __future__ import annotations
 from microplex.core import EntityType
 from microplex.targets.arch_derivations import ArchTargetRecord
 from microplex.targets.arch_provider import (
+    ArchPipelineConfig,
+    ArchTargetProvider,
     arch_records_to_target_set,
     arch_target_record_to_target_spec,
     default_arch_target_name,
+    latest_soi_records_by_composition,
+    run_arch_derivation_pipeline,
 )
+from microplex.targets.provider import TargetQuery
 from microplex.targets.spec import TargetAggregation
 
 
@@ -112,3 +117,60 @@ def test_records_to_target_set_measure_override():
         measure_of=lambda v: "employment_income",  # measure differs from variable
     )
     assert target_set.targets[0].measure == "employment_income"
+
+
+# --- pipeline orchestrator + provider ---
+
+
+def test_latest_soi_by_composition_keeps_latest_period():
+    records = [
+        _rec("agi", 100.0, period=2022),
+        _rec("agi", 120.0, period=2024),
+    ]
+    out = latest_soi_records_by_composition(records, target_year=2024)
+    assert len(out) == 1
+    assert out[0].period == 2024
+    assert out[0].value == 120.0
+
+
+def test_pipeline_runs_component_sum_over_soi_records():
+    records = [
+        _rec("state_local_income_or_sales_tax_amount", 100.0),
+        _rec("real_estate_taxes_amount", 40.0),
+    ]
+    config = ArchPipelineConfig(
+        target_year=2024,
+        component_sum_map={
+            "salt_amount": (
+                "state_local_income_or_sales_tax_amount",
+                "real_estate_taxes_amount",
+            )
+        },
+        age_soi=False,
+    )
+    out = run_arch_derivation_pipeline(records, config=config)
+    assert any(r.variable == "salt_amount" and r.value == 140.0 for r in out)
+
+
+def test_pipeline_skip_filter_applied():
+    records = [_rec("agi", 100.0), _rec("dropme", 1.0)]
+    config = ArchPipelineConfig(
+        target_year=2024, age_soi=False, skip=lambda r: r.variable == "dropme"
+    )
+    out = run_arch_derivation_pipeline(records, config=config)
+    assert all(r.variable != "dropme" for r in out)
+    assert any(r.variable == "agi" for r in out)
+
+
+def test_provider_produces_target_set_and_applies_query():
+    records = [_rec("employment_income", 1000.0, period=2024)]
+    config = ArchPipelineConfig(target_year=2024, age_soi=False)
+    provider = ArchTargetProvider(
+        records=records, config=config, entity_of=lambda v: "person"
+    )
+    target_set = provider.load_target_set()
+    assert len(target_set.targets) == 1
+    assert target_set.targets[0].measure == "employment_income"
+    # query filtering by period
+    assert len(provider.load_target_set(TargetQuery(period=2024)).targets) == 1
+    assert len(provider.load_target_set(TargetQuery(period=1999)).targets) == 0
