@@ -5,14 +5,21 @@ from __future__ import annotations
 import argparse
 import json
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
 
+from microplex.data_sources.census_blocks import CensusBlockCrosswalkProvider
 from microplex.data_sources.puf import SHARED_VARS
 from microplex.data_sources.us_registry import create_us_asec_puf_source_registry
+from microplex.geography import (
+    LowestAvailableAtomicGeographyAssigner,
+    LowestAvailableGeographyAssignmentPlan,
+    normalize_string_code,
+    normalize_us_state_fips,
+)
 from microplex.run import RunResult, run_spec
 from microplex.source_registry import SourceRegistry
 from microplex.spec import MicroplexSpec, load_spec_dict
@@ -102,6 +109,8 @@ def run_asec_puf_support_spine_smoke(
     seed: int = 20260529,
     max_cps_rows: int | None = None,
     max_puf_rows: int | None = None,
+    block_crosswalk_path: Path | None = None,
+    max_block_crosswalk_rows: int | None = None,
     demographic_columns: Sequence[str] = DEFAULT_DEMOGRAPHIC_COLUMNS,
     geography_constraint_columns: Sequence[str] = DEFAULT_GEOGRAPHY_CONSTRAINT_COLUMNS,
 ) -> AsecPufSupportSpineSmokeResult:
@@ -141,6 +150,13 @@ def run_asec_puf_support_spine_smoke(
         demographic_columns=demographic_columns,
         spine_keywords=(),
     )
+    if block_crosswalk_path is not None:
+        run_result = _assign_block_geography(
+            run_result,
+            block_crosswalk_path=block_crosswalk_path,
+            max_block_crosswalk_rows=max_block_crosswalk_rows,
+            seed=seed,
+        )
     diagnostics = _diagnostics(
         spec=spec,
         sources=sources,
@@ -229,6 +245,7 @@ def _diagnostics(
         "half_counts": half_counts,
         "demographic_columns": list(demographic_columns),
         "geography_constraint_columns": list(geography_constraint_columns),
+        "block_geography": _block_geography_diagnostics(frame),
         "shared_variables": list(SHARED_VARS),
         "shared_missing": {
             name: sorted(set(SHARED_VARS) - set(source_frame.columns))
@@ -298,6 +315,87 @@ def _validate_run_result(
         tuple(diagnostics["geography_constraint_columns"]),
         surface_name="synthetic_puf support-spine half",
     )
+    if diagnostics["block_geography"]["assigned"]:
+        if frame["block_geoid"].isna().any():
+            raise ValueError("assigned block_geoid contains missing values")
+        if not frame["block_geoid"].astype("string").str.len().eq(15).all():
+            raise ValueError("assigned block_geoid values must be 15 characters")
+
+
+def _assign_block_geography(
+    run_result: RunResult,
+    *,
+    block_crosswalk_path: Path,
+    max_block_crosswalk_rows: int | None,
+    seed: int,
+) -> RunResult:
+    frame = run_result.frame
+    if "state_fips" not in frame.columns:
+        raise ValueError("block assignment requires state_fips in the support frame")
+    states = frame["state_fips"].dropna().map(normalize_us_state_fips).drop_duplicates()
+    if states.empty:
+        raise ValueError("block assignment requires at least one state_fips value")
+    provider = CensusBlockCrosswalkProvider(
+        path=block_crosswalk_path,
+        state_fips=tuple(states),
+        max_rows=max_block_crosswalk_rows,
+    )
+    crosswalk = provider.load_crosswalk()
+    partition_columns = tuple(
+        column
+        for column in ("tract_geoid", "county_fips", "cbsa", "state_fips")
+        if column in frame.columns and column in crosswalk.data.columns
+    )
+    if not partition_columns:
+        raise ValueError(
+            "No shared geography columns between support frame and block crosswalk"
+        )
+    assigner = LowestAvailableAtomicGeographyAssigner(
+        crosswalk=crosswalk,
+        plan=LowestAvailableGeographyAssignmentPlan(
+            partition_columns=partition_columns,
+            atomic_id_column="block_geoid",
+            geography_columns=("county_fips", "tract_geoid"),
+            partition_normalizers={
+                "cbsa": normalize_string_code,
+                "state_fips": normalize_us_state_fips,
+            },
+        ),
+    )
+    assigned_frame = assigner.assign(frame, random_state=seed)
+    label = run_result.spine.half_label_column
+    halves = {
+        name: assigned_frame.loc[assigned_frame[label] == name].copy()
+        for name in run_result.halves
+    }
+    return replace(run_result, frame=assigned_frame, halves=halves)
+
+
+def _block_geography_diagnostics(frame: pd.DataFrame) -> dict[str, Any]:
+    if "block_geoid" not in frame.columns:
+        return {"assigned": False}
+    partition_column = "_geography_partition_column"
+    return {
+        "assigned": True,
+        "assigned_rows": int(frame["block_geoid"].notna().sum()),
+        "unique_block_geoids": int(frame["block_geoid"].nunique(dropna=True)),
+        "columns": [
+            column
+            for column in ("block_geoid", "state_fips", "county_fips", "tract_geoid")
+            if column in frame.columns
+        ],
+        "partition_counts": (
+            {
+                str(name): int(count)
+                for name, count in frame[partition_column]
+                .value_counts(sort=False)
+                .to_dict()
+                .items()
+            }
+            if partition_column in frame.columns
+            else {}
+        ),
+    }
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -309,8 +407,10 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--puf-cache-dir", type=Path, default=None)
     parser.add_argument("--puf-path", type=Path, default=None)
     parser.add_argument("--puf-demographics-path", type=Path, default=None)
+    parser.add_argument("--block-crosswalk-path", type=Path, default=None)
     parser.add_argument("--max-cps-rows", type=int, default=None)
     parser.add_argument("--max-puf-rows", type=int, default=None)
+    parser.add_argument("--max-block-crosswalk-rows", type=int, default=None)
     parser.add_argument("--seed", type=int, default=20260529)
     parser.add_argument("--no-download-cps", action="store_true")
     parser.add_argument("--output-json", type=Path, default=None)
@@ -329,6 +429,8 @@ def main(argv: list[str] | None = None) -> int:
         download_cps=not args.no_download_cps,
         max_cps_rows=args.max_cps_rows,
         max_puf_rows=args.max_puf_rows,
+        block_crosswalk_path=args.block_crosswalk_path,
+        max_block_crosswalk_rows=args.max_block_crosswalk_rows,
         seed=args.seed,
     )
     payload = result.to_json_dict()

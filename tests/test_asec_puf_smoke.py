@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pandas as pd
 import polars as pl
@@ -119,6 +120,25 @@ def _registry() -> SourceRegistry:
     )
 
 
+def _block_crosswalk_path(tmp_path) -> str:
+    path = tmp_path / "block_crosswalk.csv"
+    pd.DataFrame(
+        {
+            "block_geoid": [
+                "060010201001000",
+                "060010201001001",
+                "120860001001000",
+                "360610001001000",
+                "480010001001000",
+            ],
+            "sldu": ["009", "009", "040", "030", "003"],
+            "sldl": ["018", "018", "110", "065", "011"],
+            "place_fips": ["53000", "", "45000", "51000", ""],
+        }
+    ).to_csv(path, index=False)
+    return str(path)
+
+
 def test_build_asec_puf_support_spine_spec_matches_registry_ids() -> None:
     spec = build_asec_puf_support_spine_spec()
 
@@ -148,6 +168,26 @@ def test_asec_puf_smoke_loads_sources_and_builds_support_spine() -> None:
     assert set(synthetic["state_fips"]) <= {6, 36, 48, 12}
     assert set(synthetic["cbsa"]) <= {41860, 35620, 19100, 33100}
     assert synthetic[["state_fips", "cbsa"]].notna().any(axis=1).all()
+
+
+def test_asec_puf_smoke_can_assign_census_blocks(tmp_path) -> None:
+    result = run_asec_puf_support_spine_smoke(
+        registry=_registry(),
+        block_crosswalk_path=Path(_block_crosswalk_path(tmp_path)),
+    )
+
+    block_geography = result.diagnostics["block_geography"]
+    assert block_geography["assigned"] is True
+    assert block_geography["assigned_rows"] == 4
+    assert block_geography["partition_counts"] == {"state_fips": 4}
+    assert set(block_geography["columns"]) == {
+        "block_geoid",
+        "state_fips",
+        "county_fips",
+        "tract_geoid",
+    }
+    assert result.run_result.frame["block_geoid"].str.len().eq(15).all()
+    assert result.run_result.frame["state_fips"].isin(["06", "12", "36", "48"]).all()
 
 
 def test_asec_puf_smoke_caps_loaded_source_rows() -> None:
