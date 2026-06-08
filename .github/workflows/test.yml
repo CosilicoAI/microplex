@@ -30,9 +30,16 @@ jobs:
         run: |
           pytest tests/ -v --tb=short
 
+      - name: Validate US content pack
+        run: |
+          python -m microplex.content_package \
+            --root packs/us \
+            --spec specs/us-2024.yaml \
+            --contract manifests/ecps_export_contract.json
+
       - name: Run focused linter
         run: |
-          ruff check src/microplex/core src/microplex/targets src/microplex/supabase_targets.py tests/targets tests/test_package_surface.py tests/test_supabase_targets.py
+          ruff check src/microplex/core src/microplex/targets src/microplex/supabase_targets.py tests/targets tests/test_package_surface.py tests/test_supabase_targets.py tests/test_content_package.py tests/test_packs_us.py
 
       - name: Run advisory full linter
         continue-on-error: true

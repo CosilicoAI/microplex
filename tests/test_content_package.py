@@ -140,6 +140,32 @@ def test_spec_variable_manifest_diff_reports_missing_and_extra_vars() -> None:
     assert diff.extra_variables == ["extra_income"]
 
 
+def test_spec_variable_manifest_diff_rejects_forbidden_export_variables() -> None:
+    diff = compute_spec_variable_manifest_diff(
+        spec_text=_spec_text(),
+        contract={"required": ["required_export"], "forbidden": ["employment_income"]},
+    )
+
+    assert not diff.ok
+    assert diff.forbidden_contract_count == 1
+    assert diff.forbidden_without_non_export_role == ["employment_income"]
+
+
+def test_spec_variable_manifest_diff_allows_internal_forbidden_variables() -> None:
+    spec_text = _spec_text().replace(
+        "  employment_income:\n    entity: person\n    role: impute\n",
+        "  employment_income:\n    entity: person\n    role: puf_imputed_non_export\n",
+    )
+    diff = compute_spec_variable_manifest_diff(
+        spec_text=spec_text,
+        contract={"required": ["required_export"], "forbidden": ["employment_income"]},
+    )
+
+    assert diff.ok
+    assert diff.forbidden_contract_count == 1
+    assert diff.forbidden_without_non_export_role == []
+
+
 def test_find_runtime_python_files_reports_relative_paths(tmp_path: Path) -> None:
     root = tmp_path / "src" / "country_pack"
     (root / "specs").mkdir(parents=True)
@@ -149,6 +175,11 @@ def test_find_runtime_python_files_reports_relative_paths(tmp_path: Path) -> Non
     (root / "nested" / "__init__.py").write_text("")
 
     assert find_runtime_python_files(root) == ["helpers.py", "nested/__init__.py"]
+
+
+def test_find_runtime_python_files_requires_existing_directory(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="Runtime source root"):
+        find_runtime_python_files(tmp_path / "missing")
 
 
 def test_cli_checks_namespace_package_resources(tmp_path: Path) -> None:
@@ -184,6 +215,70 @@ def test_cli_checks_namespace_package_resources(tmp_path: Path) -> None:
     payload = json.loads(result.stdout)
     assert payload["ok"] is True
     assert payload["manifest_diff"]["variable_manifest_count"] == 6
+
+
+def test_package_cli_requires_src_root_for_python_scan(tmp_path: Path) -> None:
+    package_root = tmp_path / "sample_pack"
+    (package_root / "specs").mkdir(parents=True)
+    (package_root / "manifests").mkdir()
+    (package_root / "specs" / "us-2024.yaml").write_text(_spec_text())
+    (package_root / "manifests" / "contract.json").write_text(
+        json.dumps({"required": ["required_export"], "forbidden": []})
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "microplex.content_package",
+            "--package",
+            "sample_pack",
+            "--spec",
+            "specs/us-2024.yaml",
+            "--contract",
+            "manifests/contract.json",
+        ],
+        capture_output=True,
+        text=True,
+        env=_env_with_path(tmp_path),
+    )
+
+    assert result.returncode == 1
+    assert "Package checks require --src-root" in result.stderr
+
+
+def test_cli_checks_filesystem_content_root(tmp_path: Path) -> None:
+    pack_root = tmp_path / "packs" / "us"
+    (pack_root / "specs").mkdir(parents=True)
+    (pack_root / "manifests").mkdir()
+    (pack_root / "specs" / "us-2024.yaml").write_text(_spec_text())
+    (pack_root / "manifests" / "contract.json").write_text(
+        json.dumps({"required": ["required_export"], "forbidden": []})
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "microplex.content_package",
+            "--root",
+            str(pack_root),
+            "--spec",
+            "specs/us-2024.yaml",
+            "--contract",
+            "manifests/contract.json",
+            "--json",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=_env_with_path(Path(__file__).parents[1] / "src"),
+    )
+
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is True
+    assert payload["root"] == str(pack_root.resolve())
+    assert payload["runtime_python_files"] == []
 
 
 def test_top_level_import_does_not_eagerly_import_heavy_modules() -> None:
@@ -237,6 +332,105 @@ def test_cli_fails_when_content_package_has_runtime_python(tmp_path: Path) -> No
 
     assert result.returncode == 1
     assert "runtime.py" in result.stderr
+
+
+def test_root_cli_fails_when_content_package_has_python(tmp_path: Path) -> None:
+    pack_root = tmp_path / "packs" / "us"
+    (pack_root / "specs").mkdir(parents=True)
+    (pack_root / "manifests").mkdir()
+    (pack_root / "specs" / "us-2024.yaml").write_text(_spec_text())
+    (pack_root / "manifests" / "contract.json").write_text(
+        json.dumps({"required": ["required_export"], "forbidden": []})
+    )
+    (pack_root / "runtime.py").write_text("print('nope')\n")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "microplex.content_package",
+            "--root",
+            str(pack_root),
+            "--spec",
+            "specs/us-2024.yaml",
+            "--contract",
+            "manifests/contract.json",
+        ],
+        capture_output=True,
+        text=True,
+        env=_env_with_path(Path(__file__).parents[1] / "src"),
+    )
+
+    assert result.returncode == 1
+    assert "runtime.py" in result.stderr
+
+
+def test_root_cli_rejects_resource_paths_outside_content_root(
+    tmp_path: Path,
+) -> None:
+    pack_root = tmp_path / "packs" / "us"
+    (pack_root / "specs").mkdir(parents=True)
+    (pack_root / "manifests").mkdir()
+    (pack_root / "specs" / "us-2024.yaml").write_text(_spec_text())
+    (pack_root / "manifests" / "contract.json").write_text(
+        json.dumps({"required": ["required_export"], "forbidden": []})
+    )
+
+    for bad_spec in (
+        str(pack_root / "specs" / "us-2024.yaml"),
+        "specs/../specs/us-2024.yaml",
+    ):
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "microplex.content_package",
+                "--root",
+                str(pack_root),
+                "--spec",
+                bad_spec,
+                "--contract",
+                "manifests/contract.json",
+            ],
+            capture_output=True,
+            text=True,
+            env=_env_with_path(Path(__file__).parents[1] / "src"),
+        )
+
+        assert result.returncode == 1
+        assert "Resource path must stay inside the content root" in result.stderr
+
+
+def test_root_cli_fails_when_explicit_src_root_is_missing(tmp_path: Path) -> None:
+    pack_root = tmp_path / "packs" / "us"
+    (pack_root / "specs").mkdir(parents=True)
+    (pack_root / "manifests").mkdir()
+    (pack_root / "specs" / "us-2024.yaml").write_text(_spec_text())
+    (pack_root / "manifests" / "contract.json").write_text(
+        json.dumps({"required": ["required_export"], "forbidden": []})
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "microplex.content_package",
+            "--root",
+            str(pack_root),
+            "--spec",
+            "specs/us-2024.yaml",
+            "--contract",
+            "manifests/contract.json",
+            "--src-root",
+            str(pack_root / "missing"),
+        ],
+        capture_output=True,
+        text=True,
+        env=_env_with_path(Path(__file__).parents[1] / "src"),
+    )
+
+    assert result.returncode == 1
+    assert "Runtime source root must be a directory" in result.stderr
 
 
 def test_spec_variable_manifest_diff_requires_variables_section() -> None:

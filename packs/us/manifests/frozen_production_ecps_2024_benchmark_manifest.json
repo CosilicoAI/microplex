@@ -1,0 +1,85 @@
+{
+  "baseline_dataset": {
+    "path": "/Users/maxghenis/.cache/huggingface/hub/models--policyengine--policyengine-us-data/blobs/7af7026224f84cb6a91743fd8fa7ac506bad8c78e011fa58b6901894db4b4290",
+    "sha256": "7af7026224f84cb6a91743fd8fa7ac506bad8c78e011fa58b6901894db4b4290",
+    "size_bytes": 29194648
+  },
+  "baseline_metrics": {
+    "baseline_enhanced_cps_native_loss": 0.0558541199034061,
+    "baseline_holdout_loss": 0.01266396784689227,
+    "baseline_initial_enhanced_cps_native_loss": 0.05662455573389589,
+    "baseline_train_loss": 0.04319015205651383,
+    "baseline_unweighted_msre": 3.4642345028776615,
+    "n_national_targets": 1219,
+    "n_state_targets": 2482,
+    "n_targets_kept": 3701
+  },
+  "baseline_sanity": {
+    "mode": "content",
+    "period": 2024,
+    "required_nonzero_columns": {
+      "employment_income_before_lsr": {
+        "abs_sum": 4442737204.638884,
+        "finite": true,
+        "nonzero_count": 21123
+      },
+      "social_security_disability": {
+        "abs_sum": 16747112.0,
+        "finite": true,
+        "nonzero_count": 972
+      },
+      "social_security_retirement": {
+        "abs_sum": 121954899.0,
+        "finite": true,
+        "nonzero_count": 5731
+      }
+    },
+    "status": "passed"
+  },
+  "certificate_type": "frozen_production_ecps_baseline",
+  "generated_at": "2026-06-06T23:00:00+00:00",
+  "period": 2024,
+  "policyengine_us": {
+    "version": "1.715.2"
+  },
+  "policyengine_us_data": {
+    "commit": "f7458313c86fa580fb1e43a2f18252d67cf76e4a",
+    "dirty": false,
+    "repo": "/Users/maxghenis/.codex-worktrees/policyengine-us-data-soi-total-se-20260604"
+  },
+  "schema_version": 1,
+  "scoring_config": {
+    "exact_rescore": false,
+    "holdout_target_fraction": 0.2,
+    "holdout_target_seed": 20260529,
+    "matched_sample_method": "uniform",
+    "period": 2024,
+    "refit_config": {
+      "lambda_l0": 0.0,
+      "lambda_l2": 0.0,
+      "max_iter": 200,
+      "method": "monotone_accelerated_projected_gradient",
+      "target_total_weight": "preserve_input",
+      "tol": 1e-08,
+      "use_gates": false
+    },
+    "score_source": "refit_loss_matrix",
+    "sha256": "3e67b0ca1f869e4c68f7eba513517b7d4c8dd9aaa195b98c51c100fe65dbabde",
+    "skip_tax_expenditure_targets": false,
+    "target_profile": "pe_native_broad",
+    "target_scope": "all"
+  },
+  "target_db": {
+    "path": "/Users/maxghenis/PolicyEngine/policyengine-us-data/policyengine_us_data/storage/calibration/policy_data.db",
+    "sha256": "5d14671156c36cd7fff680d5c4d77ec7fb2026ea866b1e12378d9e9c9fb803dc",
+    "size_bytes": 1073152
+  },
+  "target_profile": "pe_native_broad",
+  "target_scope": "all",
+  "target_surface": {
+    "target_count": 3701,
+    "target_names_sha256": "a49a85a021ef65d5cd5b26d6d605c726ea5ca191ec98d9b5d9cc8b7d5665c25f",
+    "target_profile": "pe_native_broad",
+    "target_scope": "all"
+  }
+}

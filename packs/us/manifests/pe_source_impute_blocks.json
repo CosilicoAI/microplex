@@ -1,0 +1,387 @@
+{
+  "blocks": {
+    "acs": {
+      "survey_name": "acs",
+      "block_name": null,
+      "default_year": 2022,
+      "archetype": "household_income",
+      "dataset_loader": {
+        "module": "policyengine_us_data.datasets.acs.acs",
+        "class_name": "ACS_2022",
+        "builder_kind": "household_rows",
+        "household_index_key": "household_id",
+        "person_household_key": "person_household_id",
+        "person_id_key": "person_id",
+        "length_source_key": null,
+        "direct_person_columns": {
+          "age": "age",
+          "employment_income": "employment_income",
+          "self_employment_income": "self_employment_income",
+          "social_security": "social_security",
+          "taxable_pension_income": "taxable_private_pension_income",
+          "rent": "rent",
+          "real_estate_taxes": "real_estate_taxes"
+        },
+        "boolean_person_columns": {
+          "is_male": "is_male",
+          "is_household_head": "is_household_head"
+        },
+        "row_indexed_person_columns": {
+          "state_fips": "state_fips",
+          "weight": "household_weight"
+        },
+        "mapped_row_person_columns": {
+          "tenure_type": "tenure_type"
+        },
+        "mapped_value_tables": {
+          "tenure_type": {
+            "OWNED_WITH_MORTGAGE": 1,
+            "OWNED_OUTRIGHT": 1,
+            "RENTED": 2,
+            "NONE": 0
+          }
+        },
+        "fallback_person_columns": {},
+        "copy_person_columns": {
+          "tenure": "tenure_type"
+        },
+        "constant_person_columns": {},
+        "income_sum_columns": [
+          "employment_income",
+          "self_employment_income",
+          "social_security",
+          "taxable_pension_income"
+        ],
+        "int_person_columns": [
+          "age",
+          "sex",
+          "tenure_type",
+          "tenure",
+          "state_fips"
+        ],
+        "sex_from_boolean_source": "is_male",
+        "sex_true_value": 1,
+        "sex_false_value": 2,
+        "generated_household_ids": false,
+        "person_id_from_household_id": false
+      },
+      "required_monthcode": null,
+      "annualized_variables": [],
+      "household_count_variables": [],
+      "household_variables": ["state_fips", "tenure"],
+      "person_variables": [
+        "age",
+        "sex",
+        "is_male",
+        "is_household_head",
+        "tenure_type",
+        "employment_income",
+        "self_employment_income",
+        "social_security",
+        "taxable_pension_income",
+        "rent",
+        "real_estate_taxes",
+        "income"
+      ],
+      "target_variables": ["rent", "real_estate_taxes"],
+      "predictors": [
+        "is_household_head",
+        "age",
+        "is_male",
+        "tenure_type",
+        "employment_income",
+        "self_employment_income",
+        "social_security",
+        "pension_income",
+        "household_size",
+        "state_fips"
+      ]
+    },
+    "sipp_tips": {
+      "survey_name": "sipp",
+      "block_name": "tips",
+      "default_year": 2023,
+      "archetype": "household_income",
+      "raw_loader": {
+        "filename": "pu2023_slim.csv",
+        "delimiter": null,
+        "usecols": [],
+        "direct_columns": {
+          "age": "TAGE",
+          "sex": "ESEX",
+          "employment_income": "TPTOTINC",
+          "weight": "WPFINWGT"
+        },
+        "sum_columns_contains": {
+          "tip_income": "TXAMT"
+        },
+        "indicator_columns": {},
+        "int_columns": ["age", "sex"],
+        "household_id_parts": ["SSUID", "MONTHCODE"],
+        "person_id_parts": ["SSUID", "MONTHCODE", "PNUM"],
+        "constant_columns": {
+          "state_fips": 0,
+          "tenure": 0
+        },
+        "copy_columns": {
+          "income": "employment_income"
+        }
+      },
+      "required_monthcode": null,
+      "annualized_variables": ["tip_income", "employment_income"],
+      "household_count_variables": ["count_under_18", "count_under_6"],
+      "household_variables": ["state_fips", "tenure"],
+      "person_variables": [
+        "age",
+        "sex",
+        "employment_income",
+        "income",
+        "tip_income",
+        "count_under_18",
+        "count_under_6"
+      ],
+      "target_variables": ["tip_income"],
+      "predictors": [
+        "employment_income",
+        "age",
+        "count_under_18",
+        "count_under_6"
+      ]
+    },
+    "sipp_assets": {
+      "survey_name": "sipp",
+      "block_name": "assets",
+      "default_year": 2023,
+      "archetype": "household_income",
+      "raw_loader": {
+        "filename": "pu2023.csv",
+        "delimiter": "|",
+        "usecols": [
+          "SSUID",
+          "PNUM",
+          "MONTHCODE",
+          "WPFINWGT",
+          "TAGE",
+          "ESEX",
+          "EMS",
+          "TPTOTINC",
+          "TVAL_BANK",
+          "TVAL_STMF",
+          "TVAL_BOND",
+          "TVEH_NUM",
+          "THVAL_VEH"
+        ],
+        "direct_columns": {
+          "age": "TAGE",
+          "sex": "ESEX",
+          "employment_income": "TPTOTINC",
+          "weight": "WPFINWGT",
+          "bank_account_assets": "TVAL_BANK",
+          "stock_assets": "TVAL_STMF",
+          "bond_assets": "TVAL_BOND",
+          "household_vehicles_owned": "TVEH_NUM",
+          "household_vehicles_value": "THVAL_VEH"
+        },
+        "sum_columns_contains": {},
+        "indicator_columns": {
+          "is_female": {
+            "column": "ESEX",
+            "equals": 2
+          },
+          "is_married": {
+            "column": "EMS",
+            "equals": 1
+          }
+        },
+        "int_columns": ["age", "sex"],
+        "household_id_parts": ["SSUID"],
+        "person_id_parts": ["SSUID", "PNUM"],
+        "constant_columns": {
+          "state_fips": 0,
+          "tenure": 0
+        },
+        "copy_columns": {
+          "income": "employment_income"
+        }
+      },
+      "required_monthcode": 12,
+      "annualized_variables": ["employment_income"],
+      "household_count_variables": ["count_under_18"],
+      "household_variables": ["state_fips", "tenure"],
+      "person_variables": [
+        "age",
+        "sex",
+        "is_female",
+        "is_married",
+        "employment_income",
+        "income",
+        "count_under_18",
+        "bank_account_assets",
+        "stock_assets",
+        "bond_assets",
+        "household_vehicles_owned",
+        "household_vehicles_value"
+      ],
+      "target_variables": [
+        "bank_account_assets",
+        "stock_assets",
+        "bond_assets",
+        "household_vehicles_owned",
+        "household_vehicles_value"
+      ],
+      "predictors": [
+        "employment_income",
+        "age",
+        "is_female",
+        "is_married",
+        "count_under_18"
+      ]
+    },
+    "scf": {
+      "survey_name": "scf",
+      "block_name": null,
+      "default_year": 2022,
+      "archetype": "wealth",
+      "dataset_loader": {
+        "module": "policyengine_us_data.datasets.scf.scf",
+        "class_name": "SCF_2022",
+        "builder_kind": "single_person_households",
+        "household_index_key": null,
+        "person_household_key": null,
+        "person_id_key": null,
+        "length_source_key": "age",
+        "direct_person_columns": {
+          "age": "age",
+          "cps_race": "cps_race",
+          "employment_income": "employment_income",
+          "interest_dividend_income": "interest_dividend_income",
+          "social_security_pension_income": "social_security_pension_income",
+          "own_children_in_household": "own_children_in_household",
+          "auto_loan_balance": "auto_loan_balance",
+          "auto_loan_interest": "auto_loan_interest",
+          "scf_certificates_of_deposit": "cds",
+          "scf_savings_bonds": "savbnd",
+          "scf_retirement_assets": "retqliq",
+          "scf_cash_value_life_insurance": "cashli",
+          "scf_other_managed_assets": "othma",
+          "scf_other_financial_assets": "othfin",
+          "scf_primary_residence_value": "houses",
+          "scf_other_residential_real_estate": "oresre",
+          "scf_nonresidential_real_estate_equity": "nnresre",
+          "scf_business_equity": "bus",
+          "scf_other_nonfinancial_assets": "othnfin",
+          "scf_mortgage_debt": "mrthel",
+          "scf_other_residential_debt": "resdbt",
+          "scf_other_lines_of_credit": "othloc",
+          "scf_credit_card_debt": "ccbal",
+          "scf_vehicle_installment_debt": "veh_inst",
+          "scf_student_loan_debt": "edn_inst",
+          "scf_other_installment_debt": "oth_inst",
+          "scf_other_debt": "odebt",
+          "weight": "wgt"
+        },
+        "boolean_person_columns": {
+          "is_female": "is_female",
+          "is_married": "is_married"
+        },
+        "row_indexed_person_columns": {},
+        "mapped_row_person_columns": {},
+        "mapped_value_tables": {},
+        "fallback_person_columns": {
+          "net_worth": ["net_worth", "networth"]
+        },
+        "copy_person_columns": {
+          "income": "employment_income"
+        },
+        "constant_person_columns": {
+          "state_fips": 0,
+          "tenure": 0
+        },
+        "income_sum_columns": [],
+        "int_person_columns": [
+          "age",
+          "sex",
+          "state_fips",
+          "tenure"
+        ],
+        "sex_from_boolean_source": "is_female",
+        "sex_true_value": 2,
+        "sex_false_value": 1,
+        "generated_household_ids": true,
+        "person_id_from_household_id": true
+      },
+      "required_monthcode": null,
+      "annualized_variables": [],
+      "household_count_variables": [],
+      "household_variables": ["state_fips", "tenure"],
+      "person_variables": [
+        "age",
+        "sex",
+        "is_female",
+        "cps_race",
+        "is_married",
+        "own_children_in_household",
+        "employment_income",
+        "income",
+        "interest_dividend_income",
+        "social_security_pension_income",
+        "net_worth",
+        "auto_loan_balance",
+        "auto_loan_interest",
+        "scf_certificates_of_deposit",
+        "scf_savings_bonds",
+        "scf_retirement_assets",
+        "scf_cash_value_life_insurance",
+        "scf_other_managed_assets",
+        "scf_other_financial_assets",
+        "scf_primary_residence_value",
+        "scf_other_residential_real_estate",
+        "scf_nonresidential_real_estate_equity",
+        "scf_business_equity",
+        "scf_other_nonfinancial_assets",
+        "scf_mortgage_debt",
+        "scf_other_residential_debt",
+        "scf_other_lines_of_credit",
+        "scf_credit_card_debt",
+        "scf_vehicle_installment_debt",
+        "scf_student_loan_debt",
+        "scf_other_installment_debt",
+        "scf_other_debt"
+      ],
+      "target_variables": [
+        "net_worth",
+        "auto_loan_balance",
+        "auto_loan_interest",
+        "scf_certificates_of_deposit",
+        "scf_savings_bonds",
+        "scf_retirement_assets",
+        "scf_cash_value_life_insurance",
+        "scf_other_managed_assets",
+        "scf_other_financial_assets",
+        "scf_primary_residence_value",
+        "scf_other_residential_real_estate",
+        "scf_nonresidential_real_estate_equity",
+        "scf_business_equity",
+        "scf_other_nonfinancial_assets",
+        "scf_mortgage_debt",
+        "scf_other_residential_debt",
+        "scf_other_lines_of_credit",
+        "scf_credit_card_debt",
+        "scf_vehicle_installment_debt",
+        "scf_student_loan_debt",
+        "scf_other_installment_debt",
+        "scf_other_debt"
+      ],
+      "predictors": [
+        "age",
+        "is_female",
+        "cps_race",
+        "is_married",
+        "own_children_in_household",
+        "employment_income",
+        "interest_dividend_income",
+        "social_security_pension_income"
+      ]
+    }
+  }
+}
