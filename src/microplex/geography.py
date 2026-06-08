@@ -1,9 +1,9 @@
 """
 Atomic geography helpers and provider protocols for microplex.
 
-Core `microplex` owns the generic crosswalk, assignment, and provider
-abstractions. Country-specific concrete geography adapters live in extension
-packages such as `microplex-us`.
+Core `microplex` owns the generic crosswalk, assignment, provider
+abstractions, and reusable concrete loaders. Country content packages stay
+declarative and supply specs/manifests rather than runtime Python.
 """
 
 from __future__ import annotations

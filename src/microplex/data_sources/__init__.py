@@ -9,6 +9,11 @@ This module provides loaders for various microdata sources:
 - Data transformation utilities
 """
 
+from microplex.data_sources.census_blocks import (
+    CensusBlockCrosswalkProvider,
+    load_census_block_crosswalk,
+    prepare_census_block_crosswalk,
+)
 from microplex.data_sources.cps import (
     HOUSEHOLD_VARIABLES,
     PERSON_VARIABLES,
@@ -88,6 +93,9 @@ __all__ = [
     "get_mapping_metadata",
     "get_all_mappings",
     "coverage_summary",
+    "CensusBlockCrosswalkProvider",
+    "load_census_block_crosswalk",
+    "prepare_census_block_crosswalk",
     # Transform
     "TransformedDataset",
     "transform_cps_to_policyengine",
