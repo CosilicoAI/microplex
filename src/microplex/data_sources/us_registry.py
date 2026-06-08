@@ -74,7 +74,8 @@ def register_us_source_impute_blocks(
 
     The content package declares source-imputation blocks in JSON; this helper
     keeps executable loading in Microplex while preserving a Python-free pack.
-    Dataset ids follow the existing spec convention, e.g. ``scf_2022``.
+    Dataset ids follow the manifest ``dataset_id`` when present, otherwise
+    the existing spec convention, e.g. ``scf_2022``.
     """
     manifest = SourceImputeManifest.from_path(manifest_path)
     source_blocks = [manifest.block(block_name) for block_name in blocks]
@@ -84,7 +85,7 @@ def register_us_source_impute_blocks(
     datasets: list[tuple[str, SourceImputeBlock]] = []
     seen_dataset_ids: set[str] = set()
     for block in source_blocks:
-        dataset_id = f"{block.survey_name}_{block.default_year}"
+        dataset_id = block.dataset_id or f"{block.survey_name}_{block.default_year}"
         if dataset_id in seen_dataset_ids:
             raise ValueError(
                 f"Duplicate source-impute dataset requested: {dataset_id!r}"

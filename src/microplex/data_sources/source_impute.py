@@ -24,7 +24,7 @@ from microplex.core.sources import (
     apply_source_query,
 )
 
-_SUPPORTED_BUILDER_KINDS = frozenset({"single_person_households"})
+_SUPPORTED_BUILDER_KINDS = frozenset({"single_person_households", "household_rows"})
 
 
 @dataclass(frozen=True)
@@ -34,6 +34,7 @@ class SourceImputeBlock:
     name: str
     survey_name: str
     default_year: int
+    dataset_id: str | None
     archetype: str | None
     dataset_loader: Mapping[str, Any] | None
     household_variables: tuple[str, ...]
@@ -53,6 +54,7 @@ class SourceImputeBlock:
             name=name,
             survey_name=str(raw["survey_name"]),
             default_year=int(raw["default_year"]),
+            dataset_id=str(raw["dataset_id"]) if raw.get("dataset_id") else None,
             archetype=raw.get("archetype"),
             dataset_loader=dataset_loader,
             household_variables=tuple(raw.get("household_variables") or ()),
@@ -171,11 +173,56 @@ def load_source_impute_block_table(
     if max_rows is not None and max_rows < 1:
         raise ValueError("max_rows must be positive when supplied")
     loader = _supported_loader(block)
+    builder_kind = str(loader.get("builder_kind"))
+    if builder_kind == "single_person_households":
+        table = _load_single_person_household_table(
+            loader,
+            dataset_path=Path(dataset_path),
+            max_rows=max_rows,
+        )
+    elif builder_kind == "household_rows":
+        table = _load_household_rows_table(
+            loader,
+            dataset_path=Path(dataset_path),
+            max_rows=max_rows,
+        )
+    else:  # pragma: no cover - guarded by _supported_loader
+        raise NotImplementedError(
+            f"source-impute builder_kind {builder_kind!r} is not implemented"
+        )
+    return _finalize_source_impute_table(block, loader, table, period=period)
+
+
+def validate_source_impute_block_supported(block: SourceImputeBlock) -> None:
+    """Fail unless ``block`` has a loader shape implemented by Microplex."""
+    _supported_loader(block)
+
+
+def _supported_loader(block: SourceImputeBlock) -> Mapping[str, Any]:
+    loader = block.dataset_loader
+    if loader is None:
+        raise NotImplementedError(
+            f"source-impute block {block.name!r} has no dataset_loader"
+        )
+    builder_kind = str(loader.get("builder_kind") or "")
+    if builder_kind not in _SUPPORTED_BUILDER_KINDS:
+        raise NotImplementedError(
+            f"source-impute builder_kind {builder_kind!r} is not implemented"
+        )
+    return loader
+
+
+def _load_single_person_household_table(
+    loader: Mapping[str, Any],
+    *,
+    dataset_path: Path,
+    max_rows: int | None,
+) -> pd.DataFrame:
     direct_columns = _string_mapping(loader.get("direct_person_columns"))
     boolean_columns = _string_mapping(loader.get("boolean_person_columns"))
     fallback_columns = _fallback_mapping(loader.get("fallback_person_columns"))
     available, values = _read_h5_mapped_arrays(
-        Path(dataset_path),
+        dataset_path,
         direct_columns=direct_columns,
         boolean_columns=boolean_columns,
         fallback_columns=fallback_columns,
@@ -200,15 +247,123 @@ def load_source_impute_block_table(
 
     for column, value in (loader.get("constant_person_columns") or {}).items():
         table[str(column)] = value
-    for target, source in _string_mapping(loader.get("copy_person_columns")).items():
-        if source not in table.columns:
-            raise ValueError(
-                f"Cannot copy source-impute column {source!r} to {target!r}; source missing"
-            )
-        table[target] = table[source]
 
+    _add_income_sum_columns(table, loader)
+    _add_group_count_person_columns(table, loader)
+    _copy_person_columns(table, loader)
     _add_sex_from_boolean_source(table, loader)
     _add_single_person_ids(table)
+    return table
+
+
+def _load_household_rows_table(
+    loader: Mapping[str, Any],
+    *,
+    dataset_path: Path,
+    max_rows: int | None,
+) -> pd.DataFrame:
+    person_id_key = _required_loader_string(loader, "person_id_key")
+    person_household_key = _required_loader_string(loader, "person_household_key")
+    household_index_key = _required_loader_string(loader, "household_index_key")
+    direct_columns = _string_mapping(loader.get("direct_person_columns"))
+    boolean_columns = _string_mapping(loader.get("boolean_person_columns"))
+    fallback_columns = _fallback_mapping(loader.get("fallback_person_columns"))
+    row_indexed_columns = _string_mapping(loader.get("row_indexed_person_columns"))
+    mapped_row_columns = _string_mapping(loader.get("mapped_row_person_columns"))
+    mapped_value_tables = _nested_mapping(loader.get("mapped_value_tables"))
+    group_count_columns = _string_mapping(loader.get("group_count_person_columns"))
+
+    person_sources = (
+        {person_id_key, person_household_key}
+        | set(direct_columns.values())
+        | set(boolean_columns.values())
+        | set(group_count_columns.values())
+    )
+    fallback_sources = {
+        source for sources in fallback_columns.values() for source in sources
+    }
+    household_sources = (
+        {household_index_key}
+        | set(row_indexed_columns.values())
+        | set(mapped_row_columns.values())
+    )
+    available, person_values, household_values, full_person_values = (
+        _read_h5_person_household_arrays(
+            dataset_path,
+            person_sources=person_sources,
+            fallback_person_sources=fallback_sources,
+            household_sources=household_sources,
+            full_person_sources=set(group_count_columns.values()),
+            max_person_rows=max_rows,
+        )
+    )
+    length = _common_length(person_values)
+    _common_length(household_values)
+    if full_person_values:
+        _common_length(full_person_values)
+    table = pd.DataFrame(index=pd.RangeIndex(length))
+
+    table["person_id"] = person_values[person_id_key]
+    table["household_id"] = person_values[person_household_key]
+    table["tax_unit_id"] = table["household_id"]
+    if person_household_key not in table.columns:
+        table[person_household_key] = person_values[person_household_key]
+
+    for target, source in direct_columns.items():
+        table[target] = person_values[source]
+    for target, source in boolean_columns.items():
+        table[target] = _coerce_boolean_array(person_values[source], column=target)
+    for target, sources in fallback_columns.items():
+        source = next(
+            (candidate for candidate in sources if candidate in available), None
+        )
+        if source is None:
+            raise ValueError(
+                f"No fallback source columns found for {target!r}: {list(sources)}"
+            )
+        table[target] = person_values[source]
+
+    household_index = _household_index(
+        household_values[household_index_key],
+        column=household_index_key,
+    )
+    positions = _household_positions(
+        person_household_ids=table["household_id"],
+        household_index=household_index,
+        person_household_key=person_household_key,
+    )
+    for target, source in row_indexed_columns.items():
+        table[target] = household_values[source][positions]
+    for target, source in mapped_row_columns.items():
+        raw_values = household_values[source][positions]
+        table[target] = _apply_mapped_value_table(
+            raw_values,
+            target=target,
+            source=source,
+            mapped_value_tables=mapped_value_tables,
+        )
+
+    for column, value in (loader.get("constant_person_columns") or {}).items():
+        table[str(column)] = value
+
+    _add_income_sum_columns(table, loader)
+    _add_group_count_person_columns(
+        table,
+        loader,
+        full_source_values=full_person_values,
+    )
+    _copy_person_columns(table, loader)
+    _add_sex_from_boolean_source(table, loader)
+    return table
+
+
+def _finalize_source_impute_table(
+    block: SourceImputeBlock,
+    loader: Mapping[str, Any],
+    table: pd.DataFrame,
+    *,
+    period: int | None,
+) -> pd.DataFrame:
     table["year"] = int(period if period is not None else block.default_year)
     for column in loader.get("int_person_columns") or ():
         column = str(column)
@@ -244,25 +399,6 @@ def load_source_impute_block_table(
     return table.loc[:, [column for column in table.columns if column in expected]]
 
 
-def validate_source_impute_block_supported(block: SourceImputeBlock) -> None:
-    """Fail unless ``block`` has a loader shape implemented by Microplex."""
-    _supported_loader(block)
-
-
-def _supported_loader(block: SourceImputeBlock) -> Mapping[str, Any]:
-    loader = block.dataset_loader
-    if loader is None:
-        raise NotImplementedError(
-            f"source-impute block {block.name!r} has no dataset_loader"
-        )
-    builder_kind = str(loader.get("builder_kind") or "")
-    if builder_kind not in _SUPPORTED_BUILDER_KINDS:
-        raise NotImplementedError(
-            f"source-impute builder_kind {builder_kind!r} is not implemented"
-        )
-    return loader
-
-
 def _read_h5_mapped_arrays(
     path: Path,
     *,
@@ -296,6 +432,54 @@ def _read_h5_mapped_arrays(
     return available, values
 
 
+def _read_h5_person_household_arrays(
+    path: Path,
+    *,
+    person_sources: set[str],
+    fallback_person_sources: set[str],
+    household_sources: set[str],
+    full_person_sources: set[str],
+    max_person_rows: int | None,
+) -> tuple[
+    frozenset[str],
+    dict[str, np.ndarray],
+    dict[str, np.ndarray],
+    dict[str, np.ndarray],
+]:
+    try:
+        import h5py
+    except ImportError as exc:  # pragma: no cover - exercised only without dependency
+        raise ImportError("h5py is required to load array-style HDF5 sources") from exc
+
+    with h5py.File(path, "r") as h5:
+        available = frozenset(str(key) for key in h5.keys())
+        required = person_sources | household_sources | full_person_sources
+        missing = sorted(required - available)
+        if missing:
+            raise ValueError(f"source-impute H5 missing required arrays: {missing}")
+
+        person_values = {
+            source: _read_h5_dataset(h5[source], max_rows=max_person_rows)
+            for source in sorted(
+                person_sources
+                | {source for source in fallback_person_sources if source in available}
+            )
+        }
+        household_values = {
+            source: _read_h5_dataset(h5[source], max_rows=None)
+            for source in sorted(household_sources)
+        }
+        full_person_values = {
+            source: (
+                person_values[source]
+                if max_person_rows is None and source in person_values
+                else _read_h5_dataset(h5[source], max_rows=None)
+            )
+            for source in sorted(full_person_sources)
+        }
+    return available, person_values, household_values, full_person_values
+
+
 def _read_h5_dataset(dataset, *, max_rows: int | None) -> np.ndarray:
     if len(dataset.shape) != 1:
         raise ValueError(
@@ -305,6 +489,13 @@ def _read_h5_dataset(dataset, *, max_rows: int | None) -> np.ndarray:
     array = np.asarray(values)
     if array.dtype.kind == "S":
         return np.char.decode(array, "utf-8")
+    if array.dtype.kind == "O":
+        return np.asarray(
+            [
+                value.decode("utf-8") if isinstance(value, bytes) else value
+                for value in array
+            ]
+        )
     return array
 
 
@@ -389,6 +580,135 @@ def _coerce_int_column(values: pd.Series, *, column: str) -> np.ndarray:
             f"{bad_values}"
         )
     return rounded.astype("int64")
+
+
+def _household_index(values: np.ndarray, *, column: str) -> pd.Index:
+    index = pd.Index(values, name=column)
+    if index.hasnans:
+        raise ValueError(f"source-impute household index {column!r} contains nulls")
+    if not index.is_unique:
+        duplicates = sorted({str(value) for value in index[index.duplicated()][:5]})
+        raise ValueError(
+            f"source-impute household index {column!r} contains duplicate ids: "
+            f"{duplicates}"
+        )
+    return index
+
+
+def _household_positions(
+    *,
+    person_household_ids: pd.Series,
+    household_index: pd.Index,
+    person_household_key: str,
+) -> np.ndarray:
+    positions = household_index.get_indexer(person_household_ids)
+    missing_mask = positions < 0
+    if missing_mask.any():
+        missing = sorted(
+            {str(value) for value in person_household_ids[missing_mask].head(5)}
+        )
+        raise ValueError(
+            f"source-impute person household key {person_household_key!r} "
+            f"references missing household ids: {missing}"
+        )
+    return positions
+
+
+def _add_income_sum_columns(
+    table: pd.DataFrame,
+    loader: Mapping[str, Any],
+) -> None:
+    columns = tuple(str(column) for column in loader.get("income_sum_columns") or ())
+    if not columns or "income" in table.columns:
+        return
+    missing = [column for column in columns if column not in table.columns]
+    if missing:
+        raise ValueError(f"source-impute income_sum_columns missing: {missing}")
+    table["income"] = table.loc[:, list(columns)].sum(axis=1)
+
+
+def _add_group_count_person_columns(
+    table: pd.DataFrame,
+    loader: Mapping[str, Any],
+    *,
+    full_source_values: Mapping[str, np.ndarray] | None = None,
+) -> None:
+    for target, source in _string_mapping(
+        loader.get("group_count_person_columns")
+    ).items():
+        if source not in table.columns:
+            raise ValueError(
+                f"Cannot derive source-impute group count {target!r}; "
+                f"source {source!r} missing"
+            )
+        if full_source_values is not None and source in full_source_values:
+            full_values = pd.Series(full_source_values[source])
+            if full_values.isna().any():
+                raise ValueError(
+                    f"Cannot derive source-impute group count {target!r}; "
+                    f"source {source!r} contains nulls"
+                )
+            counts = full_values.value_counts(sort=False)
+            mapped_counts = table[source].map(counts)
+            if mapped_counts.isna().any():
+                missing = sorted(
+                    {
+                        str(value)
+                        for value in table[source][mapped_counts.isna()].head(5)
+                    }
+                )
+                raise ValueError(
+                    f"Cannot derive source-impute group count {target!r}; "
+                    f"source {source!r} values missing from full counts: {missing}"
+                )
+            table[target] = mapped_counts.astype("int64")
+        else:
+            table[target] = (
+                table.groupby(source, sort=False)[source]
+                .transform("size")
+                .astype("int64")
+            )
+
+
+def _copy_person_columns(table: pd.DataFrame, loader: Mapping[str, Any]) -> None:
+    for target, source in _string_mapping(loader.get("copy_person_columns")).items():
+        if source not in table.columns:
+            raise ValueError(
+                f"Cannot copy source-impute column {source!r} to {target!r}; source missing"
+            )
+        table[target] = table[source]
+
+
+def _apply_mapped_value_table(
+    values: np.ndarray,
+    *,
+    target: str,
+    source: str,
+    mapped_value_tables: Mapping[str, Mapping[str, Any]],
+) -> np.ndarray:
+    mapping = mapped_value_tables.get(target) or mapped_value_tables.get(source)
+    if mapping is None:
+        raise ValueError(
+            f"mapped row source-impute column {target!r} from {source!r} "
+            "has no mapped_value_tables entry"
+        )
+    normalized_values = pd.Series([_mapping_key(value) for value in values])
+    missing_mask = ~normalized_values.isin(mapping)
+    if missing_mask.any():
+        bad_values = sorted(
+            {str(value) for value in normalized_values[missing_mask].head(5)}
+        )
+        raise ValueError(
+            f"mapped row source-impute column {target!r} has unmapped values: "
+            f"{bad_values}"
+        )
+    return normalized_values.map(mapping).to_numpy()
+
+
+def _mapping_key(value: Any) -> str:
+    if isinstance(value, bytes):
+        return value.decode("utf-8")
+    return str(value)
 
 
 def _add_sex_from_boolean_source(
@@ -494,6 +814,28 @@ def _string_mapping(raw: Any) -> dict[str, str]:
     if not isinstance(raw, Mapping):
         raise ValueError("source-impute mapping must be an object")
     return {str(key): str(value) for key, value in raw.items()}
+
+
+def _nested_mapping(raw: Any) -> dict[str, dict[str, Any]]:
+    if raw is None:
+        return {}
+    if not isinstance(raw, Mapping):
+        raise ValueError("source-impute nested mapping must be an object")
+    result: dict[str, dict[str, Any]] = {}
+    for key, value in raw.items():
+        if not isinstance(value, Mapping):
+            raise ValueError(f"source-impute mapping for {key!r} must be an object")
+        result[str(key)] = {
+            str(inner_key): inner_value for inner_key, inner_value in value.items()
+        }
+    return result
+
+
+def _required_loader_string(loader: Mapping[str, Any], key: str) -> str:
+    value = loader.get(key)
+    if value is None or str(value).strip() == "":
+        raise ValueError(f"dataset_loader.{key} must be non-empty")
+    return str(value)
 
 
 def _fallback_mapping(raw: Any) -> dict[str, tuple[str, ...]]:
