@@ -55,6 +55,11 @@ __all__ = [
     "bea_state_employment_income_before_lsr",
     "with_bea_employment_income_before_lsr",
     "bea_national_wages_record",
+    "should_skip_target_record",
+    "should_skip_fact_concept",
+    "is_blocked_self_employment_binding",
+    "is_bea_regional_country_record",
+    "default_bea_regional_lineage",
 ]
 
 
@@ -860,6 +865,94 @@ def _default_bea_state_record(
         source_target_id=None,
         source_stratum_id=None,
     )
+
+
+def default_bea_regional_lineage(record: ArchTargetRecord) -> bool:
+    """Whether a record carries BEA regional lineage (faithful port)."""
+    for value in (record.concept, record.source_concept, record.source_record_id):
+        if value is None:
+            continue
+        text = str(value)
+        if (
+            text.startswith("bea_regional.")
+            or text.startswith("bea-regional.")
+            or ".bea-regional-" in text
+        ):
+            return True
+    return False
+
+
+def is_bea_regional_country_record(
+    record: ArchTargetRecord,
+    *,
+    has_bea_regional_lineage: Callable[
+        [ArchTargetRecord], bool
+    ] = default_bea_regional_lineage,
+    geo_level: Callable[[ArchTargetRecord], str] = _normalized_geo_level,
+) -> bool:
+    """A national/country BEA regional *component* record — an input the BEA
+    derivation consumes, not an exported target."""
+    if not has_bea_regional_lineage(record):
+        return False
+    if str(record.geography_id) == "0100000US":
+        return True
+    return geo_level(record) in {"national", "country"}
+
+
+def should_skip_target_record(
+    record: ArchTargetRecord,
+    *,
+    unsupported_variables: Sequence[str] = (),
+    is_bea_regional_country: Callable[
+        [ArchTargetRecord], bool
+    ] = is_bea_regional_country_record,
+) -> bool:
+    """Drop a target record from the surface: an unsupported ratio/component
+    variable, or a national BEA regional input. ``unsupported_variables`` is the
+    injected US blocklist."""
+    return record.variable in set(unsupported_variables) or is_bea_regional_country(
+        record
+    )
+
+
+def should_skip_fact_concept(
+    concept: str,
+    *,
+    skipped_concepts: Sequence[str],
+) -> bool:
+    """Whether an Arch fact concept is on the injected skip list."""
+    return concept in set(skipped_concepts)
+
+
+def is_blocked_self_employment_binding(
+    record: ArchTargetRecord,
+    model_variable: str,
+    *,
+    blocklist: Sequence[str],
+    se_variable: str = "self_employment_income",
+) -> bool:
+    """Whether binding ``record`` to ``model_variable`` hits the broad
+    business-income self-employment blocklist (faithful port). The record's
+    identity markers (variable/concept/source ids + ``var:value`` constraints)
+    are intersected with the injected ``blocklist``."""
+    if model_variable != se_variable:
+        return False
+    markers = {
+        str(value)
+        for value in (
+            record.variable,
+            record.concept,
+            record.source_concept,
+            record.source_record_id,
+        )
+        if value is not None
+    }
+    markers.update(
+        f"{variable}:{value}"
+        for variable, _, value in record.constraints
+        if value is not None
+    )
+    return bool(markers & set(blocklist))
 
 
 def _component_sum_record_key(

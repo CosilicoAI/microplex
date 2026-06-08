@@ -11,7 +11,12 @@ from microplex.targets.arch_derivations import (
     bea_national_wages_record,
     bea_state_employment_income_before_lsr,
     component_sum_records,
+    default_bea_regional_lineage,
     default_total_scope,
+    is_bea_regional_country_record,
+    is_blocked_self_employment_binding,
+    should_skip_fact_concept,
+    should_skip_target_record,
     is_ssa_carry_forward_candidate,
     latest_carry_forward,
     soi_aging_factors,
@@ -587,3 +592,78 @@ def test_bea_national_wages_record_finds_by_concept():
     found = bea_national_wages_record(records, output_variable=BEA_OUTPUT)
     assert found is national
     assert bea_national_wages_record([], output_variable=BEA_OUTPUT) is None
+
+
+# --- skip / blocklist surface ---
+
+
+def test_default_bea_regional_lineage():
+    assert default_bea_regional_lineage(_rec("x", 1.0, concept="bea_regional.wages"))
+    assert default_bea_regional_lineage(
+        _rec("x", 1.0, source_concept="bea-regional.wages")
+    )
+    assert default_bea_regional_lineage(
+        _rec("x", 1.0, source_record_id="abc.bea-regional-123")
+    )
+    assert not default_bea_regional_lineage(_rec("x", 1.0, concept="irs_soi.agi"))
+
+
+def test_is_bea_regional_country_record():
+    nat = _rec("x", 1.0, concept="bea_regional.wages", geographic_level="NATIONAL")
+    state = _rec("x", 1.0, concept="bea_regional.wages", geographic_level="STATE")
+    no_lineage = _rec("x", 1.0, concept="irs_soi.agi", geographic_level="NATIONAL")
+    geoid = _rec(
+        "x",
+        1.0,
+        concept="bea_regional.wages",
+        geography_id="0100000US",
+        geographic_level="STATE",
+    )
+    assert is_bea_regional_country_record(nat)
+    assert not is_bea_regional_country_record(state)
+    assert not is_bea_regional_country_record(no_lineage)
+    assert is_bea_regional_country_record(geoid)  # explicit national GEOID
+
+
+def test_should_skip_target_record():
+    unsupported = ("some_ratio_variable",)
+    assert should_skip_target_record(
+        _rec("some_ratio_variable", 1.0), unsupported_variables=unsupported
+    )
+    assert should_skip_target_record(
+        _rec("x", 1.0, concept="bea_regional.wages", geographic_level="NATIONAL"),
+        unsupported_variables=unsupported,
+    )
+    assert not should_skip_target_record(
+        _rec("employment_income", 1.0), unsupported_variables=unsupported
+    )
+
+
+def test_should_skip_fact_concept():
+    skipped = ("bea_nipa.some_internal",)
+    assert should_skip_fact_concept("bea_nipa.some_internal", skipped_concepts=skipped)
+    assert not should_skip_fact_concept("irs_soi.agi", skipped_concepts=skipped)
+
+
+def test_is_blocked_self_employment_binding():
+    blocklist = ("broad_business_income", "domain:nonfarm_proprietors")
+    # not the self-employment binding -> never blocked
+    assert not is_blocked_self_employment_binding(
+        _rec("broad_business_income", 1.0), "employment_income", blocklist=blocklist
+    )
+    # marker matches blocklist
+    assert is_blocked_self_employment_binding(
+        _rec("broad_business_income", 1.0),
+        "self_employment_income",
+        blocklist=blocklist,
+    )
+    # constraint marker (var:value) matches blocklist
+    assert is_blocked_self_employment_binding(
+        _rec("x", 1.0, constraints=(("domain", "==", "nonfarm_proprietors"),)),
+        "self_employment_income",
+        blocklist=blocklist,
+    )
+    # no marker intersection
+    assert not is_blocked_self_employment_binding(
+        _rec("wages", 1.0), "self_employment_income", blocklist=blocklist
+    )
