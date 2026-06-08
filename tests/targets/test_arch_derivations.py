@@ -10,6 +10,8 @@ from microplex.targets.arch_derivations import (
     is_ssa_carry_forward_candidate,
     latest_carry_forward,
     ssa_carry_forward_rank,
+    state_to_national_rollup,
+    sum_state_records_to_national,
     with_component_sum_records,
 )
 
@@ -238,3 +240,104 @@ def test_is_ssa_candidate():
         _rec("ssi_total_payments", 1.0, source="SSA", target_type="RATIO"),
         variables=vars_,
     )
+
+
+# --- state -> national rollup ---
+
+REQUIRED = ("06", "36")
+
+
+def _state(variable: str, value: float, fips: str, **kw) -> ArchTargetRecord:
+    return _rec(variable, value, geographic_level="STATE", geography_id=fips, **kw)
+
+
+def test_state_rollup_sums_complete_state_set_to_national():
+    records = [_state("x", 100.0, "06"), _state("x", 40.0, "36")]
+    out = state_to_national_rollup(
+        records, required_states=REQUIRED, group_key=lambda r: r.variable
+    )
+    assert len(out) == 1
+    nat = out[0]
+    assert nat.value == 140.0
+    assert nat.geographic_level is None
+    assert nat.geography_id is None
+    assert nat.target_id < 0
+    assert nat.source_record_id.startswith("microplex_state_rollup:")
+
+
+def test_state_rollup_skips_incomplete_state_set():
+    records = [_state("x", 100.0, "06")]  # missing 36
+    assert (
+        state_to_national_rollup(
+            records, required_states=REQUIRED, group_key=lambda r: r.variable
+        )
+        == []
+    )
+
+
+def test_state_rollup_skips_duplicate_state():
+    records = [
+        _state("x", 100.0, "06"),
+        _state("x", 1.0, "06"),  # duplicate state
+        _state("x", 40.0, "36"),
+    ]
+    assert (
+        state_to_national_rollup(
+            records, required_states=REQUIRED, group_key=lambda r: r.variable
+        )
+        == []
+    )
+
+
+def test_state_rollup_skips_when_national_already_exists():
+    records = [
+        _state("x", 100.0, "06"),
+        _state("x", 40.0, "36"),
+        _rec("x", 999.0, geographic_level="NATIONAL", geography_id=None),
+    ]
+    assert (
+        state_to_national_rollup(
+            records, required_states=REQUIRED, group_key=lambda r: r.variable
+        )
+        == []
+    )
+
+
+def test_state_rollup_ignores_states_outside_required_set():
+    records = [
+        _state("x", 100.0, "06"),
+        _state("x", 40.0, "36"),
+        _state("x", 5.0, "72"),  # PR excluded from required set
+    ]
+    out = state_to_national_rollup(
+        records, required_states=REQUIRED, group_key=lambda r: r.variable
+    )
+    assert len(out) == 1
+    assert out[0].value == 140.0  # PR (72) not summed
+
+
+def test_state_rollup_ignores_non_state_records():
+    records = [_rec("x", 100.0, geographic_level="COUNTY", geography_id="06001")]
+    assert (
+        state_to_national_rollup(
+            records, required_states=REQUIRED, group_key=lambda r: r.variable
+        )
+        == []
+    )
+
+
+def test_state_rollup_builder_can_strip_constraints():
+    constraints = (("region", "==", "z"),)
+    records = [
+        _state("x", 10.0, "06", constraints=constraints),
+        _state("x", 20.0, "36", constraints=constraints),
+    ]
+    out = state_to_national_rollup(
+        records,
+        required_states=REQUIRED,
+        group_key=lambda r: r.variable,
+        build_national=lambda key, recs: sum_state_records_to_national(
+            key, recs, non_state_constraints=lambda c: ()
+        ),
+    )
+    assert out[0].constraints == ()

@@ -42,6 +42,8 @@ __all__ = [
     "latest_carry_forward",
     "ssa_carry_forward_rank",
     "is_ssa_carry_forward_candidate",
+    "state_to_national_rollup",
+    "sum_state_records_to_national",
 ]
 
 
@@ -197,6 +199,128 @@ def is_ssa_carry_forward_candidate(
         normalize_source(record.source) == source
         and record.variable in set(variables)
         and record.target_type in {"AMOUNT", "COUNT"}
+    )
+
+
+GroupKeyFn = Callable[[ArchTargetRecord], Any]
+StateFipsFn = Callable[[ArchTargetRecord], str | None]
+NationalBuilderFn = Callable[[Any, "list[ArchTargetRecord]"], ArchTargetRecord]
+
+
+def _normalized_geo_level(record: ArchTargetRecord) -> str:
+    return (record.geographic_level or "").lower()
+
+
+def state_to_national_rollup(
+    records: Sequence[ArchTargetRecord],
+    *,
+    required_states: Sequence[str],
+    group_key: GroupKeyFn,
+    state_fips_of: StateFipsFn = lambda record: record.geography_id,
+    geo_level: Callable[[ArchTargetRecord], str] = _normalized_geo_level,
+    build_national: NationalBuilderFn | None = None,
+) -> list[ArchTargetRecord]:
+    """Sum complete sets of state records into national totals.
+
+    Generic port of the legacy state→national rollup: group ``state``-level
+    records by ``group_key`` and, for each group that covers **every** state in
+    ``required_states`` exactly once, emit one national record (default builder
+    :func:`sum_state_records_to_national`). Groups missing a state, carrying a
+    duplicate state, or whose national total already exists are skipped. The US
+    pack injects ``required_states`` (the 51-state set excluding PR fips ``72``),
+    ``group_key`` (rollup-variable filter + non-state cell fields), and the
+    state-fips / geo-level extractors. Returns only the new national records.
+    """
+    builder = build_national or sum_state_records_to_national
+    required = frozenset(required_states)
+
+    existing_national_keys = {
+        key
+        for record in records
+        if geo_level(record) == "national"
+        for key in (group_key(record),)
+        if key is not None
+    }
+
+    grouped: dict[Any, list[tuple[str, ArchTargetRecord]]] = {}
+    for record in records:
+        if geo_level(record) != "state":
+            continue
+        key = group_key(record)
+        if key is None or key in existing_national_keys:
+            continue
+        state_fips = state_fips_of(record)
+        if state_fips is None or state_fips not in required:
+            continue
+        grouped.setdefault(key, []).append((state_fips, record))
+
+    rollups: list[ArchTargetRecord] = []
+    for key, state_records in grouped.items():
+        records_by_state: dict[str, ArchTargetRecord] = {}
+        duplicate = False
+        for state_fips, record in state_records:
+            if state_fips in records_by_state:
+                duplicate = True
+                break
+            records_by_state[state_fips] = record
+        if duplicate or set(records_by_state) != required:
+            continue
+        ordered = [records_by_state[fips] for fips in sorted(required)]
+        rollups.append(builder(key, ordered))
+    return rollups
+
+
+def sum_state_records_to_national(
+    key: Any,
+    records: list[ArchTargetRecord],
+    *,
+    non_state_constraints: Callable[
+        [tuple[tuple[str, str, str], ...]], tuple[tuple[str, str, str], ...]
+    ] = lambda constraints: constraints,
+) -> ArchTargetRecord:
+    """Default national-rollup builder: sum the state records (faithful port).
+
+    Sums values, nulls the geography, tags a deterministic national id, and
+    merges source lineage. ``non_state_constraints`` (injected by the US pack)
+    strips state-level constraints from the national record; the generic default
+    keeps them.
+    """
+    first = records[0]
+    digest = sha1(repr(key).encode("utf-8")).hexdigest()
+    source_row_keys = tuple(
+        dict.fromkeys(
+            source_row_key
+            for record in records
+            for source_row_key in (
+                record.source_row_keys
+                or (str(record.source_target_id or record.target_id),)
+            )
+        )
+    )
+    source_cell_keys = tuple(
+        dict.fromkeys(
+            source_cell_key
+            for record in records
+            for source_cell_key in record.source_cell_keys
+        )
+    )
+    notes = f"Microplex national rollup from {len(records)} state targets."
+    if first.notes:
+        notes = f"{first.notes} {notes}"
+    return replace(
+        first,
+        target_id=-int(digest[:12], 16),
+        stratum_id=-int(digest[12:20], 16),
+        value=sum(record.value for record in records),
+        geographic_level=None,
+        geography_id=None,
+        constraints=non_state_constraints(first.constraints),
+        notes=notes,
+        source_record_id=f"microplex_state_rollup:{digest[:16]}",
+        source_cell_keys=source_cell_keys,
+        source_row_keys=source_row_keys,
+        source_target_id=None,
+        source_stratum_id=None,
     )
 
 
