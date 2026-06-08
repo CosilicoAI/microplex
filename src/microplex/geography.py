@@ -28,7 +28,9 @@ TRACT_GEOID_LEN = STATE_LEN + COUNTY_LEN + TRACT_LEN
 BLOCK_GEOID_LEN = STATE_LEN + COUNTY_LEN + TRACT_LEN + BLOCK_LEN
 
 PartitionKey = tuple[Any, ...]
-PartitionFallbackResolver = Callable[[PartitionKey, tuple[PartitionKey, ...]], PartitionKey]
+PartitionFallbackResolver = Callable[
+    [PartitionKey, tuple[PartitionKey, ...]], PartitionKey
+]
 PartitionNormalizer = Callable[[Any], Any]
 
 
@@ -143,7 +145,9 @@ def nearest_numeric_partition_key(
 ) -> PartitionKey:
     """Resolve a missing partition key to the nearest numeric available key."""
     if len(requested_key) != 1:
-        raise ValueError("nearest_numeric_partition_key only supports one-column partitions")
+        raise ValueError(
+            "nearest_numeric_partition_key only supports one-column partitions"
+        )
     if not available_keys:
         raise ValueError("Cannot resolve nearest key without available partitions")
 
@@ -160,6 +164,48 @@ def nearest_numeric_partition_key(
 def normalize_us_state_fips(value: Any) -> str:
     """Compatibility helper for US state FIPS normalization."""
     return str(int(round(float(value)))).zfill(2)
+
+
+def normalize_string_code(value: Any) -> str:
+    """Normalize integer-like categorical geography codes to strings."""
+    if isinstance(value, str):
+        text = value.strip()
+        try:
+            numeric = float(text)
+        except ValueError:
+            return text
+        if numeric.is_integer():
+            return str(int(numeric))
+        return text
+    if isinstance(value, (int, np.integer)):
+        return str(int(value))
+    if isinstance(value, (float, np.floating)) and float(value).is_integer():
+        return str(int(value))
+    return str(value).strip()
+
+
+def _normalize_scalar(value: Any) -> Any:
+    if hasattr(value, "item"):
+        return value.item()
+    return value
+
+
+def _is_missing_partition_value(value: Any) -> bool:
+    if value is None:
+        return True
+    try:
+        missing = pd.isna(value)
+    except (TypeError, ValueError):
+        return False
+    if isinstance(missing, (np.ndarray, pd.Series, pd.Index, list, tuple)):
+        return False
+    return bool(missing)
+
+
+def _partition_values_equal(left: Any, right: Any) -> bool:
+    if _is_missing_partition_value(left) or _is_missing_partition_value(right):
+        return False
+    return bool(left == right)
 
 
 @dataclass
@@ -185,7 +231,9 @@ class ProbabilisticAtomicGeographyAssigner:
         if self.probability_column is None:
             self.probability_column = self.crosswalk.probability_column
         if self.probability_column is None:
-            raise ValueError("A probability column is required for probabilistic assignment")
+            raise ValueError(
+                "A probability column is required for probabilistic assignment"
+            )
         if self.probability_column not in self.crosswalk.data.columns:
             raise ValueError(
                 f"Probability column '{self.probability_column}' not found in crosswalk"
@@ -225,11 +273,15 @@ class ProbabilisticAtomicGeographyAssigner:
                     )
                 lookup_key = self.fallback_resolver(lookup_key, available_keys)
             group = self._group_lookup[lookup_key]
-            sampled_index = rng.choice(len(group["atomic_ids"]), p=group["probabilities"])
+            sampled_index = rng.choice(
+                len(group["atomic_ids"]), p=group["probabilities"]
+            )
             assigned_atomic_ids.append(group["atomic_ids"][sampled_index])
 
         result = frame.copy()
-        result[atomic_id_column or self.crosswalk.atomic_id_column] = assigned_atomic_ids
+        result[atomic_id_column or self.crosswalk.atomic_id_column] = (
+            assigned_atomic_ids
+        )
         return result
 
     def _build_group_lookup(self) -> dict[PartitionKey, dict[str, np.ndarray]]:
@@ -251,7 +303,9 @@ class ProbabilisticAtomicGeographyAssigner:
                 )
             group_lookup[normalized_key] = {
                 "atomic_ids": group[self.crosswalk.atomic_id_column].to_numpy(),
-                "probabilities": (probabilities / total_probability).to_numpy(dtype=float),
+                "probabilities": (probabilities / total_probability).to_numpy(
+                    dtype=float
+                ),
             }
         return group_lookup
 
@@ -260,10 +314,260 @@ class ProbabilisticAtomicGeographyAssigner:
         for column, value in zip(self.partition_columns, raw_key, strict=False):
             normalizer = self.partition_normalizers.get(column)
             normalized_value = normalizer(value) if normalizer is not None else value
-            if hasattr(normalized_value, "item"):
-                normalized_value = normalized_value.item()
-            normalized.append(normalized_value)
+            normalized.append(_normalize_scalar(normalized_value))
         return tuple(normalized)
+
+
+@dataclass(frozen=True)
+class LowestAvailableGeographyAssignmentPlan:
+    """Assign atomic geography using the most-specific available row geography.
+
+    ``partition_columns`` is ordered from most specific to least specific. For
+    each row, the assigner samples from the first non-missing column whose value
+    exists in the crosswalk. This models "assign a block within the lowest
+    available CPS geography" without hard-coding a country's geography names.
+    """
+
+    partition_columns: tuple[str, ...]
+    atomic_id_column: str
+    geography_columns: tuple[str, ...] = ()
+    probability_column: str | None = None
+    partition_normalizers: dict[str, PartitionNormalizer] = field(default_factory=dict)
+    assignment_level_column: str | None = "_geography_partition_column"
+    assignment_key_column: str | None = "_geography_partition_key"
+    sync_partition_columns: bool = True
+
+    def __post_init__(self) -> None:
+        if not self.partition_columns:
+            raise ValueError("partition_columns must list at least one geography level")
+
+    def requested_geography_columns(self) -> tuple[str, ...]:
+        """Columns to materialize from the assigned atomic geography."""
+        ordered_columns: list[str] = []
+        if self.sync_partition_columns:
+            ordered_columns.extend(self.partition_columns)
+        ordered_columns.extend(self.geography_columns)
+        return tuple(dict.fromkeys(ordered_columns))
+
+
+@dataclass
+class LowestAvailableAtomicGeographyAssigner:
+    """Sample atomic ids from the most-specific row geography with support."""
+
+    crosswalk: AtomicGeographyCrosswalk
+    plan: LowestAvailableGeographyAssignmentPlan
+
+    def __post_init__(self) -> None:
+        missing_columns = [
+            column
+            for column in self.plan.partition_columns
+            if column not in self.crosswalk.data.columns
+        ]
+        if missing_columns:
+            raise ValueError(
+                f"Partition columns not found in crosswalk: {sorted(missing_columns)}"
+            )
+        if self.plan.atomic_id_column != self.crosswalk.atomic_id_column:
+            raise ValueError(
+                "plan.atomic_id_column must match the crosswalk atomic_id_column "
+                f"('{self.crosswalk.atomic_id_column}')"
+            )
+        self._probability_column = (
+            self.plan.probability_column or self.crosswalk.probability_column
+        )
+        if self._probability_column is None:
+            raise ValueError(
+                "A probability column is required for geography assignment"
+            )
+        if self._probability_column not in self.crosswalk.data.columns:
+            raise ValueError(
+                f"Probability column '{self._probability_column}' not found in crosswalk"
+            )
+        self._normalized_partition_values = self._build_normalized_partition_values()
+        self._level_lookup = self._build_level_lookup()
+
+    def assign(
+        self,
+        frame: pd.DataFrame,
+        *,
+        random_state: int | None = None,
+        materialize: bool = True,
+        overwrite_geography: bool = True,
+    ) -> pd.DataFrame:
+        """Assign atomic geography ids and optionally materialize parent columns."""
+        available_columns = [
+            column for column in self.plan.partition_columns if column in frame.columns
+        ]
+        if not available_columns:
+            raise ValueError(
+                "No assignment partition columns found in frame; expected one of "
+                f"{list(self.plan.partition_columns)}"
+            )
+
+        rng = np.random.default_rng(random_state)
+        assigned_atomic_ids: list[Any] = []
+        assigned_levels: list[str] = []
+        assigned_keys: list[Any] = []
+
+        for row_index, row in frame.iterrows():
+            choice = self._choose_distribution(row)
+            if choice is None:
+                raise ValueError(
+                    "No atomic geography distribution available for row "
+                    f"{row_index}; checked columns {list(self.plan.partition_columns)}"
+                )
+            column, key, group = choice
+            sampled_index = rng.choice(
+                len(group["atomic_ids"]),
+                p=group["probabilities"],
+            )
+            assigned_atomic_ids.append(group["atomic_ids"][sampled_index])
+            assigned_levels.append(column)
+            assigned_keys.append(key)
+
+        result = frame.copy()
+        result[self.plan.atomic_id_column] = assigned_atomic_ids
+        if self.plan.assignment_level_column is not None:
+            result[self.plan.assignment_level_column] = assigned_levels
+        if self.plan.assignment_key_column is not None:
+            result[self.plan.assignment_key_column] = assigned_keys
+
+        if not materialize:
+            return result
+        return self.crosswalk.materialize(
+            result,
+            columns=self.plan.requested_geography_columns(),
+            atomic_id_column=self.plan.atomic_id_column,
+            overwrite=overwrite_geography,
+        )
+
+    def _build_normalized_partition_values(self) -> dict[str, pd.Series]:
+        return {
+            column: self.crosswalk.data[column].map(
+                lambda value, column=column: self._normalize_value(column, value)
+            )
+            for column in self.plan.partition_columns
+        }
+
+    def _build_level_lookup(self) -> dict[str, dict[Any, dict[str, np.ndarray]]]:
+        lookup: dict[str, dict[Any, dict[str, np.ndarray]]] = {}
+        for column in self.plan.partition_columns:
+            prepared = pd.DataFrame(
+                {
+                    "_microplex_partition_key": self._normalized_partition_values[
+                        column
+                    ],
+                    "_microplex_row_position": np.arange(len(self.crosswalk.data)),
+                }
+            )
+            prepared = prepared.loc[
+                ~prepared["_microplex_partition_key"].map(_is_missing_partition_value)
+            ]
+            column_lookup: dict[Any, dict[str, np.ndarray]] = {}
+            for key, index_group in prepared.groupby(
+                "_microplex_partition_key",
+                dropna=False,
+                sort=False,
+            ):
+                row_positions = index_group["_microplex_row_position"].to_numpy()
+                self._distribution_from_positions(
+                    row_positions,
+                    error_context=f"Partition {column}={key!r}",
+                )
+                column_lookup[_normalize_scalar(key)] = {"row_positions": row_positions}
+            lookup[column] = column_lookup
+        return lookup
+
+    def _choose_distribution(
+        self,
+        row: pd.Series,
+    ) -> tuple[str, Any, dict[str, np.ndarray]] | None:
+        row_values = self._row_partition_values(row)
+        for level_index, column in enumerate(self.plan.partition_columns):
+            key = row_values.get(column)
+            if key is None or _is_missing_partition_value(key):
+                continue
+            group = self._level_lookup[column].get(key)
+            if group is None:
+                continue
+            constraints = {
+                constraint_column: constraint_key
+                for constraint_column in self.plan.partition_columns[level_index:]
+                if (
+                    constraint_column in row_values
+                    and not _is_missing_partition_value(row_values[constraint_column])
+                )
+                for constraint_key in (row_values[constraint_column],)
+            }
+            constrained = self._constrain_group(
+                group,
+                constraints,
+                error_context=(
+                    f"row geography constraints for {column}={key!r}: {constraints}"
+                ),
+            )
+            return column, key, constrained
+        return None
+
+    def _row_partition_values(self, row: pd.Series) -> dict[str, Any]:
+        return {
+            column: self._normalize_value(column, row[column])
+            for column in self.plan.partition_columns
+            if column in row.index
+        }
+
+    def _constrain_group(
+        self,
+        group: dict[str, np.ndarray],
+        constraints: dict[str, Any],
+        *,
+        error_context: str,
+    ) -> dict[str, np.ndarray]:
+        row_positions = group["row_positions"]
+        selected = np.ones(len(row_positions), dtype=bool)
+        for column, key in constraints.items():
+            values = self._normalized_partition_values[column].iloc[row_positions]
+            matches = np.array(
+                [_partition_values_equal(value, key) for value in values],
+                dtype=bool,
+            )
+            selected &= matches
+        constrained_positions = row_positions[selected]
+        if len(constrained_positions) == 0:
+            raise ValueError(
+                f"No atomic geography distribution satisfies {error_context}"
+            )
+        return self._distribution_from_positions(
+            constrained_positions,
+            error_context=error_context,
+        )
+
+    def _distribution_from_positions(
+        self,
+        row_positions: np.ndarray,
+        *,
+        error_context: str,
+    ) -> dict[str, np.ndarray]:
+        rows = self.crosswalk.data.iloc[row_positions]
+        probabilities = pd.to_numeric(
+            rows[self._probability_column],
+            errors="coerce",
+        ).fillna(0.0)
+        total_probability = float(probabilities.sum())
+        if total_probability <= 0:
+            raise ValueError(f"{error_context} has non-positive total probability")
+        return {
+            "atomic_ids": rows[self.crosswalk.atomic_id_column].to_numpy(),
+            "probabilities": (probabilities / total_probability).to_numpy(dtype=float),
+        }
+
+    def _normalize_value(self, column: str, value: Any) -> Any:
+        value = _normalize_scalar(value)
+        if _is_missing_partition_value(value):
+            return value
+        normalizer = self.plan.partition_normalizers.get(column)
+        normalized = normalizer(value) if normalizer is not None else value
+        return _normalize_scalar(normalized)
 
 
 @dataclass(frozen=True)
@@ -342,7 +646,9 @@ class StaticGeographyProvider:
     ) -> AtomicGeographyCrosswalk:
         query = query or GeographyQuery()
         geography_columns = query.geography_columns or self.crosswalk.geography_columns
-        probability_column = query.probability_column or self.crosswalk.probability_column
+        probability_column = (
+            query.probability_column or self.crosswalk.probability_column
+        )
         return AtomicGeographyCrosswalk(
             data=self.crosswalk.data.copy(),
             atomic_id_column=self.crosswalk.atomic_id_column,
@@ -357,8 +663,12 @@ class StaticGeographyProvider:
         query = query or GeographyQuery()
         partition_columns = query.partition_columns or self.default_partition_columns
         if not partition_columns:
-            raise ValueError("partition_columns are required to build a geography assigner")
-        probability_column = query.probability_column or self.crosswalk.probability_column
+            raise ValueError(
+                "partition_columns are required to build a geography assigner"
+            )
+        probability_column = (
+            query.probability_column or self.crosswalk.probability_column
+        )
         return ProbabilisticAtomicGeographyAssigner(
             crosswalk=self.load_crosswalk(query),
             partition_columns=tuple(partition_columns),

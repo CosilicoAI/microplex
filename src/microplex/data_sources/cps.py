@@ -110,6 +110,11 @@ _CPS_TAX_UNIT_BASE_VARIABLES = (
     "agi_proxy",
 )
 
+_CPS_TAX_UNIT_HOUSEHOLD_VARIABLES = (
+    "state_fips",
+    "cbsa",
+)
+
 
 @dataclass
 class CPSDataset:
@@ -198,18 +203,31 @@ def _harmonize_tax_units(
         for column in available_aggregates.values():
             result[column] = result[column].fillna(0)
 
-    household_weight = households[["household_id", "household_weight"]].drop_duplicates(
-        "household_id"
-    )
+    household_columns = [
+        column
+        for column in (
+            "household_id",
+            "household_weight",
+            *_CPS_TAX_UNIT_HOUSEHOLD_VARIABLES,
+        )
+        if column in households.columns
+    ]
+    household_values = households[household_columns].drop_duplicates("household_id")
     result = result.drop(
-        columns=["household_weight"],
+        columns=[
+            "household_weight",
+            *[
+                column
+                for column in _CPS_TAX_UNIT_HOUSEHOLD_VARIABLES
+                if column in result.columns
+            ],
+        ],
         errors="ignore",
-    ).merge(household_weight, on="household_id", how="left")
+    ).merge(household_values, on="household_id", how="left")
     if result["household_weight"].isna().any():
         missing = result.loc[result["household_weight"].isna(), "household_id"].tolist()
         raise ValueError(
-            "CPS tax-unit table has household ids with no household_weight: "
-            f"{missing}"
+            f"CPS tax-unit table has household ids with no household_weight: {missing}"
         )
     result["weight"] = result["household_weight"]
     return result
@@ -269,6 +287,7 @@ class CPSAsecSourceProvider:
                         dict.fromkeys(
                             (
                                 *_CPS_TAX_UNIT_BASE_VARIABLES,
+                                *_CPS_TAX_UNIT_HOUSEHOLD_VARIABLES,
                                 *_CPS_TAX_UNIT_AGGREGATES.values(),
                             )
                         )
@@ -474,7 +493,9 @@ def load_cps_asec(
     if processed_path.exists():
         print(f"Loading processed CPS ASEC {year} from {processed_path}")
         persons = pl.read_parquet(processed_path)
-        household_processed_path = cache_dir / f"cps_asec_{year}_households_processed.parquet"
+        household_processed_path = (
+            cache_dir / f"cps_asec_{year}_households_processed.parquet"
+        )
         if household_processed_path.exists():
             households = pl.read_parquet(household_processed_path)
         else:
@@ -557,7 +578,9 @@ def load_cps_asec(
 
     # Cache processed data
     persons.write_parquet(processed_path)
-    households.write_parquet(cache_dir / f"cps_asec_{year}_households_processed.parquet")
+    households.write_parquet(
+        cache_dir / f"cps_asec_{year}_households_processed.parquet"
+    )
     print(f"Cached processed data to {processed_path}")
 
     return CPSDataset(
@@ -581,18 +604,18 @@ def _process_persons(df: pl.DataFrame, year: int) -> pl.DataFrame:
     if not selected:
         raise ValueError("No recognized variables found in person file")
 
-    result = df.select([
-        pl.col(census_name).alias(our_name)
-        for census_name, our_name in selected.items()
-    ])
+    result = df.select(
+        [
+            pl.col(census_name).alias(our_name)
+            for census_name, our_name in selected.items()
+        ]
+    )
 
     # Scale weights: CPS ASEC weights have 2 implied decimal places
     # See CPS documentation: A_FNLWGT is expressed in units of 1/100
     # Divide by 100 to get actual population representation
     if "weight" in result.columns:
-        result = result.with_columns(
-            (pl.col("weight") / 100).alias("weight")
-        )
+        result = result.with_columns((pl.col("weight") / 100).alias("weight"))
     if "march_supplement_weight" in result.columns:
         result = result.with_columns(
             (pl.col("march_supplement_weight") / 100).alias("march_supplement_weight")
@@ -600,28 +623,34 @@ def _process_persons(df: pl.DataFrame, year: int) -> pl.DataFrame:
 
     # Convert income values (negative values indicate no income or missing)
     income_cols = [
-        "wage_income", "self_employment_income", "interest_income",
-        "dividend_income", "rental_income", "social_security", "ssi",
-        "taxable_pension_income", "unemployment_compensation",
-        "public_assistance", "total_person_income"
+        "wage_income",
+        "self_employment_income",
+        "interest_income",
+        "dividend_income",
+        "rental_income",
+        "social_security",
+        "ssi",
+        "taxable_pension_income",
+        "unemployment_compensation",
+        "public_assistance",
+        "total_person_income",
     ]
 
     for col in income_cols:
         if col in result.columns:
             result = result.with_columns(
-                pl.when(pl.col(col) < 0)
-                .then(0)
-                .otherwise(pl.col(col))
-                .alias(col)
+                pl.when(pl.col(col) < 0).then(0).otherwise(pl.col(col)).alias(col)
             )
 
     # Add derived columns
     if "age" in result.columns:
-        result = result.with_columns([
-            (pl.col("age") >= 18).alias("is_adult"),
-            (pl.col("age") < 18).alias("is_child"),
-            (pl.col("age") >= 65).alias("is_senior"),
-        ])
+        result = result.with_columns(
+            [
+                (pl.col("age") >= 18).alias("is_adult"),
+                (pl.col("age") < 18).alias("is_child"),
+                (pl.col("age") >= 65).alias("is_senior"),
+            ]
+        )
 
     # Add year
     result = result.with_columns(pl.lit(year).alias("year"))
@@ -641,10 +670,12 @@ def _process_households(df: pl.DataFrame, year: int) -> pl.DataFrame:
     if not selected:
         raise ValueError("No recognized variables found in household file")
 
-    result = df.select([
-        pl.col(census_name).alias(our_name)
-        for census_name, our_name in selected.items()
-    ])
+    result = df.select(
+        [
+            pl.col(census_name).alias(our_name)
+            for census_name, our_name in selected.items()
+        ]
+    )
 
     # Scale weights: CPS ASEC weights have 2 implied decimal places
     if "household_weight" in result.columns:
@@ -662,20 +693,28 @@ def _derive_households(persons: pl.DataFrame) -> pl.DataFrame:
     if "household_id" not in persons.columns:
         raise ValueError("Cannot derive households without household_id")
 
-    households = persons.group_by("household_id").agg([
-        pl.len().alias("household_size"),
-        pl.col("weight").first().alias("household_weight"),
-        pl.col("state_fips").first() if "state_fips" in persons.columns else pl.lit(None).alias("state_fips"),
-        pl.col("total_person_income").sum().alias("household_total_income") if "total_person_income" in persons.columns else pl.lit(0).alias("household_total_income"),
-        pl.col("is_child").sum().alias("num_children") if "is_child" in persons.columns else pl.lit(0).alias("num_children"),
-        pl.col("is_adult").sum().alias("num_adults") if "is_adult" in persons.columns else pl.lit(0).alias("num_adults"),
-    ])
+    households = persons.group_by("household_id").agg(
+        [
+            pl.len().alias("household_size"),
+            pl.col("weight").first().alias("household_weight"),
+            pl.col("state_fips").first()
+            if "state_fips" in persons.columns
+            else pl.lit(None).alias("state_fips"),
+            pl.col("total_person_income").sum().alias("household_total_income")
+            if "total_person_income" in persons.columns
+            else pl.lit(0).alias("household_total_income"),
+            pl.col("is_child").sum().alias("num_children")
+            if "is_child" in persons.columns
+            else pl.lit(0).alias("num_children"),
+            pl.col("is_adult").sum().alias("num_adults")
+            if "is_adult" in persons.columns
+            else pl.lit(0).alias("num_adults"),
+        ]
+    )
 
     if "year" in persons.columns:
         year_val = persons.select("year").unique().to_series()[0]
-        households = households.with_columns(
-            pl.lit(year_val).alias("year")
-        )
+        households = households.with_columns(pl.lit(year_val).alias("year"))
 
     return households
 

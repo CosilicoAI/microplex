@@ -24,6 +24,7 @@ def _cps_dataset(*, year: int, cache_dir=None, download: bool = True) -> CPSData
             "household_id": [1, 2, 3, 4],
             "household_weight": [100.0, 200.0, 300.0, 400.0],
             "state_fips": [6, 36, 48, 12],
+            "cbsa": [41860, 35620, 19100, 33100],
             "household_size": [2, 1, 3, 1],
             "household_total_income": [70_000.0, 20_000.0, 120_000.0, 12_000.0],
         }
@@ -52,6 +53,33 @@ def _cps_dataset(*, year: int, cache_dir=None, download: bool = True) -> CPSData
         households=households,
         year=2025,
         source="fixture-cps",
+    )
+
+
+def _cps_dataset_with_missing_geography(
+    *,
+    year: int,
+    cache_dir=None,
+    download: bool = True,
+) -> CPSDataset:
+    dataset = _cps_dataset(year=year, cache_dir=cache_dir, download=download)
+    households = dataset.households.with_columns(
+        [
+            pl.when(pl.col("household_id") == 1)
+            .then(None)
+            .otherwise(pl.col("state_fips"))
+            .alias("state_fips"),
+            pl.when(pl.col("household_id") == 1)
+            .then(None)
+            .otherwise(pl.col("cbsa"))
+            .alias("cbsa"),
+        ]
+    )
+    return CPSDataset(
+        persons=dataset.persons,
+        households=households,
+        year=dataset.year,
+        source=dataset.source,
     )
 
 
@@ -97,6 +125,11 @@ def test_build_asec_puf_support_spine_spec_matches_registry_ids() -> None:
     assert spec.sources["cps_asec"].dataset == "cps_asec_2025_calendar_2024"
     assert spec.sources["puf"].dataset == "puf_2024"
     assert spec.spine.method.value == "support_spine"
+    assert spec.spine.synthetic_half.strip_to == [
+        "demographics",
+        "state_fips",
+        "cbsa",
+    ]
 
 
 def test_asec_puf_smoke_loads_sources_and_builds_support_spine() -> None:
@@ -107,6 +140,14 @@ def test_asec_puf_smoke_loads_sources_and_builds_support_spine() -> None:
     assert result.diagnostics["half_counts"] == {"cps_keep": 2, "synthetic_puf": 2}
     assert result.diagnostics["synthetic_puf_household_weight_sum"] == 0.0
     assert result.diagnostics["shared_missing"] == {"cps_asec": [], "puf": []}
+    assert result.diagnostics["geography_constraint_columns"] == [
+        "state_fips",
+        "cbsa",
+    ]
+    synthetic = result.run_result.halves["synthetic_puf"]
+    assert set(synthetic["state_fips"]) <= {6, 36, 48, 12}
+    assert set(synthetic["cbsa"]) <= {41860, 35620, 19100, 33100}
+    assert synthetic[["state_fips", "cbsa"]].notna().any(axis=1).all()
 
 
 def test_asec_puf_smoke_caps_loaded_source_rows() -> None:
@@ -118,6 +159,25 @@ def test_asec_puf_smoke_caps_loaded_source_rows() -> None:
 
     assert result.diagnostics["source_rows"] == {"cps_asec": 2, "puf": 2}
     assert result.diagnostics["half_counts"] == {"cps_keep": 1, "synthetic_puf": 1}
+
+
+def test_asec_puf_smoke_rejects_loaded_cps_rows_without_geography() -> None:
+    registry = (
+        SourceRegistry()
+        .register(
+            "cps_asec_2025_calendar_2024",
+            CPSAsecSourceProvider(loader=_cps_dataset_with_missing_geography),
+            default_entity=EntityType.TAX_UNIT,
+        )
+        .register(
+            "puf_2024",
+            PUFSourceProvider(loader=_puf_frame),
+            default_entity=EntityType.TAX_UNIT,
+        )
+    )
+
+    with pytest.raises(ValueError, match="no geography constraint values"):
+        run_asec_puf_support_spine_smoke(registry=registry)
 
 
 def test_asec_puf_smoke_cli_writes_json(tmp_path, monkeypatch) -> None:

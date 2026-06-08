@@ -24,6 +24,7 @@ def _cps_dataset(*, year: int, cache_dir=None, download: bool = True) -> CPSData
             "household_id": [1, 2],
             "household_weight": [100.0, 200.0],
             "state_fips": [6, 36],
+            "cbsa": [41860, 35620],
             "household_size": [2, 1],
             "household_total_income": [70_000.0, 20_000.0],
         }
@@ -95,6 +96,8 @@ def test_cps_provider_materializes_valid_entity_tables() -> None:
     assert tax_units["tax_unit_id"].tolist() == [1, 2]
     assert tax_units["household_weight"].tolist() == [100.0, 200.0]
     assert tax_units["weight"].tolist() == [100.0, 200.0]
+    assert tax_units["state_fips"].tolist() == [6, 36]
+    assert tax_units["cbsa"].tolist() == [41860, 35620]
     assert tax_units["employment_income"].tolist() == [65_000.0, 20_000.0]
     assert tax_units["self_employment_income"].tolist() == [5_000.0, 0.0]
     assert tax_units["taxable_interest_income"].tolist() == [150.0, 0.0]
