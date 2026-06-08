@@ -104,6 +104,14 @@ the calibrated frame plus stable diagnostics. It still refuses to calibrate
 without a spec-declared loaded target surface, a stable non-null unique record
 id, and an explicit `calibrate` section.
 
+### 5a. `microplex.source_registry` — provider-backed source resolution
+`SourceRegistry` bridges spec content to real provider loaders: it resolves each
+`sources[*].dataset` id through a registered `SourceProvider`, loads and
+validates an `ObservationFrame`, and selects the declared entity table for the
+frame-based runner. Sources with multiple entity tables must declare
+`sources.<name>.entity` in the spec or register a `default_entity`; otherwise
+resolution fails closed instead of guessing.
+
 ### 6. `microplex.stage_manifest` — strict stage artifact manifests
 Build stages can now write a self-verifying JSON manifest with schema version,
 stage id, declared seeds, parameters, metadata, and per-artifact relative path,
@@ -227,9 +235,9 @@ runs use the direct-venv path and `uv.lock` is left untouched.)
    on the immediate national target surface first.
 2. **The Arch provider move** as scoped above — generic record protocol +
    injected config + fresh generic tests.
-3. **Provider-backed `SourceRegistry`** behind `resolve_sources` so the spec's
-   `sources[*].dataset` ids load + harmonize real frames (currently the caller
-   passes already-loaded frames).
+3. **Real provider-backed source loaders** behind `SourceRegistry` for the US
+   data lane: ASEC/CPS and PUF first, then SCF/SIPP/ACS once the first thin
+   candidate flow is exercising real data.
 4. **`microplex-us/specs/us-2024.yaml`** — the pure-spec pack.
 5. **The real data build + validation harness vs. frozen eCPS** (blueprint §5,
    §6 step 6) — the multi-hour CPS/PUF run, explicitly out of scope here.

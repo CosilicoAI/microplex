@@ -216,6 +216,14 @@ class SourceSpec(_StrictModel):
     role: SourceRole = Field(
         ..., description="Whether this source is the spine or a donor."
     )
+    entity: str | None = Field(
+        default=None,
+        min_length=1,
+        description=(
+            "Entity/table to pass into the frame-based runner when a provider "
+            "materializes multiple entity tables."
+        ),
+    )
 
 
 class CloneSpec(_StrictModel):
