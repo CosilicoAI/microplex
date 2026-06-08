@@ -420,6 +420,45 @@ class TestRunStep:
         assert result.imputed == ["employment_income"]
         assert new_target["employment_income"].notna().all()
 
+    def test_fit_drops_incomplete_donor_rows(self) -> None:
+        runner = _runner()
+        recorder = _RecordingImputer()
+        runner._make_imputer = lambda: recorder
+        donor = _donor(5)
+        donor.loc[0, "age"] = np.nan
+        donor.loc[1, "employment_income"] = np.nan
+        donor.loc[2, "household_weight"] = np.nan
+        step = ImputationStep(
+            onto="synthetic",
+            **{"from": "puf"},
+            vars=["employment_income"],
+            weights="household_weight",
+            synthesize=True,
+        )
+
+        runner.run_step(step, donor=donor, target=_recipient())
+
+        assert recorder.fit_kwargs is not None
+        train = recorder.fit_kwargs["X_train"]
+        assert train.index.tolist() == [3, 4]
+        assert (
+            train[["age", "employment_income", "household_weight"]].notna().all().all()
+        )
+
+    def test_no_complete_donor_rows_raises(self) -> None:
+        runner = _runner()
+        donor = _donor(3)
+        donor["employment_income"] = np.nan
+        step = ImputationStep(
+            onto="synthetic",
+            **{"from": "puf"},
+            vars=["employment_income"],
+            synthesize=True,
+        )
+
+        with pytest.raises(ValueError, match="no complete donor rows"):
+            runner.run_step(step, donor=donor, target=_recipient())
+
     def test_missing_declared_weights_column_raises(self) -> None:
         runner = _runner()
         step = ImputationStep(

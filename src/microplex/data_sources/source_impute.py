@@ -23,6 +23,14 @@ from microplex.core.sources import (
     TimeStructure,
     apply_source_query,
 )
+from microplex.spec import (
+    BOTH_TOKEN,
+    ImputationOrder,
+    ImputationPhase,
+    ImputationStep,
+    MicroplexSpec,
+    VariableOperationKind,
+)
 
 _SUPPORTED_BUILDER_KINDS = frozenset(
     {"single_person_households", "household_rows", "raw_person_rows"}
@@ -207,6 +215,111 @@ class ManifestSourceImputeProvider:
         if not path.exists():
             raise FileNotFoundError(f"source-impute dataset not found: {path}")
         return path
+
+
+def compile_source_impute_steps_from_manifest(
+    spec: MicroplexSpec,
+    manifest: SourceImputeManifest | str | Path,
+    *,
+    imputation_steps: Sequence[str] | None = None,
+    onto: str = BOTH_TOKEN,
+    at: ImputationPhase = ImputationPhase.HALVES,
+    order: ImputationOrder = ImputationOrder.AS_DECLARED,
+    weights: str | None = None,
+    synthesize: bool = False,
+) -> list[ImputationStep]:
+    """Compile executable source-impute variable operations into steps.
+
+    Country packs declare source-imputation behavior in ``variables[*].mp_spec``
+    while the donor block manifest declares each source frame's target and
+    predictor surface. This helper joins those two declarative inputs and
+    returns ordinary :class:`~microplex.spec.ImputationStep` objects that the
+    generic runner can execute after the support spine is built.
+
+    Only ``kind: impute`` rows are executable here. ``open_decision`` rows stay
+    inert until the pack resolves them to a concrete operation, so loading an
+    ACS donor surface for rent/property-tax does not make those variables run
+    automatically.
+    """
+    source_manifest = (
+        manifest
+        if isinstance(manifest, SourceImputeManifest)
+        else SourceImputeManifest.from_path(manifest)
+    )
+    requested_steps = set(imputation_steps) if imputation_steps is not None else None
+    blocks_by_survey: dict[str, list[SourceImputeBlock]] = {}
+    for block in source_manifest.blocks.values():
+        blocks_by_survey.setdefault(block.survey_name, []).append(block)
+
+    grouped_variables: dict[tuple[str, str], list[str]] = {}
+    grouped_blocks: dict[tuple[str, str], SourceImputeBlock] = {}
+    unresolved: list[str] = []
+
+    for variable_name, variable in spec.variables.items():
+        operation = variable.mp_spec.operation if variable.mp_spec else None
+        if operation is None or operation.kind is not VariableOperationKind.IMPUTE:
+            continue
+        if operation.imputation_step is None or operation.source is None:
+            continue
+        if (
+            requested_steps is not None
+            and operation.imputation_step not in requested_steps
+        ):
+            continue
+
+        candidate_blocks = blocks_by_survey.get(operation.source, [])
+        if not candidate_blocks:
+            if requested_steps is not None:
+                unresolved.append(
+                    f"{variable_name} ({operation.imputation_step} from "
+                    f"{operation.source}: no manifest block)"
+                )
+            continue
+        matching_blocks = [
+            block
+            for block in candidate_blocks
+            if variable_name in block.target_variables
+        ]
+        if not matching_blocks:
+            unresolved.append(
+                f"{variable_name} ({operation.imputation_step} from "
+                f"{operation.source}: not a manifest target)"
+            )
+            continue
+        if len(matching_blocks) > 1:
+            block_names = [block.name for block in matching_blocks]
+            raise ValueError(
+                "source-impute variable operation is ambiguous across manifest "
+                f"blocks: {variable_name} appears in {block_names}"
+            )
+
+        block = matching_blocks[0]
+        key = (operation.imputation_step, block.name)
+        grouped_variables.setdefault(key, []).append(variable_name)
+        grouped_blocks[key] = block
+
+    if unresolved:
+        raise ValueError(
+            "source-impute variable operations are not backed by manifest target "
+            f"variables: {unresolved}"
+        )
+
+    steps: list[ImputationStep] = []
+    for key, variables in grouped_variables.items():
+        block = grouped_blocks[key]
+        steps.append(
+            ImputationStep(
+                onto=onto,
+                **{"from": block.survey_name},
+                vars=variables,
+                condition_on=list(block.predictors),
+                at=at,
+                order=order,
+                weights=weights,
+                synthesize=synthesize,
+            )
+        )
+    return steps
 
 
 def load_source_impute_block_table(
