@@ -104,10 +104,16 @@ _CPS_TAX_UNIT_AGGREGATES = {
 _CPS_TAX_UNIT_BASE_VARIABLES = (
     "household_id",
     "age",
+    "is_female",
+    "cps_race",
+    "is_married",
     "filing_status",
     "earned_income",
     "ctc_qualifying_children",
+    "own_children_in_household",
     "agi_proxy",
+    "interest_dividend_income",
+    "social_security_pension_income",
 )
 
 _CPS_TAX_UNIT_HOUSEHOLD_VARIABLES = (
@@ -177,6 +183,26 @@ def _sort_by_key(table: pd.DataFrame, key_column: str) -> pd.DataFrame:
     return table.sort_values(key_column).reset_index(drop=True)
 
 
+def _numeric_series_or_zero(frame: pd.DataFrame, column: str) -> pd.Series:
+    if column not in frame.columns:
+        return pd.Series(0.0, index=frame.index)
+    return pd.to_numeric(frame[column], errors="coerce").fillna(0)
+
+
+def _sum_components_or_existing(
+    frame: pd.DataFrame,
+    *,
+    output_column: str,
+    component_columns: tuple[str, ...],
+) -> pd.Series:
+    if any(column in frame.columns for column in component_columns):
+        total = pd.Series(0.0, index=frame.index)
+        for column in component_columns:
+            total = total + _numeric_series_or_zero(frame, column)
+        return total
+    return _numeric_series_or_zero(frame, output_column)
+
+
 def _harmonize_tax_units(
     tax_units: pd.DataFrame,
     households: pd.DataFrame,
@@ -202,6 +228,17 @@ def _harmonize_tax_units(
         ).merge(aggregated, on="household_id", how="left")
         for column in available_aggregates.values():
             result[column] = result[column].fillna(0)
+
+    result["interest_dividend_income"] = _sum_components_or_existing(
+        result,
+        output_column="interest_dividend_income",
+        component_columns=("taxable_interest_income", "ordinary_dividend_income"),
+    )
+    result["social_security_pension_income"] = _sum_components_or_existing(
+        result,
+        output_column="social_security_pension_income",
+        component_columns=("gross_social_security", "taxable_pension_income"),
+    )
 
     household_columns = [
         column

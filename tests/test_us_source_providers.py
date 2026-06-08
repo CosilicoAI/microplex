@@ -34,6 +34,8 @@ def _cps_dataset(*, year: int, cache_dir=None, download: bool = True) -> CPSData
             "household_id": [1, 1, 2],
             "person_number": [1, 2, 1],
             "age": [40, 38, 21],
+            "sex": [1, 2, 2],
+            "race": [1, 1, 2],
             "marital_status": [1, 1, 6],
             "wage_income": [50_000.0, 15_000.0, 20_000.0],
             "self_employment_income": [5_000.0, 0.0, 0.0],
@@ -53,6 +55,130 @@ def _cps_dataset(*, year: int, cache_dir=None, download: bool = True) -> CPSData
         households=households,
         year=year,
         source="test-cps",
+    )
+
+
+def _cps_dataset_out_of_order_ref(
+    *,
+    year: int,
+    cache_dir=None,
+    download: bool = True,
+) -> CPSDataset:
+    del cache_dir, download
+    households = pl.DataFrame(
+        {
+            "household_id": [1],
+            "household_weight": [100.0],
+            "state_fips": [6],
+            "cbsa": [41860],
+        }
+    )
+    persons = pl.DataFrame(
+        {
+            "household_id": [1, 1],
+            "person_number": [2, 1],
+            "age": [38, 40],
+            "sex": [2, 1],
+            "race": [2, 1],
+            "marital_status": [6, 1],
+            "wage_income": [15_000.0, 50_000.0],
+            "self_employment_income": [0.0, 5_000.0],
+            "interest_income": [50.0, 100.0],
+            "dividend_income": [25.0, 200.0],
+            "social_security": [0.0, 1_000.0],
+            "taxable_pension_income": [5.0, 40.0],
+            "weight": [10.0, 10.0],
+            "family_relationship": [2, 1],
+        }
+    )
+    return CPSDataset(
+        persons=persons,
+        households=households,
+        year=year,
+        source="test-cps-out-of-order-ref",
+    )
+
+
+def _cps_dataset_raw_income_columns(
+    *,
+    year: int,
+    cache_dir=None,
+    download: bool = True,
+) -> CPSDataset:
+    del cache_dir, download
+    households = pl.DataFrame(
+        {
+            "household_id": [1],
+            "household_weight": [100.0],
+            "state_fips": [6],
+            "cbsa": [41860],
+        }
+    )
+    persons = pl.DataFrame(
+        {
+            "household_id": [1, 1],
+            "PH_SEQ": [1, 1],
+            "A_LINENO": [1, 2],
+            "A_AGE": [40, 38],
+            "A_SEX": [1, 2],
+            "PRDTRACE": [1, 1],
+            "A_MARITL": [1, 1],
+            "WSAL_VAL": [50_000.0, 15_000.0],
+            "SEMP_VAL": [5_000.0, 0.0],
+            "INT_VAL": [100.0, 50.0],
+            "DIV_VAL": [200.0, 25.0],
+            "SS_VAL": [1_000.0, 0.0],
+            "PNSN_VAL": [40.0, 5.0],
+            "A_FNLWGT": [10.0, 10.0],
+        }
+    )
+    return CPSDataset(
+        persons=persons,
+        households=households,
+        year=year,
+        source="test-cps-raw-income-columns",
+    )
+
+
+def _cps_dataset_relationship_children(
+    *,
+    year: int,
+    cache_dir=None,
+    download: bool = True,
+) -> CPSDataset:
+    del cache_dir, download
+    households = pl.DataFrame(
+        {
+            "household_id": [1],
+            "household_weight": [100.0],
+            "state_fips": [6],
+            "cbsa": [41860],
+        }
+    )
+    persons = pl.DataFrame(
+        {
+            "household_id": [1, 1, 1],
+            "person_number": [1, 2, 3],
+            "age": [40, 10, 12],
+            "sex": [1, 2, 1],
+            "race": [1, 1, 1],
+            "marital_status": [6, 6, 6],
+            "wage_income": [50_000.0, 0.0, 0.0],
+            "self_employment_income": [0.0, 0.0, 0.0],
+            "interest_income": [0.0, 0.0, 0.0],
+            "dividend_income": [0.0, 0.0, 0.0],
+            "social_security": [0.0, 0.0, 0.0],
+            "taxable_pension_income": [0.0, 0.0, 0.0],
+            "weight": [10.0, 10.0, 10.0],
+            "is_child": [False, True, True],
+            "family_relationship": [1, 3, 4],
+        }
+    )
+    return CPSDataset(
+        persons=persons,
+        households=households,
+        year=year,
+        source="test-cps-relationship-children",
     )
 
 
@@ -98,6 +224,10 @@ def test_cps_provider_materializes_valid_entity_tables() -> None:
     assert tax_units["weight"].tolist() == [100.0, 200.0]
     assert tax_units["state_fips"].tolist() == [6, 36]
     assert tax_units["cbsa"].tolist() == [41860, 35620]
+    assert tax_units["is_female"].tolist() == [False, True]
+    assert tax_units["cps_race"].tolist() == [1, 2]
+    assert tax_units["is_married"].tolist() == [True, False]
+    assert tax_units["own_children_in_household"].tolist() == [0, 0]
     assert tax_units["employment_income"].tolist() == [65_000.0, 20_000.0]
     assert tax_units["self_employment_income"].tolist() == [5_000.0, 0.0]
     assert tax_units["taxable_interest_income"].tolist() == [150.0, 0.0]
@@ -105,6 +235,8 @@ def test_cps_provider_materializes_valid_entity_tables() -> None:
     assert tax_units["rental_income"].tolist() == [13.0, 0.0]
     assert tax_units["gross_social_security"].tolist() == [1000.0, 500.0]
     assert tax_units["taxable_pension_income"].tolist() == [45.0, 20.0]
+    assert tax_units["interest_dividend_income"].tolist() == [375.0, 0.0]
+    assert tax_units["social_security_pension_income"].tolist() == [1045.0, 520.0]
     assert tax_units["unemployment_compensation"].tolist() == [25.0, 10.0]
     assert tax_units["year"].tolist() == [2024, 2024]
     assert {
@@ -114,6 +246,51 @@ def test_cps_provider_materializes_valid_entity_tables() -> None:
         (EntityType.HOUSEHOLD, EntityType.PERSON),
         (EntityType.HOUSEHOLD, EntityType.TAX_UNIT),
     }
+
+
+def test_cps_provider_uses_processed_person_number_for_reference_person() -> None:
+    provider = CPSAsecSourceProvider(
+        asec_year=2025,
+        calendar_year=2024,
+        loader=_cps_dataset_out_of_order_ref,
+    )
+
+    frame = provider.load_frame(SourceQuery(period=2024))
+
+    tax_units = frame.tables[EntityType.TAX_UNIT]
+    assert tax_units["age"].tolist() == [40]
+    assert tax_units["is_female"].tolist() == [False]
+    assert tax_units["cps_race"].tolist() == [1]
+    assert tax_units["is_married"].tolist() == [True]
+
+
+def test_cps_provider_preserves_raw_transform_income_predictor_sums() -> None:
+    provider = CPSAsecSourceProvider(
+        asec_year=2025,
+        calendar_year=2024,
+        loader=_cps_dataset_raw_income_columns,
+    )
+
+    frame = provider.load_frame(SourceQuery(period=2024))
+
+    tax_units = frame.tables[EntityType.TAX_UNIT]
+    assert tax_units["interest_dividend_income"].tolist() == [375.0]
+    assert tax_units["social_security_pension_income"].tolist() == [1045.0]
+    assert tax_units["agi_proxy"].tolist() == [70_375.0]
+
+
+def test_cps_provider_counts_own_children_from_relationship_codes() -> None:
+    provider = CPSAsecSourceProvider(
+        asec_year=2025,
+        calendar_year=2024,
+        loader=_cps_dataset_relationship_children,
+    )
+
+    frame = provider.load_frame(SourceQuery(period=2024))
+
+    tax_units = frame.tables[EntityType.TAX_UNIT]
+    assert tax_units["own_children_in_household"].tolist() == [1]
+    assert tax_units["ctc_qualifying_children"].tolist() == [1]
 
 
 def test_puf_provider_materializes_valid_tax_unit_table() -> None:
