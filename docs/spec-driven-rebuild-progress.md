@@ -112,6 +112,15 @@ frame-based runner. Sources with multiple entity tables must declare
 `sources.<name>.entity` in the spec or register a `default_entity`; otherwise
 resolution fails closed instead of guessing.
 
+### 5b. `microplex.data_sources` — first ASEC+PUF source providers
+The first real-data providers now materialize validated `ObservationFrame`s for
+the US ASEC/CPS spine and PUF tax donor. `CPSAsecSourceProvider` exposes
+household, person, and tax-unit tables and defaults the frame-based runner to
+tax units; `PUFSourceProvider` exposes a tax-unit table with stable ids and
+weights. `create_us_asec_puf_source_registry` registers only the first
+critical source pair (`cps_asec_2025_calendar_2024` and `puf_2024`) so the
+pipeline can exercise ASEC+PUF before adding SCF/SIPP/ACS.
+
 ### 6. `microplex.stage_manifest` — strict stage artifact manifests
 Build stages can now write a self-verifying JSON manifest with schema version,
 stage id, declared seeds, parameters, metadata, and per-artifact relative path,
@@ -235,9 +244,9 @@ runs use the direct-venv path and `uv.lock` is left untouched.)
    on the immediate national target surface first.
 2. **The Arch provider move** as scoped above — generic record protocol +
    injected config + fresh generic tests.
-3. **Real provider-backed source loaders** behind `SourceRegistry` for the US
-   data lane: ASEC/CPS and PUF first, then SCF/SIPP/ACS once the first thin
-   candidate flow is exercising real data.
+3. **Continue provider-backed source loading** behind `SourceRegistry` for the
+   US data lane: exercise the new ASEC/CPS+PUF pair on real data first, then add
+   SCF/SIPP/ACS providers once that thin flow is running.
 4. **`microplex-us/specs/us-2024.yaml`** — the pure-spec pack.
 5. **The real data build + validation harness vs. frozen eCPS** (blueprint §5,
    §6 step 6) — the multi-hour CPS/PUF run, explicitly out of scope here.
