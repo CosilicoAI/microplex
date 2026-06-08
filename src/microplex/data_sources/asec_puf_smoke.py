@@ -13,13 +13,9 @@ import pandas as pd
 
 from microplex.data_sources.census_blocks import CensusBlockCrosswalkProvider
 from microplex.data_sources.puf import SHARED_VARS
-from microplex.data_sources.source_impute import (
-    SourceImputeManifest,
-    compile_source_impute_steps_from_manifest,
-)
 from microplex.data_sources.us_registry import (
     create_us_asec_puf_source_registry,
-    register_us_source_impute_blocks,
+    register_us_declared_source_impute_blocks,
 )
 from microplex.geography import (
     LowestAvailableAtomicGeographyAssigner,
@@ -27,15 +23,10 @@ from microplex.geography import (
     normalize_string_code,
     normalize_us_state_fips,
 )
-from microplex.imputation import ImputationRunner, ImputationStepResult
-from microplex.run import RunResult, run_spec
+from microplex.imputation import ImputationStepResult
+from microplex.run import RunResult, run_source_impute_stage, run_spec
 from microplex.source_registry import SourceRegistry
-from microplex.spec import (
-    MicroplexSpec,
-    VariableOperationKind,
-    load_spec,
-    load_spec_dict,
-)
+from microplex.spec import MicroplexSpec, load_spec, load_spec_dict
 
 DEFAULT_DEMOGRAPHIC_COLUMNS: tuple[str, ...] = (
     "age",
@@ -193,44 +184,29 @@ def run_asec_puf_support_spine_smoke(
         source_impute_spec = load_spec(
             source_impute_spec_path or Path("packs/us/specs/us-2024.yaml")
         )
-        source_impute_manifest = SourceImputeManifest.from_path(
-            source_impute_manifest_path
+        selected_blocks = (
+            tuple(source_impute_blocks) if source_impute_blocks is not None else None
         )
-        user_selected_blocks = source_impute_blocks is not None
-        if source_impute_blocks is None:
-            source_impute_blocks = tuple(source_impute_manifest.blocks)
-        else:
-            source_impute_manifest = SourceImputeManifest(
-                blocks={
-                    block_name: source_impute_manifest.block(block_name)
-                    for block_name in source_impute_blocks
-                }
-            )
-        register_us_source_impute_blocks(
+        register_us_declared_source_impute_blocks(
             source_registry,
+            spec=source_impute_spec,
             manifest_path=source_impute_manifest_path,
             storage_dir=source_impute_storage_dir,
             max_rows=max_source_impute_rows,
-            blocks=tuple(source_impute_blocks),
+            blocks=selected_blocks,
         )
-        run_result, source_impute_sources, source_impute_results = (
-            _run_post_geography_source_imputation(
-                run_result,
-                source_registry=source_registry,
-                source_impute_spec=source_impute_spec,
-                source_impute_manifest=source_impute_manifest,
-                imputation_steps=(
-                    _backed_source_impute_steps(
-                        source_impute_spec,
-                        source_impute_manifest,
-                        source_impute_imputation_steps,
-                    )
-                    if user_selected_blocks
-                    else source_impute_imputation_steps
-                ),
-                seed=seed,
-            )
+        source_impute_stage = run_source_impute_stage(
+            run_result,
+            source_impute_spec,
+            source_registry,
+            source_impute_manifest=source_impute_manifest_path,
+            source_impute_blocks=selected_blocks,
+            source_impute_imputation_steps=source_impute_imputation_steps,
+            seed=seed,
         )
+        run_result = source_impute_stage.run_result
+        source_impute_sources = source_impute_stage.sources
+        source_impute_results = source_impute_stage.imputation_results
     diagnostics = _diagnostics(
         spec=spec,
         sources=sources,
@@ -437,85 +413,6 @@ def _validate_run_result(
                     raise ValueError(
                         f"source-imputed variable {variable!r} contains missing values"
                     )
-
-
-def _run_post_geography_source_imputation(
-    run_result: RunResult,
-    *,
-    source_registry: SourceRegistry,
-    source_impute_spec: MicroplexSpec,
-    source_impute_manifest: SourceImputeManifest,
-    imputation_steps: Sequence[str] | None,
-    seed: int,
-) -> tuple[RunResult, Mapping[str, pd.DataFrame], list[ImputationStepResult]]:
-    steps = compile_source_impute_steps_from_manifest(
-        source_impute_spec,
-        source_impute_manifest,
-        imputation_steps=imputation_steps,
-    )
-    if not steps:
-        return run_result, {}, []
-
-    source_names = tuple(dict.fromkeys(step.from_ for step in steps))
-    donors = {
-        source_name: source_registry.resolve_source(source_impute_spec, source_name)
-        for source_name in source_names
-    }
-    runner = ImputationRunner(seed=seed)
-    halves, results = runner.run(
-        steps,
-        halves=run_result.halves,
-        donors=donors,
-    )
-    return (
-        replace(
-            run_result,
-            halves=halves,
-            frame=_restack_halves(halves, run_result),
-            imputation_results=[*run_result.imputation_results, *results],
-        ),
-        donors,
-        results,
-    )
-
-
-def _backed_source_impute_steps(
-    spec: MicroplexSpec,
-    manifest: SourceImputeManifest,
-    imputation_steps: Sequence[str],
-) -> tuple[str, ...]:
-    requested = set(imputation_steps)
-    if not requested:
-        return ()
-    backed_steps: list[str] = []
-    for variable_name, variable in spec.variables.items():
-        operation = variable.mp_spec.operation if variable.mp_spec else None
-        if operation is None or operation.kind is not VariableOperationKind.IMPUTE:
-            continue
-        if operation.imputation_step is None or operation.source is None:
-            continue
-        if operation.imputation_step not in requested:
-            continue
-        if not any(
-            operation.source == block.survey_name
-            and variable_name in block.target_variables
-            for block in manifest.blocks.values()
-        ):
-            continue
-        if operation.imputation_step not in backed_steps:
-            backed_steps.append(operation.imputation_step)
-    return tuple(backed_steps)
-
-
-def _restack_halves(
-    halves: Mapping[str, pd.DataFrame],
-    run_result: RunResult,
-) -> pd.DataFrame:
-    ordered = [halves[name] for name in run_result.spine.halves if name in halves]
-    extras = [
-        frame for name, frame in halves.items() if name not in run_result.spine.halves
-    ]
-    return pd.concat(ordered + extras, axis=0, ignore_index=True)
 
 
 def _assign_block_geography(

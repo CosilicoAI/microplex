@@ -29,6 +29,7 @@ from microplex.run import (
     PENDING_STAGES,
     SpecCalibrationResult,
     resolve_sources,
+    run_source_impute_stage,
     run_spec,
 )
 from microplex.source_registry import SourceRegistry
@@ -934,6 +935,102 @@ class TestRunSpec:
         ]
         assert len(source_impute_calls) == 2
         assert all(call["predictors"] == ["age"] for call in source_impute_calls)
+
+    def test_run_source_impute_stage_resolves_donors_from_registry(
+        self,
+        monkeypatch,
+    ) -> None:
+        calls = _install_recording_imputer(monkeypatch)
+        data = _source_impute_spec_dict()
+        data["transforms"] = []
+        spec = load_spec_dict(data)
+        sources = _sources_with_block_geography()
+        base_result = _run_spec(
+            spec,
+            sources,
+            demographic_columns=DEMOGRAPHIC_COLS,
+        )
+        registry = SourceRegistry().register(
+            "scf_2022",
+            _registry_provider("scf_2022", sources["scf"]),
+            default_entity=EntityType.TAX_UNIT,
+        )
+
+        stage = run_source_impute_stage(
+            base_result,
+            spec,
+            registry,
+            source_impute_manifest=_source_impute_manifest(),
+            demographic_columns=DEMOGRAPHIC_COLS,
+        )
+
+        assert set(stage.sources) == {"scf"}
+        assert stage.run_result.frame["source_impute_asset"].notna().all()
+        assert [result.onto for result in stage.imputation_results] == [
+            "cps_keep",
+            "synthetic_puf",
+        ]
+        source_impute_calls = [
+            call
+            for call in calls
+            if call["imputed_variables"] == ["source_impute_asset"]
+        ]
+        assert len(source_impute_calls) == 2
+        assert all(call["predictors"] == ["age"] for call in source_impute_calls)
+
+    def test_run_source_impute_stage_rejects_post_transform_result(
+        self,
+        monkeypatch,
+    ) -> None:
+        calls = _install_recording_imputer(monkeypatch)
+        spec = load_spec_dict(_source_impute_spec_dict())
+        transformed_result = _run_spec(
+            spec,
+            _sources_with_block_geography(),
+            demographic_columns=DEMOGRAPHIC_COLS,
+        )
+
+        with pytest.raises(ValueError, match="pre-transform RunResult"):
+            run_source_impute_stage(
+                transformed_result,
+                spec,
+                _sources_with_block_geography(),
+                source_impute_manifest=_source_impute_manifest(),
+                demographic_columns=DEMOGRAPHIC_COLS,
+            )
+
+        assert not any(
+            call["imputed_variables"] == ["source_impute_asset"] for call in calls
+        )
+
+    def test_run_source_impute_stage_rejects_post_transform_overwrite(
+        self,
+        monkeypatch,
+    ) -> None:
+        calls = _install_recording_imputer(monkeypatch)
+        data = _source_impute_spec_dict()
+        data["transforms"] = [
+            {"derive": {"target": "employment_income", "expr": "employment_income + 1"}}
+        ]
+        spec = load_spec_dict(data)
+        transformed_result = _run_spec(
+            spec,
+            _sources_with_block_geography(),
+            demographic_columns=DEMOGRAPHIC_COLS,
+        )
+
+        with pytest.raises(ValueError, match="frame values match its halves"):
+            run_source_impute_stage(
+                transformed_result,
+                spec,
+                _sources_with_block_geography(),
+                source_impute_manifest=_source_impute_manifest(),
+                demographic_columns=DEMOGRAPHIC_COLS,
+            )
+
+        assert not any(
+            call["imputed_variables"] == ["source_impute_asset"] for call in calls
+        )
 
     def test_source_impute_step_filter_applies_after_block_filter(
         self,
