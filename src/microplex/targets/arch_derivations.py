@@ -52,6 +52,9 @@ __all__ = [
     "reference_total",
     "soi_total_for_year",
     "default_total_scope",
+    "bea_state_employment_income_before_lsr",
+    "with_bea_employment_income_before_lsr",
+    "bea_national_wages_record",
 ]
 
 
@@ -93,6 +96,9 @@ class ArchTargetRecord:
     concept_relation: str | None = None
     concept_authority: str | None = None
     concept_evidence_notes: str | None = None
+    stratum_name: str | None = None
+    concept_evidence_url: str | None = None
+    legal_vintage: str | None = None
 
 
 #: output variable -> the component variables that sum into it.
@@ -633,6 +639,227 @@ def age_soi_records(
                 )
             )
     return aged
+
+
+#: BEA NIPA national-wages concept identifiers (US/eCPS defaults).
+DEFAULT_BEA_NIPA_WAGE_CONCEPTS = ("bea_nipa.wages_and_salaries",)
+DEFAULT_BEA_NIPA_SOURCE_CONCEPTS = ("bea_nipa.a034rc_wages_and_salaries",)
+
+#: variable -> component role (wages/supplements/contributions/residence_adjustment).
+BeaComponentMap = Mapping[str, str]
+BeaRecordBuilderFn = Callable[..., ArchTargetRecord]
+
+
+def bea_national_wages_record(
+    records: Sequence[ArchTargetRecord],
+    *,
+    output_variable: str,
+    normalize_source: NormalizeSourceFn = default_normalize_source,
+    geo_level: Callable[[ArchTargetRecord], str] = _normalized_geo_level,
+    wage_concepts: Sequence[str] = DEFAULT_BEA_NIPA_WAGE_CONCEPTS,
+    source_concepts: Sequence[str] = DEFAULT_BEA_NIPA_SOURCE_CONCEPTS,
+) -> ArchTargetRecord | None:
+    """The national BEA NIPA wages_and_salaries total record, or ``None``."""
+    wage_concept_set = set(wage_concepts)
+    source_concept_set = set(source_concepts)
+    candidates = [
+        record
+        for record in records
+        if normalize_source(record.source) == "BEA"
+        and record.variable == output_variable
+        and record.target_type == "AMOUNT"
+        and geo_level(record) in {"national", "country"}
+        and (
+            record.concept in wage_concept_set
+            or record.source_concept in source_concept_set
+            or "nipa" in str(record.source_record_id or "").lower()
+        )
+    ]
+    if not candidates:
+        return None
+    return sorted(
+        candidates,
+        key=lambda record: (
+            record.concept in wage_concept_set,
+            bool(record.source_record_id),
+            int(record.target_id),
+        ),
+        reverse=True,
+    )[0]
+
+
+def bea_state_employment_income_before_lsr(
+    records: Sequence[ArchTargetRecord],
+    *,
+    national_wages: ArchTargetRecord,
+    required_states: Sequence[str],
+    wage_component_variables: BeaComponentMap,
+    output_variable: str,
+    state_fips_of: StateFipsFn = lambda record: record.geography_id,
+    geo_level: Callable[[ArchTargetRecord], str] = _normalized_geo_level,
+    normalize_source: NormalizeSourceFn = default_normalize_source,
+    build_record: BeaRecordBuilderFn | None = None,
+) -> list[ArchTargetRecord]:
+    """Synthesize residence-adjusted, nationally-reconciled state wage targets.
+
+    BEA method (faithful port): for each state carrying the full set of wage
+    components (wages, supplements, contributions, residence_adjustment),
+    allocate the residence adjustment to wages by
+    ``wages / (wages + supplements + contributions)``, then scale every state so
+    the residence-adjusted total equals the national BEA NIPA wages total. Emits
+    one ``output_variable`` AMOUNT record per state. Returns ``[]`` unless all
+    ``required_states`` are present with all four component roles, and bails if
+    any per-state denominator or the national total is non-positive.
+    """
+    builder = build_record or _default_bea_state_record
+    required = frozenset(required_states)
+    required_roles = set(wage_component_variables.values())
+
+    components_by_state: dict[str, dict[str, ArchTargetRecord]] = {}
+    for record in records:
+        if normalize_source(record.source) != "BEA":
+            continue
+        role = wage_component_variables.get(record.variable)
+        if role is None:
+            continue
+        if geo_level(record) != "state":
+            continue
+        state_fips = state_fips_of(record)
+        if state_fips is None or state_fips not in required:
+            continue
+        components_by_state.setdefault(state_fips, {}).setdefault(role, record)
+
+    if not required or set(components_by_state) != required:
+        return []
+    if any(set(roles) != required_roles for roles in components_by_state.values()):
+        return []
+
+    adjusted_by_state: dict[str, float] = {}
+    for state_fips, components in components_by_state.items():
+        wages = components["wages"].value
+        supplements = components["supplements"].value
+        contributions = components["contributions"].value
+        residence_adjustment = components["residence_adjustment"].value
+        denominator = wages + supplements + contributions
+        if denominator <= 0:
+            return []
+        adjusted_by_state[state_fips] = (
+            wages + residence_adjustment * wages / denominator
+        )
+
+    adjusted_total = sum(adjusted_by_state.values())
+    if adjusted_total <= 0:
+        return []
+    scale_factor = national_wages.value / adjusted_total
+
+    return [
+        builder(
+            state_fips=state_fips,
+            state_components=components_by_state[state_fips],
+            national_wages=national_wages,
+            output_variable=output_variable,
+            value=adjusted_by_state[state_fips] * scale_factor,
+            scale_factor=scale_factor,
+        )
+        for state_fips in sorted(components_by_state)
+    ]
+
+
+def with_bea_employment_income_before_lsr(
+    records: Sequence[ArchTargetRecord],
+    *,
+    national_wages: ArchTargetRecord,
+    **kwargs: Any,
+) -> list[ArchTargetRecord]:
+    """Return ``records`` plus the synthesized BEA state wage records."""
+    derived = bea_state_employment_income_before_lsr(
+        records, national_wages=national_wages, **kwargs
+    )
+    if not derived:
+        return list(records)
+    return [*records, *derived]
+
+
+def _default_bea_state_record(
+    *,
+    state_fips: str,
+    state_components: dict[str, ArchTargetRecord],
+    national_wages: ArchTargetRecord,
+    output_variable: str,
+    value: float,
+    scale_factor: float,
+    state_abbr_of: Callable[[str], str] = lambda fips: fips,
+) -> ArchTargetRecord:
+    """Faithful port of the synthetic BEA state-wage record builder."""
+    component_records = tuple(
+        state_components[role]
+        for role in ("wages", "supplements", "contributions", "residence_adjustment")
+    )
+    first = component_records[0]
+    digest = sha1(
+        repr(
+            (
+                "bea_state_employment_income_before_lsr",
+                first.period,
+                state_fips,
+                tuple(r.source_record_id or r.target_id for r in component_records),
+                national_wages.source_record_id or national_wages.target_id,
+            )
+        ).encode("utf-8")
+    ).hexdigest()
+    source_cell_keys = tuple(
+        dict.fromkeys(
+            key
+            for record in (*component_records, national_wages)
+            for key in record.source_cell_keys
+        )
+    )
+    source_row_keys = tuple(
+        dict.fromkeys(
+            key
+            for record in (*component_records, national_wages)
+            for key in (
+                record.source_row_keys
+                or (str(record.source_record_id or record.target_id),)
+            )
+        )
+    )
+    state_abbr = state_abbr_of(state_fips)
+    notes = (
+        "Microplex derived BEA state employment_income_before_lsr from "
+        "SAINC5N line 50 wages, line 60 supplements, line 36 contributions, "
+        "and line 42 residence adjustment. Residence adjustment is allocated "
+        "to wages by wages / (wages + supplements + contributions), then "
+        f"scaled to national BEA NIPA wages with factor {scale_factor:.12g}."
+    )
+    return replace(
+        first,
+        target_id=-int(digest[:12], 16),
+        stratum_id=-int(digest[12:20], 16),
+        variable=output_variable,
+        value=float(value),
+        target_type="AMOUNT",
+        source_table="BEA Regional SAINC5N residence-adjusted state wages",
+        source_url=first.source_url or national_wages.source_url,
+        notes=notes,
+        stratum_name=f"{state_abbr} residence-adjusted wages",
+        constraints=(),
+        aggregate_fact_key=f"microplex.derived.bea_state_wages.{first.period}.{state_fips}",
+        semantic_fact_key=f"microplex.semantic.bea_state_wages.{first.period}.{state_fips}",
+        source_record_id=f"microplex.derived.bea_state_wages.{first.period}.{state_fips}",
+        source_cell_keys=source_cell_keys,
+        source_row_keys=source_row_keys,
+        concept="policyengine_us.employment_income_before_lsr",
+        source_concept="bea_regional.sainc5n_residence_adjusted_wages_scaled_to_nipa",
+        concept_relation="derived",
+        concept_authority="microplex-us",
+        concept_evidence_url=national_wages.concept_evidence_url
+        or first.concept_evidence_url,
+        concept_evidence_notes=notes,
+        legal_vintage=national_wages.legal_vintage or first.legal_vintage,
+        source_target_id=None,
+        source_stratum_id=None,
+    )
 
 
 def _component_sum_record_key(

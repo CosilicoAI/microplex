@@ -8,6 +8,8 @@ from microplex.targets.arch_derivations import (
     ArchTargetRecord,
     SOIAgingFactors,
     age_soi_records,
+    bea_national_wages_record,
+    bea_state_employment_income_before_lsr,
     component_sum_records,
     default_total_scope,
     is_ssa_carry_forward_candidate,
@@ -471,3 +473,117 @@ def test_default_total_scope():
         _rec("x", 1.0, constraints=(("is_tax_filer", "==", "1"),))
     )
     assert not default_total_scope(_rec("x", 1.0, constraints=(("age", ">=", "65"),)))
+
+
+# --- BEA employment_income_before_lsr ---
+
+WAGE_COMPONENTS = {
+    "w": "wages",
+    "s": "supplements",
+    "c": "contributions",
+    "ra": "residence_adjustment",
+}
+BEA_OUTPUT = "employment_income_before_lsr"
+
+
+def _bea(variable: str, value: float, fips: str) -> ArchTargetRecord:
+    return _rec(
+        variable, value, source="BEA", geographic_level="STATE", geography_id=fips
+    )
+
+
+def _national_wages(value: float) -> ArchTargetRecord:
+    return _rec(
+        BEA_OUTPUT,
+        value,
+        source="BEA",
+        geographic_level="NATIONAL",
+        geography_id=None,
+        concept="bea_nipa.wages_and_salaries",
+    )
+
+
+def _bea_state_records(fips, w, s, c, ra) -> list[ArchTargetRecord]:
+    return [
+        _bea("w", w, fips),
+        _bea("s", s, fips),
+        _bea("c", c, fips),
+        _bea("ra", ra, fips),
+    ]
+
+
+def test_bea_synthesizes_residence_adjusted_scaled_to_national():
+    records = [
+        *_bea_state_records("06", 100.0, 20.0, 10.0, 5.0),
+        *_bea_state_records("36", 200.0, 40.0, 20.0, 10.0),
+    ]
+    out = bea_state_employment_income_before_lsr(
+        records,
+        national_wages=_national_wages(400.0),
+        required_states=("06", "36"),
+        wage_component_variables=WAGE_COMPONENTS,
+        output_variable=BEA_OUTPUT,
+    )
+    assert len(out) == 2
+    assert all(r.variable == BEA_OUTPUT for r in out)
+    assert {r.geography_id for r in out} == {"06", "36"}
+    # residence-adjusted state values are scaled to match the national total.
+    assert round(sum(r.value for r in out), 6) == 400.0
+    assert all(r.value > 0 for r in out)
+    assert all(r.concept == "policyengine_us.employment_income_before_lsr" for r in out)
+
+
+def test_bea_returns_empty_when_state_missing_a_component():
+    records = [
+        *_bea_state_records("06", 100.0, 20.0, 10.0, 5.0),
+        _bea("w", 200.0, "36"),  # 36 missing s/c/ra
+        _bea("s", 40.0, "36"),
+        _bea("c", 20.0, "36"),
+    ]
+    out = bea_state_employment_income_before_lsr(
+        records,
+        national_wages=_national_wages(400.0),
+        required_states=("06", "36"),
+        wage_component_variables=WAGE_COMPONENTS,
+        output_variable=BEA_OUTPUT,
+    )
+    assert out == []
+
+
+def test_bea_returns_empty_when_a_required_state_absent():
+    records = _bea_state_records("06", 100.0, 20.0, 10.0, 5.0)  # only 06
+    out = bea_state_employment_income_before_lsr(
+        records,
+        national_wages=_national_wages(400.0),
+        required_states=("06", "36"),
+        wage_component_variables=WAGE_COMPONENTS,
+        output_variable=BEA_OUTPUT,
+    )
+    assert out == []
+
+
+def test_bea_returns_empty_on_nonpositive_denominator():
+    records = [
+        *_bea_state_records("06", 0.0, 0.0, 0.0, 5.0),  # denom 0
+        *_bea_state_records("36", 200.0, 40.0, 20.0, 10.0),
+    ]
+    out = bea_state_employment_income_before_lsr(
+        records,
+        national_wages=_national_wages(400.0),
+        required_states=("06", "36"),
+        wage_component_variables=WAGE_COMPONENTS,
+        output_variable=BEA_OUTPUT,
+    )
+    assert out == []
+
+
+def test_bea_national_wages_record_finds_by_concept():
+    national = _national_wages(400.0)
+    records = [
+        national,
+        _bea("w", 100.0, "06"),  # noise: state component
+        _rec(BEA_OUTPUT, 999.0, source="IRS_SOI", geographic_level="NATIONAL"),
+    ]
+    found = bea_national_wages_record(records, output_variable=BEA_OUTPUT)
+    assert found is national
+    assert bea_national_wages_record([], output_variable=BEA_OUTPUT) is None
