@@ -27,6 +27,11 @@ from microplex.imputation import ImputationStepResult
 from microplex.run import RunResult, run_source_impute_stage, run_spec
 from microplex.source_registry import SourceRegistry
 from microplex.spec import MicroplexSpec, load_spec, load_spec_dict
+from microplex.stage_manifest import (
+    StageManifest,
+    build_stage_manifest,
+    write_stage_manifest,
+)
 
 DEFAULT_DEMOGRAPHIC_COLUMNS: tuple[str, ...] = (
     "age",
@@ -58,6 +63,53 @@ class AsecPufSupportSpineSmokeResult:
     def to_json_dict(self) -> dict[str, Any]:
         """Return serializable smoke diagnostics."""
         return dict(self.diagnostics)
+
+
+def write_asec_puf_support_spine_stage_artifacts(
+    result: AsecPufSupportSpineSmokeResult,
+    output_dir: Path,
+) -> StageManifest:
+    """Write a resumable stage checkpoint for an ASEC+PUF support-spine run."""
+    output_dir.mkdir(parents=True, exist_ok=True)
+    frame_path = output_dir / "support_frame.parquet"
+    diagnostics_path = output_dir / "diagnostics.json"
+    manifest_path = output_dir / "stage_manifest.json"
+
+    result.run_result.frame.to_parquet(frame_path, index=False)
+    diagnostics_path.write_text(
+        json.dumps(result.to_json_dict(), indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    manifest = build_stage_manifest(
+        stage_id="us_asec_puf_support_spine",
+        root=output_dir,
+        artifacts={
+            "support_frame": frame_path.name,
+            "diagnostics": diagnostics_path.name,
+        },
+        seeds={"support_partition": int(result.spec.spine.partition_seed)},
+        parameters={
+            "demographic_columns": list(result.diagnostics["demographic_columns"]),
+            "geography_constraint_columns": list(
+                result.diagnostics["geography_constraint_columns"]
+            ),
+        },
+        metadata={
+            "country": result.diagnostics["country"],
+            "model_year": result.diagnostics["model_year"],
+            "output_rows": result.diagnostics["output_rows"],
+            "half_counts": result.diagnostics["half_counts"],
+            "block_geography_assigned": result.diagnostics["block_geography"][
+                "assigned"
+            ],
+            "source_imputation_enabled": result.diagnostics["source_imputation"][
+                "enabled"
+            ],
+            "pending_stages": result.diagnostics["pending_stages"],
+        },
+    )
+    write_stage_manifest(manifest_path, manifest)
+    return manifest
 
 
 def build_asec_puf_support_spine_spec(
@@ -512,6 +564,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--seed", type=int, default=20260529)
     parser.add_argument("--no-download-cps", action="store_true")
     parser.add_argument("--output-json", type=Path, default=None)
+    parser.add_argument("--output-dir", type=Path, default=None)
     return parser
 
 
@@ -538,6 +591,8 @@ def main(argv: list[str] | None = None) -> int:
         max_source_impute_rows=args.max_source_impute_rows,
         seed=args.seed,
     )
+    if args.output_dir is not None:
+        write_asec_puf_support_spine_stage_artifacts(result, args.output_dir)
     payload = result.to_json_dict()
     text = json.dumps(payload, indent=2, sort_keys=True)
     if args.output_json is not None:
