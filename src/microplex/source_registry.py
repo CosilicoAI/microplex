@@ -61,7 +61,9 @@ class SourceRegistry:
         if not dataset_id:
             raise ValueError("SourceRegistry dataset id must be non-empty")
         if dataset_id in self._providers:
-            raise ValueError(f"SourceRegistry already has a provider for {dataset_id!r}")
+            raise ValueError(
+                f"SourceRegistry already has a provider for {dataset_id!r}"
+            )
         self._providers[dataset_id] = RegisteredSourceProvider(
             provider=provider,
             default_entity=default_entity,
@@ -72,29 +74,44 @@ class SourceRegistry:
         """Return the provider registered for one dataset id."""
         return self._registered_provider(dataset).provider
 
+    def resolve_source(
+        self,
+        spec: MicroplexSpec,
+        source_name: str,
+    ) -> pd.DataFrame:
+        """Load and select one frame declared in ``spec``."""
+        try:
+            source_spec = spec.sources[source_name]
+        except KeyError as exc:
+            available = ", ".join(sorted(spec.sources)) or "<none>"
+            raise KeyError(
+                f"Spec has no source {source_name!r}. Available sources: {available}."
+            ) from exc
+        registered = self._registered_provider(source_spec.dataset)
+        query = SourceQuery(
+            period=spec.meta.model_year,
+            provider_filters={
+                "dataset": source_spec.dataset,
+                "source_name": source_name,
+                "role": source_spec.role.value,
+            },
+        )
+        observation_frame = registered.provider.load_frame(query)
+        observation_frame.validate()
+        entity = self._select_entity(
+            source_name=source_name,
+            source_spec=source_spec,
+            registered=registered,
+            observation_frame=observation_frame,
+        )
+        return observation_frame.tables[entity].copy()
+
     def resolve_sources(self, spec: MicroplexSpec) -> dict[str, pd.DataFrame]:
         """Load and select frames for every source declared in ``spec``."""
-        resolved: dict[str, pd.DataFrame] = {}
-        for source_name, source_spec in spec.sources.items():
-            registered = self._registered_provider(source_spec.dataset)
-            query = SourceQuery(
-                period=spec.meta.model_year,
-                provider_filters={
-                    "dataset": source_spec.dataset,
-                    "source_name": source_name,
-                    "role": source_spec.role.value,
-                },
-            )
-            observation_frame = registered.provider.load_frame(query)
-            observation_frame.validate()
-            entity = self._select_entity(
-                source_name=source_name,
-                source_spec=source_spec,
-                registered=registered,
-                observation_frame=observation_frame,
-            )
-            resolved[source_name] = observation_frame.tables[entity].copy()
-        return resolved
+        return {
+            source_name: self.resolve_source(spec, source_name)
+            for source_name in spec.sources
+        }
 
     def _registered_provider(self, dataset: str) -> RegisteredSourceProvider:
         try:
@@ -133,7 +150,8 @@ class SourceRegistry:
 
         if entity not in observation_frame.tables:
             available = ", ".join(
-                observed.value for observed in observation_frame.source.observed_entities
+                observed.value
+                for observed in observation_frame.source.observed_entities
             )
             raise KeyError(
                 f"Source {source_name!r} requested entity {entity.value!r}, "

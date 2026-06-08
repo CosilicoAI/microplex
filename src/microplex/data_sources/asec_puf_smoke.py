@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -13,16 +13,29 @@ import pandas as pd
 
 from microplex.data_sources.census_blocks import CensusBlockCrosswalkProvider
 from microplex.data_sources.puf import SHARED_VARS
-from microplex.data_sources.us_registry import create_us_asec_puf_source_registry
+from microplex.data_sources.source_impute import (
+    SourceImputeManifest,
+    compile_source_impute_steps_from_manifest,
+)
+from microplex.data_sources.us_registry import (
+    create_us_asec_puf_source_registry,
+    register_us_source_impute_blocks,
+)
 from microplex.geography import (
     LowestAvailableAtomicGeographyAssigner,
     LowestAvailableGeographyAssignmentPlan,
     normalize_string_code,
     normalize_us_state_fips,
 )
+from microplex.imputation import ImputationRunner, ImputationStepResult
 from microplex.run import RunResult, run_spec
 from microplex.source_registry import SourceRegistry
-from microplex.spec import MicroplexSpec, load_spec_dict
+from microplex.spec import (
+    MicroplexSpec,
+    VariableOperationKind,
+    load_spec,
+    load_spec_dict,
+)
 
 DEFAULT_DEMOGRAPHIC_COLUMNS: tuple[str, ...] = (
     "age",
@@ -34,6 +47,11 @@ DEFAULT_GEOGRAPHY_CONSTRAINT_COLUMNS: tuple[str, ...] = (
     "state_fips",
     "cbsa",
 )
+DEFAULT_SOURCE_IMPUTE_STEPS: tuple[str, ...] = (
+    "scf_source_impute",
+    "sipp_source_impute",
+    "acs_source_impute",
+)
 
 
 @dataclass(frozen=True)
@@ -44,6 +62,7 @@ class AsecPufSupportSpineSmokeResult:
     sources: Mapping[str, pd.DataFrame]
     run_result: RunResult
     diagnostics: Mapping[str, Any]
+    source_impute_sources: Mapping[str, pd.DataFrame] = field(default_factory=dict)
 
     def to_json_dict(self) -> dict[str, Any]:
         """Return serializable smoke diagnostics."""
@@ -111,6 +130,12 @@ def run_asec_puf_support_spine_smoke(
     max_puf_rows: int | None = None,
     block_crosswalk_path: Path | None = None,
     max_block_crosswalk_rows: int | None = None,
+    source_impute_spec_path: Path | None = None,
+    source_impute_manifest_path: Path | None = None,
+    source_impute_storage_dir: Path | None = None,
+    source_impute_blocks: Sequence[str] | None = None,
+    source_impute_imputation_steps: Sequence[str] = DEFAULT_SOURCE_IMPUTE_STEPS,
+    max_source_impute_rows: int | None = None,
     demographic_columns: Sequence[str] = DEFAULT_DEMOGRAPHIC_COLUMNS,
     geography_constraint_columns: Sequence[str] = DEFAULT_GEOGRAPHY_CONSTRAINT_COLUMNS,
 ) -> AsecPufSupportSpineSmokeResult:
@@ -157,10 +182,61 @@ def run_asec_puf_support_spine_smoke(
             max_block_crosswalk_rows=max_block_crosswalk_rows,
             seed=seed,
         )
+    source_impute_sources: Mapping[str, pd.DataFrame] = {}
+    source_impute_results: list[ImputationStepResult] = []
+    if source_impute_manifest_path is not None:
+        if "block_geoid" not in run_result.frame.columns:
+            raise ValueError(
+                "source-impute execution requires block geography assignment; "
+                "supply block_crosswalk_path first"
+            )
+        source_impute_spec = load_spec(
+            source_impute_spec_path or Path("packs/us/specs/us-2024.yaml")
+        )
+        source_impute_manifest = SourceImputeManifest.from_path(
+            source_impute_manifest_path
+        )
+        user_selected_blocks = source_impute_blocks is not None
+        if source_impute_blocks is None:
+            source_impute_blocks = tuple(source_impute_manifest.blocks)
+        else:
+            source_impute_manifest = SourceImputeManifest(
+                blocks={
+                    block_name: source_impute_manifest.block(block_name)
+                    for block_name in source_impute_blocks
+                }
+            )
+        register_us_source_impute_blocks(
+            source_registry,
+            manifest_path=source_impute_manifest_path,
+            storage_dir=source_impute_storage_dir,
+            max_rows=max_source_impute_rows,
+            blocks=tuple(source_impute_blocks),
+        )
+        run_result, source_impute_sources, source_impute_results = (
+            _run_post_geography_source_imputation(
+                run_result,
+                source_registry=source_registry,
+                source_impute_spec=source_impute_spec,
+                source_impute_manifest=source_impute_manifest,
+                imputation_steps=(
+                    _backed_source_impute_steps(
+                        source_impute_spec,
+                        source_impute_manifest,
+                        source_impute_imputation_steps,
+                    )
+                    if user_selected_blocks
+                    else source_impute_imputation_steps
+                ),
+                seed=seed,
+            )
+        )
     diagnostics = _diagnostics(
         spec=spec,
         sources=sources,
         run_result=run_result,
+        source_impute_sources=source_impute_sources,
+        source_impute_results=source_impute_results,
         demographic_columns=demographic_columns,
         geography_constraint_columns=geography_constraint_columns,
     )
@@ -170,6 +246,7 @@ def run_asec_puf_support_spine_smoke(
         sources=sources,
         run_result=run_result,
         diagnostics=diagnostics,
+        source_impute_sources=source_impute_sources,
     )
 
 
@@ -219,6 +296,8 @@ def _diagnostics(
     spec: MicroplexSpec,
     sources: Mapping[str, pd.DataFrame],
     run_result: RunResult,
+    source_impute_sources: Mapping[str, pd.DataFrame],
+    source_impute_results: Sequence[ImputationStepResult],
     demographic_columns: Sequence[str],
     geography_constraint_columns: Sequence[str],
 ) -> dict[str, Any]:
@@ -246,6 +325,10 @@ def _diagnostics(
         "demographic_columns": list(demographic_columns),
         "geography_constraint_columns": list(geography_constraint_columns),
         "block_geography": _block_geography_diagnostics(frame),
+        "source_imputation": _source_imputation_diagnostics(
+            source_impute_sources,
+            source_impute_results,
+        ),
         "shared_variables": list(SHARED_VARS),
         "shared_missing": {
             name: sorted(set(SHARED_VARS) - set(source_frame.columns))
@@ -263,6 +346,28 @@ def _sum_if_present(frame: pd.DataFrame, column: str) -> float | None:
     if column not in frame.columns:
         return None
     return float(frame[column].sum())
+
+
+def _source_imputation_diagnostics(
+    source_impute_sources: Mapping[str, pd.DataFrame],
+    source_impute_results: Sequence[ImputationStepResult],
+) -> dict[str, Any]:
+    return {
+        "enabled": bool(source_impute_results),
+        "source_rows": {
+            name: int(len(frame)) for name, frame in source_impute_sources.items()
+        },
+        "results": [
+            {
+                "onto": result.onto,
+                "donor": result.donor,
+                "imputed": list(result.imputed),
+                "skipped_passthrough": list(result.skipped_passthrough),
+                "skipped_missing_in_donor": list(result.skipped_missing_in_donor),
+            }
+            for result in source_impute_results
+        ],
+    }
 
 
 def _validate_geography_constraint_values(
@@ -320,6 +425,97 @@ def _validate_run_result(
             raise ValueError("assigned block_geoid contains missing values")
         if not frame["block_geoid"].astype("string").str.len().eq(15).all():
             raise ValueError("assigned block_geoid values must be 15 characters")
+    source_imputation = diagnostics["source_imputation"]
+    if source_imputation["enabled"]:
+        for result in source_imputation["results"]:
+            for variable in result["imputed"]:
+                if variable not in frame.columns:
+                    raise ValueError(
+                        f"source-imputed variable {variable!r} missing from output"
+                    )
+                if frame[variable].isna().any():
+                    raise ValueError(
+                        f"source-imputed variable {variable!r} contains missing values"
+                    )
+
+
+def _run_post_geography_source_imputation(
+    run_result: RunResult,
+    *,
+    source_registry: SourceRegistry,
+    source_impute_spec: MicroplexSpec,
+    source_impute_manifest: SourceImputeManifest,
+    imputation_steps: Sequence[str] | None,
+    seed: int,
+) -> tuple[RunResult, Mapping[str, pd.DataFrame], list[ImputationStepResult]]:
+    steps = compile_source_impute_steps_from_manifest(
+        source_impute_spec,
+        source_impute_manifest,
+        imputation_steps=imputation_steps,
+    )
+    if not steps:
+        return run_result, {}, []
+
+    source_names = tuple(dict.fromkeys(step.from_ for step in steps))
+    donors = {
+        source_name: source_registry.resolve_source(source_impute_spec, source_name)
+        for source_name in source_names
+    }
+    runner = ImputationRunner(seed=seed)
+    halves, results = runner.run(
+        steps,
+        halves=run_result.halves,
+        donors=donors,
+    )
+    return (
+        replace(
+            run_result,
+            halves=halves,
+            frame=_restack_halves(halves, run_result),
+            imputation_results=[*run_result.imputation_results, *results],
+        ),
+        donors,
+        results,
+    )
+
+
+def _backed_source_impute_steps(
+    spec: MicroplexSpec,
+    manifest: SourceImputeManifest,
+    imputation_steps: Sequence[str],
+) -> tuple[str, ...]:
+    requested = set(imputation_steps)
+    if not requested:
+        return ()
+    backed_steps: list[str] = []
+    for variable_name, variable in spec.variables.items():
+        operation = variable.mp_spec.operation if variable.mp_spec else None
+        if operation is None or operation.kind is not VariableOperationKind.IMPUTE:
+            continue
+        if operation.imputation_step is None or operation.source is None:
+            continue
+        if operation.imputation_step not in requested:
+            continue
+        if not any(
+            operation.source == block.survey_name
+            and variable_name in block.target_variables
+            for block in manifest.blocks.values()
+        ):
+            continue
+        if operation.imputation_step not in backed_steps:
+            backed_steps.append(operation.imputation_step)
+    return tuple(backed_steps)
+
+
+def _restack_halves(
+    halves: Mapping[str, pd.DataFrame],
+    run_result: RunResult,
+) -> pd.DataFrame:
+    ordered = [halves[name] for name in run_result.spine.halves if name in halves]
+    extras = [
+        frame for name, frame in halves.items() if name not in run_result.spine.halves
+    ]
+    return pd.concat(ordered + extras, axis=0, ignore_index=True)
 
 
 def _assign_block_geography(
@@ -408,9 +604,14 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--puf-path", type=Path, default=None)
     parser.add_argument("--puf-demographics-path", type=Path, default=None)
     parser.add_argument("--block-crosswalk-path", type=Path, default=None)
+    parser.add_argument("--source-impute-spec", type=Path, default=None)
+    parser.add_argument("--source-impute-manifest", type=Path, default=None)
+    parser.add_argument("--source-impute-storage-dir", type=Path, default=None)
+    parser.add_argument("--source-impute-block", action="append", default=None)
     parser.add_argument("--max-cps-rows", type=int, default=None)
     parser.add_argument("--max-puf-rows", type=int, default=None)
     parser.add_argument("--max-block-crosswalk-rows", type=int, default=None)
+    parser.add_argument("--max-source-impute-rows", type=int, default=None)
     parser.add_argument("--seed", type=int, default=20260529)
     parser.add_argument("--no-download-cps", action="store_true")
     parser.add_argument("--output-json", type=Path, default=None)
@@ -431,6 +632,13 @@ def main(argv: list[str] | None = None) -> int:
         max_puf_rows=args.max_puf_rows,
         block_crosswalk_path=args.block_crosswalk_path,
         max_block_crosswalk_rows=args.max_block_crosswalk_rows,
+        source_impute_spec_path=args.source_impute_spec,
+        source_impute_manifest_path=args.source_impute_manifest,
+        source_impute_storage_dir=args.source_impute_storage_dir,
+        source_impute_blocks=tuple(args.source_impute_block)
+        if args.source_impute_block
+        else None,
+        max_source_impute_rows=args.max_source_impute_rows,
         seed=args.seed,
     )
     payload = result.to_json_dict()
