@@ -32,8 +32,11 @@ from microplex.spec import CalibrateSpec
 
 if TYPE_CHECKING:
     from microplex.targets import (
+        EntityTableBundle,
+        SimulationTargetCompiler,
         SparseTargetMatrix,
         SparseTargetMatrixCertificate,
+        TargetSet,
     )
 
 
@@ -80,6 +83,27 @@ class SparseTargetMatrixCalibrationResult:
             "policy": self.policy.diagnostics(),
             "certificate": self.certificate.to_dict(),
             "validation": dict(self.validation),
+        }
+
+
+@dataclass(frozen=True)
+class EntityTableBundleCalibrationResult:
+    """Result of calibrating a shared entity-table bundle."""
+
+    bundle: EntityTableBundle
+    target_matrix: SparseTargetMatrix
+    calibration: SparseTargetMatrixCalibrationResult
+
+    def diagnostics(self) -> dict[str, Any]:
+        """Stable diagnostics payload for manifests and release logs."""
+        return {
+            "weight_entity": self.bundle.weight_entity.value,
+            "weight_column": self.bundle.weight_column,
+            "available_entities": [
+                entity.value for entity in self.bundle.available_entities()
+            ],
+            "skipped_targets": list(self.target_matrix.skipped_targets),
+            **self.calibration.diagnostics(),
         }
 
 
@@ -363,7 +387,80 @@ class MicrocalibrateAdapter:
         return np.asarray(calibrator.weights, dtype=float).copy()
 
 
+class EntityTableBundleMicrocalibrator:
+    """Compile entity-table targets and calibrate through microcalibrate.
+
+    This is the generic bridge from country-provided entity tables to the
+    release-build sparse target matrix path. Country packages supply content
+    and data; core compiles targets, verifies the target-surface certificate,
+    resolves the spec calibration policy, and syncs the fitted weights back to
+    every linked entity table.
+    """
+
+    def __init__(
+        self,
+        *,
+        adapter: MicrocalibrateAdapter | None = None,
+        simulation_compiler: SimulationTargetCompiler | None = None,
+        min_records_per_target: float | None = None,
+        allow_skipped_targets: bool = False,
+    ) -> None:
+        self.adapter = adapter or MicrocalibrateAdapter()
+        self.simulation_compiler = simulation_compiler
+        self.min_records_per_target = min_records_per_target
+        self.allow_skipped_targets = allow_skipped_targets
+
+    def calibrate_bundle(
+        self,
+        bundle: EntityTableBundle,
+        *,
+        target_set: TargetSet,
+        calibrate: CalibrateSpec,
+        certificate: SparseTargetMatrixCertificate | Mapping[str, Any] | None = None,
+    ) -> EntityTableBundleCalibrationResult:
+        """Compile targets for ``bundle`` and return a calibrated bundle.
+
+        The sparse matrix certificate is checked before fitting when supplied.
+        Without an explicit certificate, the current compiled surface is still
+        captured in the returned diagnostics so a release stage can persist it
+        and compare later runs against the exact same target surface.
+        """
+        from microplex.targets.matrix import compile_sparse_target_matrix
+
+        initial_weights = bundle.initial_weights()
+        target_matrix = compile_sparse_target_matrix(
+            targets=list(target_set.targets),
+            entity_frames=bundle.entity_frames(),
+            entity_weight_indexes=bundle.entity_weight_indexes(),
+            n_weights=len(initial_weights),
+            simulation_compiler=self.simulation_compiler,
+        )
+        if target_matrix.skipped_targets and not self.allow_skipped_targets:
+            skipped = "; ".join(
+                f"{name}: {reason}" for name, reason in target_matrix.skipped_targets
+            )
+            raise ValueError(
+                "Sparse target compilation skipped target(s): "
+                f"{skipped}. Pass allow_skipped_targets=True to calibrate a partial "
+                "target surface explicitly."
+            )
+        calibration = self.adapter.fit_sparse_target_matrix_with_policy(
+            initial_weights,
+            target_matrix,
+            calibrate=calibrate,
+            certificate=certificate,
+            min_records_per_target=self.min_records_per_target,
+        )
+        return EntityTableBundleCalibrationResult(
+            bundle=bundle.with_updated_weights(calibration.weights),
+            target_matrix=target_matrix,
+            calibration=calibration,
+        )
+
+
 __all__ = [
+    "EntityTableBundleCalibrationResult",
+    "EntityTableBundleMicrocalibrator",
     "MicrocalibrateAdapter",
     "MicrocalibrateAdapterConfig",
     "SparseTargetMatrixCalibrationResult",
