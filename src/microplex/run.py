@@ -39,7 +39,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
@@ -77,7 +77,9 @@ __all__ = [
     "RunResult",
     "SpecCalibrationResult",
     "SpecCalibrator",
+    "SourceImputeStageResult",
     "resolve_sources",
+    "run_source_impute_stage",
     "run_spec",
 ]
 
@@ -148,6 +150,15 @@ class RunResult:
     pending_stages: tuple[str, ...] = PENDING_STAGES
 
 
+@dataclass(frozen=True)
+class SourceImputeStageResult:
+    """Output of a post-geography source-imputation stage."""
+
+    run_result: RunResult
+    sources: Mapping[str, pd.DataFrame] = field(default_factory=dict)
+    imputation_results: list[ImputationStepResult] = field(default_factory=list)
+
+
 def resolve_sources(
     spec: MicroplexSpec,
     sources: Mapping[str, pd.DataFrame] | SourceRegistry,
@@ -178,6 +189,155 @@ def resolve_sources(
             "for every source named in the spec (keyed by source name)."
         )
     return {name: sources[name] for name in spec.sources}
+
+
+def run_source_impute_stage(
+    run_result: RunResult,
+    source_impute_spec: MicroplexSpec,
+    sources: Mapping[str, pd.DataFrame] | SourceRegistry,
+    *,
+    source_impute_manifest: SourceImputeManifest | str | Path,
+    source_impute_blocks: Sequence[str] | None = None,
+    source_impute_imputation_steps: Sequence[str] | None = None,
+    column_groups: Mapping[str, Sequence[str]] | None = None,
+    demographic_columns: Sequence[str] | None = None,
+    weight_column: str | None = "household_weight",
+    spine_keywords: Sequence[str] | None = None,
+    seed: int = 0,
+) -> SourceImputeStageResult:
+    """Run manifest-backed source imputation on an already-geocoded result.
+
+    This stage is the explicit post-geography seam used by US first-principles
+    builds: callers run the support spine, assign atomic geography, and only
+    then execute SCF/SIPP/ACS source imputations over the resolved support
+    universe. It shares the same manifest compilation and block/step filtering
+    semantics as ``run_spec(..., source_impute_manifest=...)``.
+    """
+    full_source_manifest = _load_source_impute_manifest(source_impute_manifest)
+    source_manifest = _filter_source_impute_manifest(
+        full_source_manifest,
+        blocks=source_impute_blocks,
+    )
+    source_steps = _source_impute_steps(
+        source_impute_spec,
+        source_manifest,
+        full_manifest=full_source_manifest,
+        imputation_steps=source_impute_imputation_steps,
+        manifest_was_filtered=source_impute_blocks is not None,
+    )
+    if not source_steps:
+        return SourceImputeStageResult(run_result=run_result)
+
+    _require_source_impute_stage_boundary(run_result)
+    _require_post_geography_halves(run_result.halves)
+    source_names = tuple(dict.fromkeys(step.from_ for step in source_steps))
+    donors = _resolve_selected_sources(source_impute_spec, sources, source_names)
+    resolved_groups = _resolved_column_groups(
+        column_groups=column_groups,
+        demographic_columns=demographic_columns,
+    )
+    runner = ImputationRunner(
+        column_groups=resolved_groups,
+        weight_column=weight_column,
+        spine_keywords=tuple(spine_keywords or ()),
+        seed=seed,
+    )
+    halves, results = runner.run(
+        source_steps,
+        halves=run_result.halves,
+        donors=donors,
+    )
+    updated_run_result = replace(
+        run_result,
+        halves=halves,
+        frame=_restack_run_result_halves(halves, run_result),
+        imputation_results=[*run_result.imputation_results, *results],
+    )
+    return SourceImputeStageResult(
+        run_result=updated_run_result,
+        sources=donors,
+        imputation_results=results,
+    )
+
+
+def _resolved_column_groups(
+    *,
+    column_groups: Mapping[str, Sequence[str]] | None,
+    demographic_columns: Sequence[str] | None,
+) -> dict[str, list[str]]:
+    resolved = {
+        group: list(columns) for group, columns in (column_groups or {}).items()
+    }
+    if demographic_columns is not None:
+        resolved["demographics"] = list(demographic_columns)
+    return resolved
+
+
+def _resolve_selected_sources(
+    spec: MicroplexSpec,
+    sources: Mapping[str, pd.DataFrame] | SourceRegistry,
+    source_names: Sequence[str],
+) -> dict[str, pd.DataFrame]:
+    if isinstance(sources, SourceRegistry):
+        return {
+            source_name: sources.resolve_source(spec, source_name)
+            for source_name in source_names
+        }
+
+    missing = [
+        source_name for source_name in source_names if source_name not in sources
+    ]
+    if missing:
+        raise KeyError(
+            "missing frames for source-impute donor source(s): "
+            f"{missing}. Provide frames keyed by source name."
+        )
+    return {source_name: sources[source_name] for source_name in source_names}
+
+
+def _restack_run_result_halves(
+    halves: Mapping[str, pd.DataFrame],
+    run_result: RunResult,
+) -> pd.DataFrame:
+    ordered = [halves[name] for name in run_result.spine.halves if name in halves]
+    extras = [
+        frame for name, frame in halves.items() if name not in run_result.spine.halves
+    ]
+    return pd.concat(ordered + extras, axis=0, ignore_index=True)
+
+
+def _require_source_impute_stage_boundary(run_result: RunResult) -> None:
+    """Reject post-transform results before they can lose transform outputs."""
+    restacked = _restack_run_result_halves(run_result.halves, run_result)
+    half_column_names = set(restacked.columns)
+    frame_column_names = set(run_result.frame.columns)
+    if frame_column_names != half_column_names:
+        extra = sorted(frame_column_names - half_column_names)
+        missing = sorted(half_column_names - frame_column_names)
+        raise ValueError(
+            "run_source_impute_stage requires a pre-transform RunResult whose "
+            "frame columns match its halves; call it after geography assignment "
+            "and before transforms. "
+            f"Extra frame columns: {extra}; missing frame columns: {missing}."
+        )
+    frame_rows = len(run_result.frame)
+    half_rows = len(restacked)
+    if frame_rows != half_rows:
+        raise ValueError(
+            "run_source_impute_stage requires a pre-transform RunResult whose "
+            f"frame row count matches its halves; frame has {frame_rows} rows "
+            f"but halves sum to {half_rows} rows."
+        )
+    frame = run_result.frame.reset_index(drop=True)
+    restacked = restacked.loc[:, list(run_result.frame.columns)].reset_index(drop=True)
+    try:
+        pd.testing.assert_frame_equal(frame, restacked, check_dtype=False)
+    except AssertionError as exc:
+        raise ValueError(
+            "run_source_impute_stage requires a pre-transform RunResult whose "
+            "frame values match its halves; call it after geography assignment "
+            "and before transforms."
+        ) from exc
 
 
 def run_spec(
@@ -256,11 +416,10 @@ def run_spec(
         KeyError: if a declared source has no frame.
         ValueError: on spine/imputation/transform validation failures.
     """
-    resolved_groups: dict[str, list[str]] = {
-        token: list(cols) for token, cols in (column_groups or {}).items()
-    }
-    if demographic_columns is not None:
-        resolved_groups["demographics"] = list(demographic_columns)
+    resolved_groups = _resolved_column_groups(
+        column_groups=column_groups,
+        demographic_columns=demographic_columns,
+    )
 
     # Stage 1: sources.
     frames = resolve_sources(spec, sources)
@@ -305,40 +464,38 @@ def run_spec(
         halves=spine_result.halves,
         donors=donors,
     )
-    source_impute_results: list[ImputationStepResult] = []
+    stage_result = RunResult(
+        frame=_restack(halves, spec, spine_result.half_label_column),
+        spine=spine_result,
+        base=base,
+        halves=halves,
+        imputation_results=[*base_imputation_results, *half_imputation_results],
+    )
     if source_impute_manifest is not None:
-        full_source_manifest = _load_source_impute_manifest(source_impute_manifest)
-        source_manifest = _filter_source_impute_manifest(
-            full_source_manifest,
-            blocks=source_impute_blocks,
-        )
-        source_steps = _source_impute_steps(
+        source_stage = run_source_impute_stage(
+            stage_result,
             spec,
-            source_manifest,
-            full_manifest=full_source_manifest,
-            imputation_steps=source_impute_imputation_steps,
-            manifest_was_filtered=source_impute_blocks is not None,
+            donors,
+            source_impute_manifest=source_impute_manifest,
+            source_impute_blocks=source_impute_blocks,
+            source_impute_imputation_steps=source_impute_imputation_steps,
+            column_groups=resolved_groups,
+            weight_column=weight_column,
+            spine_keywords=resolved_spine_keywords,
+            seed=seed,
         )
-        if source_steps:
-            _require_post_geography_halves(halves)
-            halves, source_impute_results = runner.run(
-                source_steps,
-                halves=halves,
-                donors=donors,
-            )
+        stage_result = source_stage.run_result
+        if source_stage.imputation_results:
             logger.info(
                 "run_spec: ran %d post-geography source-impute result(s)",
-                len(source_impute_results),
+                len(source_stage.imputation_results),
             )
-    imputation_results = [
-        *base_imputation_results,
-        *half_imputation_results,
-        *source_impute_results,
-    ]
+    halves = stage_result.halves
+    imputation_results = stage_result.imputation_results
 
     # Re-stack the (imputed) halves in the spine's declared order so the
     # transform stage sees the full frame, with the half-label column intact.
-    stacked = _restack(halves, spec, spine_result.half_label_column)
+    stacked = stage_result.frame
 
     # Stage 4: transforms.
     transform_engine = TransformEngine()
