@@ -176,12 +176,18 @@ def _construct_tax_units(
         own_children_counts = persons_with_children.group_by(hh_id_col).agg(
             pl.col("_own_child").sum().alias("own_children_in_household")
         )
+        under_18_counts = persons.group_by(hh_id_col).agg(
+            (pl.col("age") < 18).sum().alias("count_under_18")
+        )
     else:
         ctc_counts = persons.group_by(hh_id_col).agg(
             pl.lit(0).alias("ctc_qualifying_children")
         )
         own_children_counts = persons.group_by(hh_id_col).agg(
             pl.lit(0).alias("own_children_in_household")
+        )
+        under_18_counts = persons.group_by(hh_id_col).agg(
+            pl.lit(0).alias("count_under_18")
         )
 
     # Get reference person attributes for each household
@@ -254,6 +260,7 @@ def _construct_tax_units(
     tax_units = tax_units.join(earned_income_agg, on=hh_id_col, how="left")
     tax_units = tax_units.join(ctc_counts, on=hh_id_col, how="left")
     tax_units = tax_units.join(own_children_counts, on=hh_id_col, how="left")
+    tax_units = tax_units.join(under_18_counts, on=hh_id_col, how="left")
 
     # Compute AGI proxy at tax unit level
     # For now, just use earned income as base (will add investment income)
@@ -336,6 +343,7 @@ def _construct_tax_units(
             pl.col("earned_income").fill_null(0),
             pl.col("ctc_qualifying_children").fill_null(0),
             pl.col("own_children_in_household").fill_null(0),
+            pl.col("count_under_18").fill_null(0),
             pl.col("agi_proxy").fill_null(0),
             (
                 pl.col("interest_dividend_income").fill_null(0)

@@ -111,6 +111,7 @@ _CPS_TAX_UNIT_BASE_VARIABLES = (
     "earned_income",
     "ctc_qualifying_children",
     "own_children_in_household",
+    "count_under_18",
     "agi_proxy",
     "interest_dividend_income",
     "social_security_pension_income",

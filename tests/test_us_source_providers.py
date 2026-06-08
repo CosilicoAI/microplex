@@ -228,6 +228,7 @@ def test_cps_provider_materializes_valid_entity_tables() -> None:
     assert tax_units["cps_race"].tolist() == [1, 2]
     assert tax_units["is_married"].tolist() == [True, False]
     assert tax_units["own_children_in_household"].tolist() == [0, 0]
+    assert tax_units["count_under_18"].tolist() == [0, 0]
     assert tax_units["employment_income"].tolist() == [65_000.0, 20_000.0]
     assert tax_units["self_employment_income"].tolist() == [5_000.0, 0.0]
     assert tax_units["taxable_interest_income"].tolist() == [150.0, 0.0]
@@ -291,6 +292,7 @@ def test_cps_provider_counts_own_children_from_relationship_codes() -> None:
     tax_units = frame.tables[EntityType.TAX_UNIT]
     assert tax_units["own_children_in_household"].tolist() == [1]
     assert tax_units["ctc_qualifying_children"].tolist() == [1]
+    assert tax_units["count_under_18"].tolist() == [2]
 
 
 def test_puf_provider_materializes_valid_tax_unit_table() -> None:
