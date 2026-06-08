@@ -82,34 +82,37 @@ def register_us_source_impute_blocks(
     for block in source_blocks:
         validate_source_impute_block_supported(block)
 
-    datasets: list[tuple[str, SourceImputeBlock]] = []
+    datasets: dict[str, list[SourceImputeBlock]] = {}
     seen_dataset_ids: set[str] = set()
+    seen_block_names: set[str] = set()
     for block in source_blocks:
+        if block.name in seen_block_names:
+            raise ValueError(f"Duplicate source-impute block requested: {block.name!r}")
+        seen_block_names.add(block.name)
         dataset_id = block.dataset_id or f"{block.survey_name}_{block.default_year}"
-        if dataset_id in seen_dataset_ids:
-            raise ValueError(
-                f"Duplicate source-impute dataset requested: {dataset_id!r}"
-            )
-        seen_dataset_ids.add(dataset_id)
-        try:
-            registry.provider_for(dataset_id)
-        except KeyError:
-            pass
-        else:
-            raise ValueError(
-                f"SourceRegistry already has a provider for {dataset_id!r}"
-            )
-        datasets.append((dataset_id, block))
+        if dataset_id not in seen_dataset_ids:
+            seen_dataset_ids.add(dataset_id)
+            try:
+                registry.provider_for(dataset_id)
+            except KeyError:
+                pass
+            else:
+                raise ValueError(
+                    f"SourceRegistry already has a provider for {dataset_id!r}"
+                )
+        datasets.setdefault(dataset_id, []).append(block)
 
-    for dataset_id, block in datasets:
+    for dataset_id, blocks_for_dataset in datasets.items():
+        first_block = blocks_for_dataset[0]
         registry.register(
             dataset_id,
             ManifestSourceImputeProvider(
                 manifest_path=manifest_path,
-                block_name=block.name,
+                block_name=first_block.name,
+                block_names=tuple(block.name for block in blocks_for_dataset),
                 storage_dir=storage_dir,
                 max_rows=max_rows,
-                source_name=block.survey_name,
+                source_name=first_block.survey_name,
             ),
             default_entity=EntityType.PERSON,
         )

@@ -207,6 +207,14 @@
         },
         "copy_columns": {
           "income": "employment_income"
+        },
+        "fillna_columns": {
+          "employment_income": 0,
+          "bank_account_assets": 0,
+          "stock_assets": 0,
+          "bond_assets": 0,
+          "household_vehicles_owned": 0,
+          "household_vehicles_value": 0
         }
       },
       "required_monthcode": 12,

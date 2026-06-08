@@ -222,6 +222,38 @@ def _acs_h5_path(tmp_path: Path) -> Path:
     return path
 
 
+def _sipp_tips_csv_path(tmp_path: Path) -> Path:
+    path = tmp_path / "pu2023_slim.csv"
+    path.write_text(
+        "\n".join(
+            [
+                "SSUID,MONTHCODE,PNUM,TAGE,ESEX,TPTOTINC,WPFINWGT,TXAMT_A,TXAMT_B",
+                "100,1,1,17,1,1000,1.5,10,5",
+                "100,1,2,5,2,100,1.5,1,4",
+                "100,2,1,40,1,2000,2.0,2,3",
+            ]
+        )
+    )
+    return path
+
+
+def _sipp_assets_csv_path(tmp_path: Path) -> Path:
+    path = tmp_path / "pu2023.csv"
+    path.write_text(
+        "\n".join(
+            [
+                "SSUID|PNUM|MONTHCODE|WPFINWGT|TAGE|ESEX|EMS|TPTOTINC|"
+                "TVAL_BANK|TVAL_STMF|TVAL_BOND|TVEH_NUM|THVAL_VEH",
+                "200|1|11|9.0|17|2|1|999|999|999|999|9|999",
+                "200|1|12|4.0|17|2|1|500|||||10000",
+                "200|2|12|4.0|4|1|2|1000|10|20|30|1|5000",
+                "300|1|12|5.0|5|2|1|100|7|8|9|0|0",
+            ]
+        )
+    )
+    return path
+
+
 def _real_scf_manifest_path() -> Path:
     return Path("packs/us/manifests/pe_source_impute_blocks.json")
 
@@ -356,6 +388,61 @@ def test_source_impute_household_rows_rejects_duplicate_household_ids(
 
     with pytest.raises(ValueError, match="duplicate ids"):
         load_source_impute_block_table(block, dataset_path=path, period=2024)
+
+
+def test_source_impute_raw_sipp_tips_uses_manifest_mappings_with_full_counts(
+    tmp_path: Path,
+) -> None:
+    block = SourceImputeManifest.from_path(_real_scf_manifest_path()).block("sipp_tips")
+
+    table = load_source_impute_block_table(
+        block,
+        dataset_path=_sipp_tips_csv_path(tmp_path),
+        max_rows=1,
+        period=2024,
+    )
+
+    assert table["person_id"].tolist() == ["100|1|1"]
+    assert table["household_id"].tolist() == ["100|1"]
+    assert table["tax_unit_id"].tolist() == ["100|1"]
+    assert table["tip_income"].tolist() == [180]
+    assert table["employment_income"].tolist() == [12_000]
+    assert table["income"].tolist() == [12_000]
+    assert table["count_under_18"].tolist() == [2]
+    assert table["count_under_6"].tolist() == [1]
+    assert table["state_fips"].tolist() == [0]
+    assert table["tenure"].tolist() == [0]
+    assert table["weight"].tolist() == [1.5]
+    assert table["year"].tolist() == [2024]
+
+
+def test_source_impute_raw_sipp_assets_filters_month_and_uses_full_counts(
+    tmp_path: Path,
+) -> None:
+    block = SourceImputeManifest.from_path(_real_scf_manifest_path()).block(
+        "sipp_assets"
+    )
+
+    table = load_source_impute_block_table(
+        block,
+        dataset_path=_sipp_assets_csv_path(tmp_path),
+        max_rows=1,
+        period=2024,
+    )
+
+    assert table["person_id"].tolist() == ["200|1"]
+    assert table["household_id"].tolist() == [200]
+    assert table["employment_income"].tolist() == [6_000]
+    assert table["income"].tolist() == [6_000]
+    assert table["is_female"].tolist() == [True]
+    assert table["is_married"].tolist() == [True]
+    assert table["count_under_18"].tolist() == [2]
+    assert table["bank_account_assets"].tolist() == [0]
+    assert table["stock_assets"].tolist() == [0]
+    assert table["bond_assets"].tolist() == [0]
+    assert table["household_vehicles_owned"].tolist() == [0]
+    assert table["household_vehicles_value"].tolist() == [10_000]
+    assert table["weight"].tolist() == [4.0]
 
 
 def test_source_impute_block_table_parses_string_boolean_values(
@@ -517,25 +604,56 @@ def test_register_us_source_impute_blocks_matches_real_us_spec_acs_dataset(
     ]
 
 
-def test_register_us_source_impute_blocks_rejects_unsupported_real_blocks() -> None:
+def test_register_us_source_impute_blocks_resolves_grouped_sipp_dataset(
+    tmp_path: Path,
+) -> None:
+    _sipp_tips_csv_path(tmp_path)
+    _sipp_assets_csv_path(tmp_path)
+    registry = SourceRegistry()
+    register_us_source_impute_blocks(
+        registry,
+        manifest_path=_real_scf_manifest_path(),
+        storage_dir=tmp_path,
+        max_rows=1,
+        blocks=("sipp_tips", "sipp_assets"),
+    )
+    spec = load_spec(_real_us_spec_path())
+
+    assert spec.sources["sipp"].dataset == "sipp_2023"
+    provider = registry.provider_for(spec.sources["sipp"].dataset)
+    frame = provider.load_frame(SourceQuery(period=2024))
+
+    table = frame.tables[EntityType.PERSON]
+    assert table["person_id"].tolist() == ["100|1|1", "200|1"]
+    assert "tip_income" in table.columns
+    assert "bank_account_assets" in table.columns
+    assert frame.observation_mask(EntityType.PERSON)["tip_income"].tolist() == [
+        True,
+        False,
+    ]
+    assert frame.observation_mask(EntityType.PERSON)[
+        "bank_account_assets"
+    ].tolist() == [False, True]
+
+
+def test_register_us_source_impute_blocks_rejects_mixed_blocks_atomically(
+    tmp_path: Path,
+) -> None:
+    manifest = json.loads(_manifest_path(tmp_path).read_text())
+    manifest["blocks"]["unsupported"] = {
+        **manifest["blocks"]["scf"],
+        "survey_name": "unsupported",
+    }
+    del manifest["blocks"]["unsupported"]["dataset_loader"]
+    path = tmp_path / "unsupported_source_impute_manifest.json"
+    path.write_text(json.dumps(manifest))
     registry = SourceRegistry()
 
-    with pytest.raises(NotImplementedError, match="has no dataset_loader"):
+    with pytest.raises(NotImplementedError, match="no dataset_loader or raw_loader"):
         register_us_source_impute_blocks(
             registry,
-            manifest_path=_real_scf_manifest_path(),
-            blocks=("sipp_tips",),
-        )
-
-
-def test_register_us_source_impute_blocks_rejects_mixed_blocks_atomically() -> None:
-    registry = SourceRegistry()
-
-    with pytest.raises(NotImplementedError, match="has no dataset_loader"):
-        register_us_source_impute_blocks(
-            registry,
-            manifest_path=_real_scf_manifest_path(),
-            blocks=("scf", "sipp_tips"),
+            manifest_path=path,
+            blocks=("scf", "unsupported"),
         )
     with pytest.raises(KeyError, match="scf_2022"):
         registry.provider_for("scf_2022")
@@ -544,7 +662,7 @@ def test_register_us_source_impute_blocks_rejects_mixed_blocks_atomically() -> N
 def test_register_us_source_impute_blocks_rejects_duplicates_atomically() -> None:
     registry = SourceRegistry()
 
-    with pytest.raises(ValueError, match="Duplicate source-impute dataset"):
+    with pytest.raises(ValueError, match="Duplicate source-impute block"):
         register_us_source_impute_blocks(
             registry,
             manifest_path=_real_scf_manifest_path(),
@@ -697,6 +815,32 @@ def test_real_us_acs_manifest_block_retains_declared_targets_and_predictors(
     table = load_source_impute_block_table(
         block,
         dataset_path=_acs_h5_path(tmp_path),
+        period=2024,
+    )
+
+    assert set(block.target_variables).issubset(table.columns)
+    assert set(block.predictors).issubset(table.columns)
+    assert set(block.household_variables).issubset(table.columns)
+
+
+@pytest.mark.parametrize(
+    ("block_name", "dataset_path"),
+    [
+        ("sipp_tips", _sipp_tips_csv_path),
+        ("sipp_assets", _sipp_assets_csv_path),
+    ],
+)
+def test_real_us_sipp_manifest_blocks_retain_declared_targets_and_predictors(
+    tmp_path: Path,
+    block_name: str,
+    dataset_path: Any,
+) -> None:
+    block = SourceImputeManifest.from_path(_real_scf_manifest_path()).block(block_name)
+
+    table = load_source_impute_block_table(
+        block,
+        dataset_path=dataset_path(tmp_path),
+        max_rows=1,
         period=2024,
     )
 
