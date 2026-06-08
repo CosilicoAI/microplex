@@ -44,6 +44,14 @@ __all__ = [
     "is_ssa_carry_forward_candidate",
     "state_to_national_rollup",
     "sum_state_records_to_national",
+    "SOIAgingFactors",
+    "age_soi_records",
+    "soi_aging_factors",
+    "soi_count_aging_factor",
+    "soi_amount_aging_factor",
+    "reference_total",
+    "soi_total_for_year",
+    "default_total_scope",
 ]
 
 
@@ -322,6 +330,309 @@ def sum_state_records_to_national(
         source_target_id=None,
         source_stratum_id=None,
     )
+
+
+@dataclass(frozen=True)
+class SOIAgingFactors:
+    """Factors (and method labels) used to age SOI records to a model year."""
+
+    source_year: int
+    target_year: int
+    count_factor: float
+    amount_factor: float
+    count_method: str
+    amount_method: str
+
+
+#: US/eCPS default SOI-aging reference series. Aging is *source-backed*: factors
+#: are ratios of these reference totals across years, not hardcoded growth rates.
+SOI_SOURCE = "IRS_SOI"
+COUNT_SOI_FALLBACK_VARIABLE = "tax_unit_count"
+AMOUNT_SOI_VARIABLE = "adjusted_gross_income"
+#: target-year labor-force lookup order: (source, variable, method-label).
+LABOR_FORCE_REFERENCES = (
+    ("BLS", "labor_force_count", "bls_labor_force_ratio"),
+    ("CBO", "labor_force", "cbo_labor_force_ratio"),
+)
+
+TotalScopeFn = Callable[[ArchTargetRecord], bool]
+
+
+def default_total_scope(record: ArchTargetRecord) -> bool:
+    """Whether a record is a jurisdiction-wide TOTAL (usable as a denominator).
+
+    True for unconstrained records, filer-only constraints, or an "all filers"
+    stratum. The US pack can inject its own predicate.
+    """
+    if not record.constraints:
+        return True
+    if tuple(record.constraints) in {
+        (("is_tax_filer", "==", "1"),),
+        (("tax_unit_is_filer", "==", "1"),),
+    }:
+        return True
+    return (
+        str(getattr(record, "stratum_name", None) or "").lower().endswith("all filers")
+    )
+
+
+def reference_total(
+    records: Sequence[ArchTargetRecord],
+    *,
+    year: int,
+    source: str,
+    variable: str,
+    normalize_source: NormalizeSourceFn = default_normalize_source,
+    total_scope: TotalScopeFn | None = None,
+) -> float | None:
+    """The first matching reference total (period/source/variable), or ``None``.
+
+    When ``total_scope`` is given, only records it accepts are considered.
+    """
+    normalized = normalize_source(source)
+    matches = [
+        record
+        for record in records
+        if record.period == year
+        and normalize_source(record.source) == normalized
+        and record.variable == variable
+    ]
+    if total_scope is not None:
+        matches = [record for record in matches if total_scope(record)]
+    return float(matches[0].value) if matches else None
+
+
+def soi_total_for_year(
+    records: Sequence[ArchTargetRecord],
+    *,
+    target_year: int,
+    variable: str,
+    exact_method: str,
+    extrapolation_method: str,
+    total_scope: TotalScopeFn = default_total_scope,
+    normalize_source: NormalizeSourceFn = default_normalize_source,
+) -> tuple[float | None, str]:
+    """An SOI total at ``target_year``: exact if present, else last-growth
+    extrapolation from the two latest available years, else ``None``."""
+    exact = reference_total(
+        records,
+        year=target_year,
+        source=SOI_SOURCE,
+        variable=variable,
+        normalize_source=normalize_source,
+        total_scope=total_scope,
+    )
+    if exact is not None:
+        return exact, exact_method
+    available: dict[int, float] = {}
+    for year in sorted({record.period for record in records}):
+        if year > target_year:
+            continue
+        value = reference_total(
+            records,
+            year=year,
+            source=SOI_SOURCE,
+            variable=variable,
+            normalize_source=normalize_source,
+            total_scope=total_scope,
+        )
+        if value is not None:
+            available[year] = value
+    if len(available) < 2:
+        return None, f"source_fact_carry_forward_no_{variable}_reference"
+    latest_year = max(available)
+    previous_year = max(year for year in available if year < latest_year)
+    annual_growth = available[latest_year] / available[previous_year]
+    years_forward = target_year - latest_year
+    return available[latest_year] * annual_growth**years_forward, extrapolation_method
+
+
+def _labor_force_for_year(
+    records: Sequence[ArchTargetRecord],
+    *,
+    year: int,
+    normalize_source: NormalizeSourceFn = default_normalize_source,
+) -> tuple[float | None, str]:
+    for source, variable, method in LABOR_FORCE_REFERENCES:
+        value = reference_total(
+            records,
+            year=year,
+            source=source,
+            variable=variable,
+            normalize_source=normalize_source,
+        )
+        if value is not None:
+            return value, method
+    return None, "source_fact_carry_forward_no_labor_force_reference"
+
+
+def soi_count_aging_factor(
+    records: Sequence[ArchTargetRecord],
+    *,
+    source_year: int,
+    target_year: int,
+    normalize_source: NormalizeSourceFn = default_normalize_source,
+    total_scope: TotalScopeFn = default_total_scope,
+) -> tuple[float, str]:
+    """COUNT aging factor: labor-force ratio (BLS source-year vs BLS/CBO
+    target-year), else SOI return-count ratio, else 1.0. Faithful port."""
+    source_labor_force = reference_total(
+        records,
+        year=source_year,
+        source="BLS",
+        variable="labor_force_count",
+        normalize_source=normalize_source,
+    )
+    target_labor_force, labor_force_method = _labor_force_for_year(
+        records, year=target_year, normalize_source=normalize_source
+    )
+    if source_labor_force is not None and target_labor_force is not None:
+        return target_labor_force / source_labor_force, labor_force_method
+
+    source_count = reference_total(
+        records,
+        year=source_year,
+        source=SOI_SOURCE,
+        variable=COUNT_SOI_FALLBACK_VARIABLE,
+        normalize_source=normalize_source,
+        total_scope=total_scope,
+    )
+    target_count, count_method = soi_total_for_year(
+        records,
+        target_year=target_year,
+        variable=COUNT_SOI_FALLBACK_VARIABLE,
+        exact_method="soi_total_return_count_ratio",
+        extrapolation_method="soi_total_return_count_last_growth_extrapolation",
+        total_scope=total_scope,
+        normalize_source=normalize_source,
+    )
+    if source_count is not None and target_count is not None:
+        return target_count / source_count, count_method
+    return 1.0, "source_fact_carry_forward_no_count_reference"
+
+
+def soi_amount_aging_factor(
+    records: Sequence[ArchTargetRecord],
+    *,
+    source_year: int,
+    target_year: int,
+    normalize_source: NormalizeSourceFn = default_normalize_source,
+    total_scope: TotalScopeFn = default_total_scope,
+) -> tuple[float, str]:
+    """AMOUNT aging factor: SOI AGI ratio (exact or last-growth extrapolation),
+    else 1.0. Faithful port."""
+    source_agi = reference_total(
+        records,
+        year=source_year,
+        source=SOI_SOURCE,
+        variable=AMOUNT_SOI_VARIABLE,
+        normalize_source=normalize_source,
+        total_scope=total_scope,
+    )
+    target_agi, amount_method = soi_total_for_year(
+        records,
+        target_year=target_year,
+        variable=AMOUNT_SOI_VARIABLE,
+        exact_method="soi_total_agi_ratio",
+        extrapolation_method="soi_total_agi_last_growth_extrapolation",
+        total_scope=total_scope,
+        normalize_source=normalize_source,
+    )
+    if source_agi is not None and target_agi is not None:
+        return target_agi / source_agi, amount_method
+    return 1.0, "source_fact_carry_forward_no_amount_reference"
+
+
+CountFactorFn = Callable[..., tuple[float, str]]
+
+
+def soi_aging_factors(
+    reference_records: Sequence[ArchTargetRecord],
+    *,
+    source_year: int,
+    target_year: int,
+    needs_count_factor: bool = True,
+    needs_amount_factor: bool = True,
+    count_factor: CountFactorFn = soi_count_aging_factor,
+    amount_factor: CountFactorFn = soi_amount_aging_factor,
+) -> SOIAgingFactors:
+    """Resolve the count + amount aging factors for one source→target year."""
+    if source_year == target_year:
+        return SOIAgingFactors(
+            source_year, target_year, 1.0, 1.0, "identity", "identity"
+        )
+    if needs_count_factor:
+        count_value, count_method = count_factor(
+            reference_records, source_year=source_year, target_year=target_year
+        )
+    else:
+        count_value, count_method = 1.0, "not_required"
+    if needs_amount_factor:
+        amount_value, amount_method = amount_factor(
+            reference_records, source_year=source_year, target_year=target_year
+        )
+    else:
+        amount_value, amount_method = 1.0, "not_required"
+    return SOIAgingFactors(
+        source_year,
+        target_year,
+        count_value,
+        amount_value,
+        count_method,
+        amount_method,
+    )
+
+
+AgingFactorsFn = Callable[..., SOIAgingFactors]
+
+
+def age_soi_records(
+    records: Sequence[ArchTargetRecord],
+    *,
+    target_year: int,
+    reference_records: Sequence[ArchTargetRecord],
+    factors_for: AgingFactorsFn = soi_aging_factors,
+) -> list[ArchTargetRecord]:
+    """Age SOI records from each source year to ``target_year``.
+
+    Generic application (faithful port): group records by source year, resolve
+    the count/amount factors for that year via ``factors_for`` (default
+    :func:`soi_aging_factors`, computed from ``reference_records``), then scale
+    each record by its target-type factor and stamp ``period``/``source_period``
+    /``aging_factors``. Same-year records pass through unchanged.
+    """
+    aged: list[ArchTargetRecord] = []
+    for source_year in sorted({record.period for record in records}):
+        source_records = [r for r in records if r.period == source_year]
+        if source_year == target_year:
+            aged.extend(source_records)
+            continue
+        needs_count = any(r.target_type == "COUNT" for r in source_records)
+        needs_amount = any(r.target_type == "AMOUNT" for r in source_records)
+        factors = factors_for(
+            reference_records,
+            source_year=source_year,
+            target_year=target_year,
+            needs_count_factor=needs_count,
+            needs_amount_factor=needs_amount,
+        )
+        for record in source_records:
+            if record.target_type == "COUNT":
+                factor = factors.count_factor
+            elif record.target_type == "AMOUNT":
+                factor = factors.amount_factor
+            else:
+                factor = 1.0
+            aged.append(
+                replace(
+                    record,
+                    value=float(record.value) * factor,
+                    period=target_year,
+                    source_period=record.period,
+                    aging_factors=factors,
+                )
+            )
+    return aged
 
 
 def _component_sum_record_key(

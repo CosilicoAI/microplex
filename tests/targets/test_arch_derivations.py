@@ -6,9 +6,15 @@ from dataclasses import replace
 
 from microplex.targets.arch_derivations import (
     ArchTargetRecord,
+    SOIAgingFactors,
+    age_soi_records,
     component_sum_records,
+    default_total_scope,
     is_ssa_carry_forward_candidate,
     latest_carry_forward,
+    soi_aging_factors,
+    soi_amount_aging_factor,
+    soi_count_aging_factor,
     ssa_carry_forward_rank,
     state_to_national_rollup,
     sum_state_records_to_national,
@@ -341,3 +347,127 @@ def test_state_rollup_builder_can_strip_constraints():
         ),
     )
     assert out[0].constraints == ()
+
+
+# --- SOI aging ---
+
+
+def _ref(source: str, variable: str, period: int, value: float) -> ArchTargetRecord:
+    return _rec(variable, value, source=source, period=period)
+
+
+def test_age_soi_records_applies_factor_by_target_type_and_stamps_period():
+    def stub_factors(refs, *, source_year, target_year, **kw):
+        return SOIAgingFactors(source_year, target_year, 2.0, 3.0, "c", "a")
+
+    records = [
+        _rec("returns", 10.0, period=2020, target_type="COUNT"),
+        _rec("agi", 100.0, period=2020, target_type="AMOUNT"),
+    ]
+    aged = age_soi_records(
+        records, target_year=2024, reference_records=[], factors_for=stub_factors
+    )
+    by_var = {r.variable: r for r in aged}
+    assert by_var["returns"].value == 20.0  # x2 count factor
+    assert by_var["agi"].value == 300.0  # x3 amount factor
+    assert all(r.period == 2024 for r in aged)
+    assert all(r.source_period == 2020 for r in aged)
+    assert all(r.aging_factors is not None for r in aged)
+
+
+def test_age_soi_records_passes_through_same_year():
+    rec = _rec("agi", 100.0, period=2024, target_type="AMOUNT")
+    aged = age_soi_records([rec], target_year=2024, reference_records=[])
+    assert aged == [rec]
+
+
+def test_soi_count_factor_uses_bls_labor_force_ratio():
+    refs = [
+        _ref("BLS", "labor_force_count", 2020, 100.0),
+        _ref("BLS", "labor_force_count", 2024, 110.0),
+    ]
+    factor, method = soi_count_aging_factor(refs, source_year=2020, target_year=2024)
+    assert round(factor, 6) == 1.1
+    assert method == "bls_labor_force_ratio"
+
+
+def test_soi_count_factor_falls_back_to_cbo_for_target():
+    refs = [
+        _ref("BLS", "labor_force_count", 2020, 100.0),
+        _ref("CBO", "labor_force", 2024, 120.0),  # no BLS at target -> CBO
+    ]
+    factor, method = soi_count_aging_factor(refs, source_year=2020, target_year=2024)
+    assert round(factor, 6) == 1.2
+    assert method == "cbo_labor_force_ratio"
+
+
+def test_soi_count_factor_falls_back_to_soi_return_count():
+    refs = [
+        _ref("IRS_SOI", "tax_unit_count", 2020, 50.0),
+        _ref("IRS_SOI", "tax_unit_count", 2024, 60.0),
+    ]
+    factor, method = soi_count_aging_factor(refs, source_year=2020, target_year=2024)
+    assert round(factor, 6) == 1.2
+    assert method == "soi_total_return_count_ratio"
+
+
+def test_soi_count_factor_carry_forward_when_no_reference():
+    factor, method = soi_count_aging_factor([], source_year=2020, target_year=2024)
+    assert factor == 1.0
+    assert "no_count_reference" in method
+
+
+def test_soi_amount_factor_exact_agi_ratio():
+    refs = [
+        _ref("IRS_SOI", "adjusted_gross_income", 2020, 1000.0),
+        _ref("IRS_SOI", "adjusted_gross_income", 2024, 1500.0),
+    ]
+    factor, method = soi_amount_aging_factor(refs, source_year=2020, target_year=2024)
+    assert round(factor, 6) == 1.5
+    assert method == "soi_total_agi_ratio"
+
+
+def test_soi_amount_factor_extrapolates_when_target_year_absent():
+    refs = [
+        _ref("IRS_SOI", "adjusted_gross_income", 2020, 1000.0),
+        _ref("IRS_SOI", "adjusted_gross_income", 2022, 1100.0),  # 1.1/yr growth
+    ]
+    factor, method = soi_amount_aging_factor(refs, source_year=2020, target_year=2024)
+    # latest 2022 (1100), growth 1.1/yr, 2 yrs fwd -> 1331; /1000 source -> 1.331
+    assert round(factor, 6) == 1.331
+    assert method == "soi_total_agi_last_growth_extrapolation"
+
+
+def test_soi_amount_factor_carry_forward_when_insufficient():
+    refs = [_ref("IRS_SOI", "adjusted_gross_income", 2020, 1000.0)]
+    factor, method = soi_amount_aging_factor(refs, source_year=2020, target_year=2024)
+    assert factor == 1.0
+    assert "no_amount_reference" in method
+
+
+def test_soi_aging_factors_identity_same_year():
+    factors = soi_aging_factors([], source_year=2024, target_year=2024)
+    assert factors.count_factor == 1.0
+    assert factors.amount_factor == 1.0
+    assert factors.count_method == "identity"
+
+
+def test_soi_aging_factors_not_required():
+    factors = soi_aging_factors(
+        [],
+        source_year=2020,
+        target_year=2024,
+        needs_count_factor=False,
+        needs_amount_factor=False,
+    )
+    assert factors.count_factor == 1.0
+    assert factors.count_method == "not_required"
+    assert factors.amount_method == "not_required"
+
+
+def test_default_total_scope():
+    assert default_total_scope(_rec("x", 1.0))  # no constraints
+    assert default_total_scope(
+        _rec("x", 1.0, constraints=(("is_tax_filer", "==", "1"),))
+    )
+    assert not default_total_scope(_rec("x", 1.0, constraints=(("age", ">=", "65"),)))
