@@ -121,6 +121,20 @@ weights. `create_us_asec_puf_source_registry` registers only the first
 critical source pair (`cps_asec_2025_calendar_2024` and `puf_2024`) so the
 pipeline can exercise ASEC+PUF before adding SCF/SIPP/ACS.
 
+### 5c. `microplex.data_sources.asec_puf_smoke` — first real-data support-spine run
+`microplex-us-asec-puf-smoke` is a maintained smoke command for the first
+construction stage: load the ASEC/CPS and PUF providers, validate their shared
+tax-unit surface, and run the seeded 50/50 support-spine split. It accepts
+explicit local PUF and demographics CSV paths because the IRS PUF is
+restricted-access; `PUFSourceProvider` now treats those handoff files as a
+first-class input path rather than depending only on a Hugging Face fetch.
+
+Codex ran the command on 2026-06-08 with cached 2025 ASEC and local 2015 PUF
+files, capped to 5,000 CPS rows and 10,000 PUF rows. The smoke produced a
+5,000-row support spine split 2,500/2,500 between `cps_keep` and
+`synthetic_puf`, confirmed no ASEC/PUF shared-variable gaps, and initialized
+synthetic-half household weights to zero.
+
 ### 6. `microplex.stage_manifest` — strict stage artifact manifests
 Build stages can now write a self-verifying JSON manifest with schema version,
 stage id, declared seeds, parameters, metadata, and per-artifact relative path,

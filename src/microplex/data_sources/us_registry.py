@@ -18,6 +18,8 @@ def create_us_asec_puf_source_registry(
     cache_dir: Path | None = None,
     cps_cache_dir: Path | None = None,
     puf_cache_dir: Path | None = None,
+    puf_path: Path | None = None,
+    puf_demographics_path: Path | None = None,
     download_cps: bool = True,
 ) -> SourceRegistry:
     """Create the first-principles ASEC+PUF source registry.
@@ -46,6 +48,8 @@ def create_us_asec_puf_source_registry(
             PUFSourceProvider(
                 target_year=puf_year,
                 cache_dir=puf_cache_dir or cache_dir,
+                puf_path=puf_path,
+                demographics_path=puf_demographics_path,
             ),
             default_entity=EntityType.TAX_UNIT,
         )

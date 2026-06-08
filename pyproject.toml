@@ -95,6 +95,7 @@ Repository = "https://github.com/PolicyEngine/microplex"
 
 [project.scripts]
 microplex-check-content-package = "microplex.content_package:main"
+microplex-us-asec-puf-smoke = "microplex.data_sources.asec_puf_smoke:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/microplex"]
