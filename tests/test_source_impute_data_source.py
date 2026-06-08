@@ -17,7 +17,10 @@ from microplex.data_sources.source_impute import (
     compile_source_impute_steps_from_manifest,
     load_source_impute_block_table,
 )
-from microplex.data_sources.us_registry import register_us_source_impute_blocks
+from microplex.data_sources.us_registry import (
+    register_us_declared_source_impute_blocks,
+    register_us_source_impute_blocks,
+)
 from microplex.imputation import ImputationRunner
 from microplex.source_registry import SourceRegistry
 from microplex.spec import (
@@ -846,6 +849,138 @@ def test_register_us_source_impute_blocks_resolves_grouped_sipp_dataset(
     assert frame.observation_mask(EntityType.PERSON)[
         "bank_account_assets"
     ].tolist() == [False, True]
+
+
+def test_register_us_declared_source_impute_blocks_matches_real_us_spec(
+    tmp_path: Path,
+) -> None:
+    _real_scf_h5_path(tmp_path)
+    _acs_h5_path(tmp_path)
+    _sipp_tips_csv_path(tmp_path)
+    _sipp_assets_csv_path(tmp_path)
+    spec = load_spec(_real_us_spec_path())
+    registry = SourceRegistry()
+
+    register_us_declared_source_impute_blocks(
+        registry,
+        spec=spec,
+        manifest_path=_real_scf_manifest_path(),
+        storage_dir=tmp_path,
+        max_rows=1,
+    )
+
+    assert spec.sources["scf"].dataset == "scf_2022"
+    assert spec.sources["acs"].dataset == "acs_2024"
+    assert spec.sources["sipp"].dataset == "sipp_2023"
+    assert registry.provider_for("scf_2022")
+    assert registry.provider_for("acs_2024")
+    sipp_frame = registry.provider_for("sipp_2023").load_frame(SourceQuery(period=2024))
+    sipp_table = sipp_frame.tables[EntityType.PERSON]
+    assert sipp_table["person_id"].tolist() == ["100|1|1", "200|1"]
+    assert "tip_income" in sipp_table.columns
+    assert "bank_account_assets" in sipp_table.columns
+
+
+def test_register_us_declared_source_impute_blocks_respects_explicit_blocks(
+    tmp_path: Path,
+) -> None:
+    _real_scf_h5_path(tmp_path)
+    spec = load_spec(_real_us_spec_path())
+    registry = SourceRegistry()
+
+    register_us_declared_source_impute_blocks(
+        registry,
+        spec=spec,
+        manifest_path=_real_scf_manifest_path(),
+        storage_dir=tmp_path,
+        max_rows=1,
+        blocks=("scf",),
+    )
+
+    assert registry.provider_for("scf_2022")
+    with pytest.raises(KeyError, match="acs_2024"):
+        registry.provider_for("acs_2024")
+    with pytest.raises(KeyError, match="sipp_2023"):
+        registry.provider_for("sipp_2023")
+
+
+def test_register_us_declared_source_impute_blocks_allows_empty_block_selection(
+    tmp_path: Path,
+) -> None:
+    spec = load_spec(_real_us_spec_path())
+    registry = SourceRegistry()
+
+    result = register_us_declared_source_impute_blocks(
+        registry,
+        spec=spec,
+        manifest_path=_real_scf_manifest_path(),
+        storage_dir=tmp_path,
+        blocks=(),
+    )
+
+    assert result is registry
+    with pytest.raises(KeyError, match="scf_2022"):
+        registry.provider_for("scf_2022")
+
+
+def test_register_us_declared_source_impute_blocks_rejects_undeclared_block(
+    tmp_path: Path,
+) -> None:
+    spec = load_spec_dict(
+        {
+            "meta": {"country": "us", "model_year": 2024},
+            "sources": {"scf": {"dataset": "scf_2022", "role": "spine"}},
+            "spine": {
+                "base": "scf",
+                "method": "support_spine",
+                "support": {"seed": 42},
+                "halves": [
+                    {"name": "keep", "keep": "all"},
+                    {"name": "strip", "strip_to": ["age"]},
+                ],
+            },
+            "imputation": [],
+        }
+    )
+    registry = SourceRegistry()
+
+    with pytest.raises(ValueError, match="not declared as spec sources"):
+        register_us_declared_source_impute_blocks(
+            registry,
+            spec=spec,
+            manifest_path=_real_scf_manifest_path(),
+            storage_dir=tmp_path,
+            blocks=("acs",),
+        )
+
+
+def test_register_us_declared_source_impute_blocks_rejects_dataset_mismatch(
+    tmp_path: Path,
+) -> None:
+    spec_data = {
+        "meta": {"country": "us", "model_year": 2024},
+        "sources": {"scf": {"dataset": "scf_wrong", "role": "spine"}},
+        "spine": {
+            "base": "scf",
+            "method": "support_spine",
+            "support": {"seed": 42},
+            "halves": [
+                {"name": "keep", "keep": "all"},
+                {"name": "strip", "strip_to": ["age"]},
+            ],
+        },
+        "imputation": [],
+    }
+    registry = SourceRegistry()
+
+    with pytest.raises(ValueError, match="dataset id does not match"):
+        register_us_declared_source_impute_blocks(
+            registry,
+            spec=load_spec_dict(spec_data),
+            manifest_path=_real_scf_manifest_path(),
+            storage_dir=tmp_path,
+            blocks=("scf",),
+        )
 
 
 def test_register_us_source_impute_blocks_rejects_mixed_blocks_atomically(

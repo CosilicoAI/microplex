@@ -14,6 +14,7 @@ from microplex.data_sources.source_impute import (
     validate_source_impute_block_supported,
 )
 from microplex.source_registry import SourceRegistry
+from microplex.spec import MicroplexSpec
 
 
 def create_us_asec_puf_source_registry(
@@ -117,3 +118,84 @@ def register_us_source_impute_blocks(
             default_entity=EntityType.PERSON,
         )
     return registry
+
+
+def register_us_declared_source_impute_blocks(
+    registry: SourceRegistry,
+    *,
+    spec: MicroplexSpec,
+    manifest_path: str | Path,
+    storage_dir: str | Path | None = None,
+    max_rows: int | None = None,
+    blocks: tuple[str, ...] | None = None,
+) -> SourceRegistry:
+    """Register source-impute donor providers declared by a US content spec.
+
+    ``run_spec`` resolves every source named by the spec before executing its
+    stage graph. The US content spec declares SCF/SIPP/ACS as donor sources, but
+    the executable loaders live in Microplex. This helper bridges those pieces:
+    it reads the content-pack source-impute manifest, selects the blocks whose
+    ``survey_name`` appears in ``spec.sources``, asserts that their dataset id
+    matches the spec declaration, and delegates to
+    :func:`register_us_source_impute_blocks`.
+
+    Args:
+        registry: Registry to extend.
+        spec: Validated US content spec.
+        manifest_path: Path to ``pe_source_impute_blocks.json``.
+        storage_dir: Optional directory containing source-impute input files.
+        max_rows: Optional row cap for smoke-scale providers.
+        blocks: Optional explicit manifest block filter. When supplied, every
+            requested block must correspond to a source declared by ``spec``.
+
+    Returns:
+        The same ``registry`` instance, extended in place.
+
+    Raises:
+        ValueError: if a requested block is absent from the spec sources or its
+            manifest dataset id disagrees with the spec declaration.
+    """
+    manifest = SourceImputeManifest.from_path(manifest_path)
+    selected_block_names = tuple(manifest.blocks) if blocks is None else blocks
+    declared_block_names: list[str] = []
+    missing_sources: list[str] = []
+    dataset_mismatches: list[str] = []
+
+    for block_name in selected_block_names:
+        block = manifest.block(block_name)
+        source_spec = spec.sources.get(block.survey_name)
+        if source_spec is None:
+            if blocks is not None:
+                missing_sources.append(f"{block_name}:{block.survey_name}")
+            continue
+        expected_dataset = (
+            block.dataset_id or f"{block.survey_name}_{block.default_year}"
+        )
+        if source_spec.dataset != expected_dataset:
+            dataset_mismatches.append(
+                f"{block_name}:{block.survey_name} manifest={expected_dataset} "
+                f"spec={source_spec.dataset}"
+            )
+            continue
+        declared_block_names.append(block_name)
+
+    if missing_sources:
+        raise ValueError(
+            "source-impute block(s) are not declared as spec sources: "
+            f"{missing_sources}"
+        )
+    if dataset_mismatches:
+        raise ValueError(
+            "source-impute block dataset id does not match spec source dataset: "
+            f"{dataset_mismatches}"
+        )
+    if not declared_block_names:
+        return registry
+
+    return register_us_source_impute_blocks(
+        registry,
+        manifest_path=manifest_path,
+        storage_dir=storage_dir,
+        max_rows=max_rows,
+        blocks=tuple(declared_block_names),
+    )
