@@ -41,6 +41,7 @@ dependencies = [
     "huggingface_hub>=0.20",  # For PUF download
     "polars>=0.20",  # For CPS loading
     "httpx>=0.25",  # For data downloads
+    "h5py>=3.0",  # For array-style HDF5 source datasets
     "pyyaml>=6.0",  # For configuration files
     "microimpute>=3.1.1 ; python_version >= '3.12' and python_version < '3.15'",  # Canonical regime-gated donor imputation
     "quantile-forest>=1.3",  # For QRF-based synthesis
@@ -96,6 +97,10 @@ Repository = "https://github.com/PolicyEngine/microplex"
 [project.scripts]
 microplex-check-content-package = "microplex.content_package:main"
 microplex-us-asec-puf-smoke = "microplex.data_sources.asec_puf_smoke:main"
+microplex-us-source-impute-smoke = "microplex.data_sources.source_impute:main"
+
+[tool.uv.sources]
+microimpute = { git = "https://github.com/PolicyEngine/microimpute.git", rev = "90be828eb442c48ee86bb91bb83a75da4b0f0f89" }
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/microplex"]

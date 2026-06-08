@@ -67,7 +67,17 @@ from microplex.data_sources.puf import (
     map_puf_variables,
     uprate_puf,
 )
-from microplex.data_sources.us_registry import create_us_asec_puf_source_registry
+from microplex.data_sources.source_impute import (
+    ManifestSourceImputeProvider,
+    SourceImputeBlock,
+    SourceImputeManifest,
+    load_source_impute_block_table,
+    validate_source_impute_block_supported,
+)
+from microplex.data_sources.us_registry import (
+    create_us_asec_puf_source_registry,
+    register_us_source_impute_blocks,
+)
 
 __all__ = [
     # CPS loading
@@ -110,7 +120,14 @@ __all__ = [
     "UPRATING_FACTORS",
     "PUF_EXCLUSIVE_VARS",
     "SHARED_VARS",
+    # Source-impute manifests
+    "ManifestSourceImputeProvider",
+    "SourceImputeBlock",
+    "SourceImputeManifest",
+    "load_source_impute_block_table",
+    "validate_source_impute_block_supported",
     "create_us_asec_puf_source_registry",
+    "register_us_source_impute_blocks",
     # PSID loading
     "PSIDDataset",
     "load_psid_panel",
