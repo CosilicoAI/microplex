@@ -314,6 +314,27 @@ def _source_impute_scf_h5_path(
     return path
 
 
+def _source_impute_acs_h5_path(tmp_path: Path) -> Path:
+    path = tmp_path / "acs_2022.h5"
+    with h5py.File(path, "w") as h5:
+        h5["person_id"] = np.array([101, 102, 201, 301])
+        h5["person_household_id"] = np.array([10, 10, 20, 30])
+        h5["age"] = np.array([40, 38, 65, 22])
+        h5["employment_income"] = np.array([50_000.0, 10_000.0, 0.0, 20_000.0])
+        h5["self_employment_income"] = np.array([5_000.0, 0.0, 0.0, 2_000.0])
+        h5["social_security"] = np.array([0.0, 0.0, 18_000.0, 0.0])
+        h5["taxable_private_pension_income"] = np.array([100.0, 50.0, 7_000.0, 0.0])
+        h5["rent"] = np.array([0.0, 0.0, 12_000.0, 0.0])
+        h5["real_estate_taxes"] = np.array([3_000.0, 0.0, 0.0, 0.0])
+        h5["is_male"] = np.array([1, 0, 0, 1])
+        h5["is_household_head"] = np.array([1, 0, 1, 1])
+        h5["household_id"] = np.array([10, 20, 30])
+        h5["state_fips"] = np.array([6, 36, 48])
+        h5["household_weight"] = np.array([100.0, 200.0, 300.0])
+        h5["tenure_type"] = np.array([b"OWNED_OUTRIGHT", b"RENTED", b"NONE"])
+    return path
+
+
 class _RecordingSourceImputer:
     def __init__(self) -> None:
         self.fit_kwargs: dict[str, Any] | None = None
@@ -478,6 +499,54 @@ def test_asec_puf_smoke_retains_source_impute_predictor_surface(
     assert set(predictors).issubset(result.diagnostics["demographic_columns"])
     assert recorder.fit_kwargs is not None
     assert recorder.fit_kwargs["predictors"] == list(predictors)
+
+
+def test_asec_puf_smoke_runs_acs_housing_source_impute_after_block_assignment(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    _source_impute_acs_h5_path(tmp_path)
+    recorder = _RecordingSourceImputer()
+    monkeypatch.setattr(
+        "microplex.imputation.ImputationRunner._make_imputer",
+        lambda self: recorder,
+    )
+
+    result = run_asec_puf_support_spine_smoke(
+        registry=_registry(),
+        block_crosswalk_path=Path(_block_crosswalk_path(tmp_path)),
+        source_impute_spec_path=Path("packs/us/specs/us-2024.yaml"),
+        source_impute_manifest_path=Path(
+            "packs/us/manifests/pe_source_impute_blocks.json"
+        ),
+        source_impute_storage_dir=tmp_path,
+        source_impute_blocks=("acs",),
+    )
+
+    expected_predictors = [
+        "is_household_head",
+        "age",
+        "is_male",
+        "employment_income",
+        "self_employment_income",
+        "social_security",
+        "pension_income",
+        "household_size",
+        "state_fips",
+    ]
+    source_imputation = result.diagnostics["source_imputation"]
+    assert source_imputation["source_rows"] == {"acs": 3}
+    assert len(source_imputation["results"]) == 2
+    assert all(
+        item["donor"] == "acs"
+        and item["imputed"] == ["pre_subsidy_rent", "real_estate_taxes"]
+        for item in source_imputation["results"]
+    )
+    assert result.run_result.frame["pre_subsidy_rent"].notna().all()
+    assert result.run_result.frame["real_estate_taxes"].notna().all()
+    assert set(expected_predictors).issubset(result.diagnostics["demographic_columns"])
+    assert recorder.fit_kwargs is not None
+    assert recorder.fit_kwargs["predictors"] == expected_predictors
 
 
 def test_asec_puf_smoke_block_filter_limits_source_impute_compilation(

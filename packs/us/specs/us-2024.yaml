@@ -3990,7 +3990,7 @@ variables:
         summary: Structural columns must be asserted by strict stage/export manifests.
   pre_subsidy_rent:
     entity: person
-    role: legacy_default_needs_source_review
+    role: acs_housing_source_imputed
     temporary: true
     ecps:
       method: CPS/eCPS required export contract source path pending exact row-level attribution
@@ -4009,16 +4009,16 @@ variables:
         symbol: POLICYENGINE_US_EXPORT_DEFAULTS
       notes: Default-only parity is not sufficient for numeric/behavioral parity unless eCPS also defaults this surface.
     mp_spec:
-      method: passthrough/derive/default decision pending exact source classification
+      method: declared ACS housing source-imputation step
       operation:
-        kind: open_decision
-        notes: Exact passthrough, derive, or default rule still needs SourceRegistry classification.
+        kind: impute
+        source: acs
+        imputation_step: acs_source_impute
       code:
       - path: src/microplex_us/specs/us-2024.yaml
-        summary: Temporary declaration; this row prevents silent omission from the spec.
-      notes: Use the variable manifest and lineage gate to decide whether this is CPS passthrough, deterministic derive, or
-        valid default. MP legacy currently has an export default for this required column; verify source passthrough or transform
-        before promotion.
+        summary: Listed in the source-impute manifest as ACS rent mapped onto the PolicyEngine pre_subsidy_rent export column.
+      notes: ACS donor rent is materialized as pre_subsidy_rent before generic source imputation; no runtime country Python
+        is required.
   previous_year_income_available:
     entity: person
     role: legacy_default_needs_source_review
@@ -4176,7 +4176,7 @@ variables:
       notes: Synthetic half synthesizes from PUF. CPS keep half is overwritten/collapsed for eCPS OVERRIDDEN variables.
   real_estate_taxes:
     entity: person
-    role: cps_passthrough_or_constructed
+    role: acs_housing_source_imputed
     temporary: true
     ecps:
       method: CPS/eCPS required export contract source path pending exact row-level attribution
@@ -4200,15 +4200,15 @@ variables:
       notes: 'Temporary broad provenance: exact MP legacy source/default evidence should be narrowed per variable as the declarative
         spec replaces the imperative path.'
     mp_spec:
-      method: contract-required variable pending exact declarative source rule
+      method: declared ACS housing source-imputation step
       operation:
-        kind: open_decision
-        notes: Exact passthrough, derive, or default rule still needs SourceRegistry classification.
+        kind: impute
+        source: acs
+        imputation_step: acs_source_impute
       code:
       - path: src/microplex_us/specs/us-2024.yaml
-        summary: This temporary variables block declares the intended contract surface.
-      notes: Must remain represented in the spec until the runtime SourceRegistry/transform/export stage implements the final
-        rule.
+        summary: Listed in the source-impute manifest as an ACS housing target.
+      notes: ACS donor real_estate_taxes is imputed by the generic manifest-backed source-impute stage.
   receives_housing_assistance:
     entity: spm_unit
     role: cps_passthrough_or_constructed

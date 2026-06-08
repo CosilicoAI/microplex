@@ -116,7 +116,6 @@ def _cps_dataset_raw_income_columns(
     )
     persons = pl.DataFrame(
         {
-            "household_id": [1, 1],
             "PH_SEQ": [1, 1],
             "A_LINENO": [1, 2],
             "A_AGE": [40, 38],
@@ -224,7 +223,10 @@ def test_cps_provider_materializes_valid_entity_tables() -> None:
     assert tax_units["weight"].tolist() == [100.0, 200.0]
     assert tax_units["state_fips"].tolist() == [6, 36]
     assert tax_units["cbsa"].tolist() == [41860, 35620]
+    assert tax_units["household_size"].tolist() == [2, 1]
     assert tax_units["is_female"].tolist() == [False, True]
+    assert tax_units["is_male"].tolist() == [True, False]
+    assert tax_units["is_household_head"].tolist() == [True, True]
     assert tax_units["cps_race"].tolist() == [1, 2]
     assert tax_units["is_married"].tolist() == [True, False]
     assert tax_units["own_children_in_household"].tolist() == [0, 0]
@@ -237,6 +239,8 @@ def test_cps_provider_materializes_valid_entity_tables() -> None:
     assert tax_units["gross_social_security"].tolist() == [1000.0, 500.0]
     assert tax_units["taxable_pension_income"].tolist() == [45.0, 20.0]
     assert tax_units["interest_dividend_income"].tolist() == [375.0, 0.0]
+    assert tax_units["social_security"].tolist() == [1000.0, 500.0]
+    assert tax_units["pension_income"].tolist() == [45.0, 20.0]
     assert tax_units["social_security_pension_income"].tolist() == [1045.0, 520.0]
     assert tax_units["unemployment_compensation"].tolist() == [25.0, 10.0]
     assert tax_units["year"].tolist() == [2024, 2024]
@@ -276,6 +280,8 @@ def test_cps_provider_preserves_raw_transform_income_predictor_sums() -> None:
 
     tax_units = frame.tables[EntityType.TAX_UNIT]
     assert tax_units["interest_dividend_income"].tolist() == [375.0]
+    assert tax_units["social_security"].tolist() == [1000.0]
+    assert tax_units["pension_income"].tolist() == [45.0]
     assert tax_units["social_security_pension_income"].tolist() == [1045.0]
     assert tax_units["agi_proxy"].tolist() == [70_375.0]
 

@@ -105,6 +105,8 @@ _CPS_TAX_UNIT_BASE_VARIABLES = (
     "household_id",
     "age",
     "is_female",
+    "is_male",
+    "is_household_head",
     "cps_race",
     "is_married",
     "filing_status",
@@ -114,12 +116,15 @@ _CPS_TAX_UNIT_BASE_VARIABLES = (
     "count_under_18",
     "agi_proxy",
     "interest_dividend_income",
+    "social_security",
+    "pension_income",
     "social_security_pension_income",
 )
 
 _CPS_TAX_UNIT_HOUSEHOLD_VARIABLES = (
     "state_fips",
     "cbsa",
+    "household_size",
 )
 
 
@@ -204,6 +209,16 @@ def _sum_components_or_existing(
     return _numeric_series_or_zero(frame, output_column)
 
 
+def _persons_with_household_id(persons: pd.DataFrame) -> pd.DataFrame:
+    if "household_id" in persons.columns:
+        return persons
+    if "PH_SEQ" not in persons.columns:
+        return persons
+    result = persons.copy()
+    result["household_id"] = result["PH_SEQ"]
+    return result
+
+
 def _harmonize_tax_units(
     tax_units: pd.DataFrame,
     households: pd.DataFrame,
@@ -213,12 +228,17 @@ def _harmonize_tax_units(
     if "household_id" not in result.columns:
         result["household_id"] = result["tax_unit_id"]
 
+    persons = _persons_with_household_id(persons)
     available_aggregates = {
         source: target
         for source, target in _CPS_TAX_UNIT_AGGREGATES.items()
         if source in persons.columns
     }
     if available_aggregates:
+        if "household_id" not in persons.columns:
+            raise ValueError(
+                "CPS person aggregate columns require household_id or PH_SEQ"
+            )
         aggregated = persons.groupby("household_id", as_index=False).agg(
             {source: "sum" for source in available_aggregates}
         )
@@ -230,16 +250,44 @@ def _harmonize_tax_units(
         for column in available_aggregates.values():
             result[column] = result[column].fillna(0)
 
+    for source, target in (
+        ("SS_VAL", "gross_social_security"),
+        ("PNSN_VAL", "taxable_pension_income"),
+    ):
+        if target in result.columns or source not in persons.columns:
+            continue
+        if "household_id" not in persons.columns:
+            raise ValueError(f"CPS raw aggregate {source!r} requires household_id or PH_SEQ")
+        aggregated = persons.groupby("household_id", as_index=False)[source].sum()
+        aggregated = aggregated.rename(columns={source: target})
+        result = result.merge(aggregated, on="household_id", how="left")
+        result[target] = result[target].fillna(0)
+
     result["interest_dividend_income"] = _sum_components_or_existing(
         result,
         output_column="interest_dividend_income",
         component_columns=("taxable_interest_income", "ordinary_dividend_income"),
+    )
+    result["social_security"] = _sum_components_or_existing(
+        result,
+        output_column="social_security",
+        component_columns=("gross_social_security",),
+    )
+    result["pension_income"] = _sum_components_or_existing(
+        result,
+        output_column="pension_income",
+        component_columns=("taxable_pension_income",),
     )
     result["social_security_pension_income"] = _sum_components_or_existing(
         result,
         output_column="social_security_pension_income",
         component_columns=("gross_social_security", "taxable_pension_income"),
     )
+    if "is_female" in result.columns:
+        result["is_male"] = ~result["is_female"].fillna(False).astype(bool)
+    else:
+        result["is_male"] = False
+    result["is_household_head"] = True
 
     household_columns = [
         column
@@ -349,6 +397,7 @@ class CPSAsecSourceProvider:
         persons = _to_pandas(cps.persons)
         transformed = transform_cps_to_policyengine(cps)
         tax_units = _to_pandas(transformed.tax_units)
+        persons = _persons_with_household_id(persons)
 
         households = _ensure_column(
             households,
