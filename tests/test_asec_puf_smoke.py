@@ -40,6 +40,8 @@ def _cps_dataset(*, year: int, cache_dir=None, download: bool = True) -> CPSData
             "household_id": [1, 1, 2, 3, 3, 3, 4],
             "person_number": [1, 2, 1, 1, 2, 3, 1],
             "age": [40, 38, 21, 50, 48, 16, 77],
+            "sex": [1, 2, 2, 1, 2, 1, 2],
+            "race": [1, 1, 2, 1, 1, 1, 3],
             "marital_status": [1, 1, 6, 1, 1, 6, 4],
             "wage_income": [50_000.0, 15_000.0, 20_000.0, 80_000.0, 30_000.0, 0.0, 0.0],
             "self_employment_income": [5_000.0, 0.0, 0.0, 2_000.0, 0.0, 0.0, 0.0],
@@ -148,7 +150,16 @@ def _source_impute_manifest_path(
     tmp_path: Path,
     *,
     include_sipp: bool = False,
+    predictors: tuple[str, ...] = ("age",),
 ) -> Path:
+    direct_person_columns = {
+        "age": "age",
+        "net_worth": "net_worth",
+        "weight": "wgt",
+    }
+    direct_person_columns.update(
+        {predictor: predictor for predictor in predictors if predictor != "weight"}
+    )
     blocks: dict[str, Any] = {
         "scf": {
             "survey_name": "scf",
@@ -156,20 +167,16 @@ def _source_impute_manifest_path(
             "dataset_loader": {
                 "class_name": "SCF_2022",
                 "builder_kind": "single_person_households",
-                "direct_person_columns": {
-                    "age": "age",
-                    "net_worth": "net_worth",
-                    "weight": "wgt",
-                },
+                "direct_person_columns": direct_person_columns,
                 "constant_person_columns": {
                     "state_fips": 0,
                     "tenure": 0,
                 },
             },
             "household_variables": ["state_fips", "tenure"],
-            "person_variables": ["age", "net_worth", "weight"],
+            "person_variables": [*dict.fromkeys((*predictors, "net_worth", "weight"))],
             "target_variables": ["net_worth"],
-            "predictors": ["age"],
+            "predictors": list(predictors),
         }
     }
     if include_sipp:
@@ -181,14 +188,20 @@ def _source_impute_manifest_path(
                 "builder_kind": "single_person_households",
                 "direct_person_columns": {
                     "age": "age",
+                    "sipp_only_predictor": "sipp_only_predictor",
                     "bank_account_assets": "bank_account_assets",
                     "weight": "wgt",
                 },
             },
             "household_variables": [],
-            "person_variables": ["age", "bank_account_assets", "weight"],
+            "person_variables": [
+                "age",
+                "sipp_only_predictor",
+                "bank_account_assets",
+                "weight",
+            ],
             "target_variables": ["bank_account_assets"],
-            "predictors": ["age"],
+            "predictors": ["age", "sipp_only_predictor"],
         }
     path = tmp_path / "pe_source_impute_blocks.json"
     path.write_text(json.dumps({"blocks": blocks}))
@@ -199,6 +212,7 @@ def _source_impute_spec_path(
     tmp_path: Path,
     *,
     include_sipp: bool = False,
+    include_unbacked: bool = False,
 ) -> Path:
     sources: dict[str, Any] = {
         "cps_asec": {
@@ -240,6 +254,17 @@ def _source_impute_spec_path(
                 },
             }
         }
+    if include_unbacked:
+        variables["unbacked_asset"] = {
+            "mp_spec": {
+                "method": "impute from unbacked source",
+                "operation": {
+                    "kind": "impute",
+                    "source": "unbacked",
+                    "imputation_step": "unbacked_source_impute",
+                },
+            }
+        }
     path = tmp_path / "us-2024-source-impute.yaml"
     path.write_text(
         json.dumps(
@@ -263,12 +288,29 @@ def _source_impute_spec_path(
     return path
 
 
-def _source_impute_scf_h5_path(tmp_path: Path) -> Path:
+def _source_impute_scf_h5_path(
+    tmp_path: Path,
+    *,
+    extra_columns: tuple[str, ...] = (),
+) -> Path:
     path = tmp_path / "scf_2022.h5"
     with h5py.File(path, "w") as h5:
         h5["age"] = np.array([25, 40, 65, 80])
         h5["net_worth"] = np.array([10_000.0, 100_000.0, 250_000.0, 500_000.0])
         h5["wgt"] = np.array([1.0, 2.0, 3.0, 4.0])
+        values: dict[str, np.ndarray] = {
+            "is_female": np.array([True, False, True, False]),
+            "cps_race": np.array([1, 2, 1, 3]),
+            "is_married": np.array([False, True, True, False]),
+            "own_children_in_household": np.array([0, 2, 1, 0]),
+            "employment_income": np.array([20_000.0, 80_000.0, 10_000.0, 0.0]),
+            "interest_dividend_income": np.array([100.0, 500.0, 50.0, 25.0]),
+            "social_security_pension_income": np.array([0.0, 200.0, 5_000.0, 8_000.0]),
+        }
+        for column in extra_columns:
+            if column in {"age", "net_worth", "wgt", "weight"}:
+                continue
+            h5[column] = values[column]
     return path
 
 
@@ -398,6 +440,46 @@ def test_asec_puf_smoke_runs_source_impute_after_block_assignment(
     assert recorder.fit_kwargs["predictors"] == ["age"]
 
 
+def test_asec_puf_smoke_retains_source_impute_predictor_surface(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    predictors = (
+        "age",
+        "is_female",
+        "cps_race",
+        "is_married",
+        "own_children_in_household",
+        "employment_income",
+        "interest_dividend_income",
+        "social_security_pension_income",
+    )
+    _source_impute_scf_h5_path(tmp_path, extra_columns=predictors)
+    recorder = _RecordingSourceImputer()
+    monkeypatch.setattr(
+        "microplex.imputation.ImputationRunner._make_imputer",
+        lambda self: recorder,
+    )
+
+    result = run_asec_puf_support_spine_smoke(
+        registry=_registry(),
+        block_crosswalk_path=Path(_block_crosswalk_path(tmp_path)),
+        source_impute_spec_path=_source_impute_spec_path(tmp_path),
+        source_impute_manifest_path=_source_impute_manifest_path(
+            tmp_path,
+            predictors=predictors,
+        ),
+        source_impute_storage_dir=tmp_path,
+        source_impute_blocks=("scf",),
+    )
+
+    for half in result.run_result.halves.values():
+        assert set(predictors).issubset(half.columns)
+    assert set(predictors).issubset(result.diagnostics["demographic_columns"])
+    assert recorder.fit_kwargs is not None
+    assert recorder.fit_kwargs["predictors"] == list(predictors)
+
+
 def test_asec_puf_smoke_block_filter_limits_source_impute_compilation(
     tmp_path: Path,
     monkeypatch,
@@ -428,6 +510,38 @@ def test_asec_puf_smoke_block_filter_limits_source_impute_compilation(
         "scf",
     ]
     assert "bank_account_assets" not in result.run_result.frame.columns
+    assert "sipp_only_predictor" not in result.diagnostics["demographic_columns"]
+    assert "sipp_only_predictor" not in result.run_result.frame.columns
+
+
+def test_asec_puf_smoke_unfiltered_source_impute_skips_unbacked_operations(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    _source_impute_scf_h5_path(tmp_path)
+    recorder = _RecordingSourceImputer()
+    monkeypatch.setattr(
+        "microplex.imputation.ImputationRunner._make_imputer",
+        lambda self: recorder,
+    )
+
+    result = run_asec_puf_support_spine_smoke(
+        registry=_registry(),
+        block_crosswalk_path=Path(_block_crosswalk_path(tmp_path)),
+        source_impute_spec_path=_source_impute_spec_path(
+            tmp_path,
+            include_unbacked=True,
+        ),
+        source_impute_manifest_path=_source_impute_manifest_path(tmp_path),
+        source_impute_storage_dir=tmp_path,
+        source_impute_imputation_steps=None,
+    )
+
+    source_imputation = result.diagnostics["source_imputation"]
+    assert source_imputation["source_rows"] == {"scf": 4}
+    assert "unbacked_asset" not in result.run_result.frame.columns
+    assert recorder.fit_kwargs is not None
+    assert recorder.fit_kwargs["imputed_variables"] == ["net_worth"]
 
 
 def test_asec_puf_smoke_step_filter_still_applies_with_block_filter(

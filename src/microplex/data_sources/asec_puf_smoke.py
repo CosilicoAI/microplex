@@ -13,6 +13,7 @@ import pandas as pd
 
 from microplex.data_sources.census_blocks import CensusBlockCrosswalkProvider
 from microplex.data_sources.puf import SHARED_VARS
+from microplex.data_sources.source_impute import SourceImputeManifest
 from microplex.data_sources.us_registry import (
     create_us_asec_puf_source_registry,
     register_us_declared_source_impute_blocks,
@@ -26,7 +27,12 @@ from microplex.geography import (
 from microplex.imputation import ImputationStepResult
 from microplex.run import RunResult, run_source_impute_stage, run_spec
 from microplex.source_registry import SourceRegistry
-from microplex.spec import MicroplexSpec, load_spec, load_spec_dict
+from microplex.spec import (
+    MicroplexSpec,
+    VariableOperationKind,
+    load_spec,
+    load_spec_dict,
+)
 from microplex.stage_manifest import (
     StageManifest,
     build_stage_manifest,
@@ -177,12 +183,34 @@ def run_asec_puf_support_spine_smoke(
     source_impute_manifest_path: Path | None = None,
     source_impute_storage_dir: Path | None = None,
     source_impute_blocks: Sequence[str] | None = None,
-    source_impute_imputation_steps: Sequence[str] = DEFAULT_SOURCE_IMPUTE_STEPS,
+    source_impute_imputation_steps: Sequence[str] | None = DEFAULT_SOURCE_IMPUTE_STEPS,
     max_source_impute_rows: int | None = None,
     demographic_columns: Sequence[str] = DEFAULT_DEMOGRAPHIC_COLUMNS,
     geography_constraint_columns: Sequence[str] = DEFAULT_GEOGRAPHY_CONSTRAINT_COLUMNS,
 ) -> AsecPufSupportSpineSmokeResult:
     """Load ASEC+PUF providers and run the support-spine stage."""
+    source_impute_spec: MicroplexSpec | None = None
+    selected_source_impute_blocks = (
+        tuple(source_impute_blocks) if source_impute_blocks is not None else None
+    )
+    effective_demographic_columns = tuple(demographic_columns)
+    if source_impute_manifest_path is not None:
+        source_impute_spec = load_spec(
+            source_impute_spec_path or Path("packs/us/specs/us-2024.yaml")
+        )
+        source_impute_manifest = SourceImputeManifest.from_path(
+            source_impute_manifest_path
+        )
+        source_impute_predictors = _source_impute_predictor_columns(
+            source_impute_spec,
+            source_impute_manifest,
+            blocks=selected_source_impute_blocks,
+            imputation_steps=source_impute_imputation_steps,
+        )
+        effective_demographic_columns = tuple(
+            dict.fromkeys((*demographic_columns, *source_impute_predictors))
+        )
+
     spec = build_asec_puf_support_spine_spec(
         asec_year=asec_year,
         calendar_year=calendar_year,
@@ -208,14 +236,14 @@ def run_asec_puf_support_spine_smoke(
     }
     _validate_source_surface(
         sources,
-        demographic_columns,
+        effective_demographic_columns,
         geography_constraint_columns,
     )
 
     run_result = run_spec(
         spec,
         sources,
-        demographic_columns=demographic_columns,
+        demographic_columns=effective_demographic_columns,
         spine_keywords=(),
     )
     if block_crosswalk_path is not None:
@@ -233,27 +261,23 @@ def run_asec_puf_support_spine_smoke(
                 "source-impute execution requires block geography assignment; "
                 "supply block_crosswalk_path first"
             )
-        source_impute_spec = load_spec(
-            source_impute_spec_path or Path("packs/us/specs/us-2024.yaml")
-        )
-        selected_blocks = (
-            tuple(source_impute_blocks) if source_impute_blocks is not None else None
-        )
+        assert source_impute_spec is not None
         register_us_declared_source_impute_blocks(
             source_registry,
             spec=source_impute_spec,
             manifest_path=source_impute_manifest_path,
             storage_dir=source_impute_storage_dir,
             max_rows=max_source_impute_rows,
-            blocks=selected_blocks,
+            blocks=selected_source_impute_blocks,
         )
         source_impute_stage = run_source_impute_stage(
             run_result,
             source_impute_spec,
             source_registry,
             source_impute_manifest=source_impute_manifest_path,
-            source_impute_blocks=selected_blocks,
+            source_impute_blocks=selected_source_impute_blocks,
             source_impute_imputation_steps=source_impute_imputation_steps,
+            demographic_columns=effective_demographic_columns,
             seed=seed,
         )
         run_result = source_impute_stage.run_result
@@ -265,7 +289,7 @@ def run_asec_puf_support_spine_smoke(
         run_result=run_result,
         source_impute_sources=source_impute_sources,
         source_impute_results=source_impute_results,
-        demographic_columns=demographic_columns,
+        demographic_columns=effective_demographic_columns,
         geography_constraint_columns=geography_constraint_columns,
     )
     _validate_run_result(diagnostics, sources=sources, run_result=run_result)
@@ -284,6 +308,84 @@ def _cap_rows(frame: pd.DataFrame, max_rows: int | None, name: str) -> pd.DataFr
     if max_rows < 2:
         raise ValueError(f"{name} must be at least 2 when supplied")
     return frame.head(max_rows).copy()
+
+
+def _source_impute_predictor_columns(
+    spec: MicroplexSpec,
+    manifest: SourceImputeManifest,
+    *,
+    blocks: Sequence[str] | None,
+    imputation_steps: Sequence[str] | None,
+) -> tuple[str, ...]:
+    """Return selected source-impute predictors that must survive the split."""
+    requested_steps = set(imputation_steps) if imputation_steps is not None else None
+    if requested_steps == set():
+        return ()
+
+    selected_blocks = (
+        tuple(manifest.block(block_name) for block_name in blocks)
+        if blocks is not None
+        else tuple(manifest.blocks.values())
+    )
+    selected_surveys = {block.survey_name for block in selected_blocks}
+    predictors: list[str] = []
+    unresolved: list[str] = []
+
+    for variable_name, variable in spec.variables.items():
+        operation = variable.mp_spec.operation if variable.mp_spec else None
+        if operation is None or operation.kind is not VariableOperationKind.IMPUTE:
+            continue
+        if operation.imputation_step is None or operation.source is None:
+            continue
+        if (
+            requested_steps is not None
+            and operation.imputation_step not in requested_steps
+        ):
+            continue
+
+        matching_blocks = [
+            block
+            for block in selected_blocks
+            if operation.source == block.survey_name
+            and variable_name in block.target_variables
+        ]
+        if len(matching_blocks) > 1:
+            block_names = [block.name for block in matching_blocks]
+            raise ValueError(
+                "source-impute variable operation is ambiguous across selected "
+                f"manifest blocks: {variable_name} appears in {block_names}"
+            )
+        if matching_blocks:
+            predictors.extend(matching_blocks[0].predictors)
+            continue
+
+        if operation.source not in selected_surveys:
+            if blocks is not None or requested_steps is None:
+                continue
+            unresolved.append(
+                f"{variable_name} ({operation.imputation_step} from "
+                f"{operation.source}: no manifest block)"
+            )
+            continue
+        full_matches = [
+            block
+            for block in manifest.blocks.values()
+            if operation.source == block.survey_name
+            and variable_name in block.target_variables
+        ]
+        if blocks is not None and full_matches:
+            continue
+        unresolved.append(
+            f"{variable_name} ({operation.imputation_step} from "
+            f"{operation.source}: not a selected manifest target)"
+        )
+
+    if unresolved:
+        raise ValueError(
+            "source-impute variable operations are not backed by selected manifest "
+            f"target variables: {unresolved}"
+        )
+    return tuple(dict.fromkeys(predictors))
 
 
 def _validate_source_surface(
