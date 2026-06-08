@@ -20,7 +20,7 @@
           "self_employment_income": "self_employment_income",
           "social_security": "social_security",
           "taxable_pension_income": "taxable_private_pension_income",
-          "rent": "rent",
+          "pre_subsidy_rent": "rent",
           "real_estate_taxes": "real_estate_taxes"
         },
         "boolean_person_columns": {
@@ -68,7 +68,11 @@
         "sex_true_value": 1,
         "sex_false_value": 2,
         "generated_household_ids": false,
-        "person_id_from_household_id": false
+        "person_id_from_household_id": false,
+        "row_filters": {
+          "is_household_head": true
+        },
+        "unique_row_key": "household_id"
       },
       "required_monthcode": null,
       "annualized_variables": [],
@@ -84,16 +88,15 @@
         "self_employment_income",
         "social_security",
         "taxable_pension_income",
-        "rent",
+        "pre_subsidy_rent",
         "real_estate_taxes",
         "income"
       ],
-      "target_variables": ["rent", "real_estate_taxes"],
+      "target_variables": ["pre_subsidy_rent", "real_estate_taxes"],
       "predictors": [
         "is_household_head",
         "age",
         "is_male",
-        "tenure_type",
         "employment_income",
         "self_employment_income",
         "social_security",

@@ -526,6 +526,8 @@ def _load_household_rows_table(
     )
     _copy_person_columns(table, loader)
     _add_sex_from_boolean_source(table, loader)
+    table = _filter_table_rows(table, loader)
+    _enforce_unique_row_key(table, loader)
     return table
 
 
@@ -1113,6 +1115,58 @@ def _copy_person_columns(table: pd.DataFrame, loader: Mapping[str, Any]) -> None
                 f"Cannot copy source-impute column {source!r} to {target!r}; source missing"
             )
         table[target] = table[source]
+
+
+def _filter_table_rows(
+    table: pd.DataFrame,
+    loader: Mapping[str, Any],
+) -> pd.DataFrame:
+    raw_filters = loader.get("row_filters")
+    if raw_filters is None:
+        return table
+    if not isinstance(raw_filters, Mapping):
+        raise ValueError("source-impute row_filters must be an object")
+    mask = pd.Series(True, index=table.index)
+    for column, expected in raw_filters.items():
+        column = str(column)
+        if column not in table.columns:
+            raise ValueError(
+                f"Cannot filter source-impute rows on {column!r}; column missing"
+            )
+        values = table[column]
+        if values.isna().any():
+            raise ValueError(
+                f"Cannot filter source-impute rows on {column!r}; column contains nulls"
+            )
+        if isinstance(expected, bool):
+            mask &= values.astype(bool).eq(expected)
+        else:
+            mask &= values.eq(expected)
+    filtered = table.loc[mask].reset_index(drop=True)
+    if filtered.empty:
+        raise ValueError("source-impute row_filters removed all rows")
+    return filtered
+
+
+def _enforce_unique_row_key(
+    table: pd.DataFrame,
+    loader: Mapping[str, Any],
+) -> None:
+    key = loader.get("unique_row_key")
+    if key is None:
+        return
+    key = str(key)
+    if key not in table.columns:
+        raise ValueError(f"Cannot enforce unique_row_key {key!r}; column missing")
+    if table[key].isna().any():
+        raise ValueError(f"source-impute unique_row_key {key!r} contains nulls")
+    duplicates = table.loc[table[key].duplicated(), key]
+    if not duplicates.empty:
+        duplicate_values = sorted({str(value) for value in duplicates.head(5)})
+        raise ValueError(
+            f"source-impute unique_row_key {key!r} contains duplicate values: "
+            f"{duplicate_values}"
+        )
 
 
 def _fillna_columns(table: pd.DataFrame, loader: Mapping[str, Any]) -> None:

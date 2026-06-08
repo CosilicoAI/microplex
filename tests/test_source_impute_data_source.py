@@ -130,7 +130,7 @@ def _acs_manifest_path(tmp_path: Path) -> Path:
                                 "self_employment_income": "self_employment_income",
                                 "social_security": "social_security",
                                 "taxable_pension_income": "taxable_private_pension_income",
-                                "rent": "rent",
+                                "pre_subsidy_rent": "rent",
                                 "real_estate_taxes": "real_estate_taxes",
                             },
                             "boolean_person_columns": {
@@ -176,6 +176,10 @@ def _acs_manifest_path(tmp_path: Path) -> Path:
                             "sex_from_boolean_source": "is_male",
                             "sex_true_value": 1,
                             "sex_false_value": 2,
+                            "row_filters": {
+                                "is_household_head": True,
+                            },
+                            "unique_row_key": "household_id",
                         },
                         "household_variables": ["state_fips", "tenure"],
                         "person_variables": [
@@ -188,16 +192,18 @@ def _acs_manifest_path(tmp_path: Path) -> Path:
                             "self_employment_income",
                             "social_security",
                             "taxable_pension_income",
-                            "rent",
+                            "pre_subsidy_rent",
                             "real_estate_taxes",
                             "income",
                         ],
-                        "target_variables": ["rent", "real_estate_taxes"],
+                        "target_variables": [
+                            "pre_subsidy_rent",
+                            "real_estate_taxes",
+                        ],
                         "predictors": [
                             "is_household_head",
                             "age",
                             "is_male",
-                            "tenure_type",
                             "employment_income",
                             "self_employment_income",
                             "social_security",
@@ -341,7 +347,7 @@ def test_compile_source_impute_steps_from_real_us_manifest() -> None:
     )
 
     by_source = {step.from_: step for step in steps}
-    assert set(by_source) == {"scf", "sipp"}
+    assert set(by_source) == {"scf", "sipp", "acs"}
 
     scf_step = by_source["scf"]
     scf_block = manifest.block("scf")
@@ -373,9 +379,10 @@ def test_compile_source_impute_steps_from_real_us_manifest() -> None:
     ]
 
     compiled_vars = {variable for step in steps for variable in step.vars}
+    assert "pre_subsidy_rent" in compiled_vars
+    assert "real_estate_taxes" in compiled_vars
     assert "tip_income" not in compiled_vars
     assert "rent" not in compiled_vars
-    assert "real_estate_taxes" not in compiled_vars
     assert "household_vehicles_owned" not in compiled_vars
     assert "household_vehicles_value" not in compiled_vars
 
@@ -508,6 +515,92 @@ def test_compiled_source_impute_steps_execute_on_resolved_halves(
     ]
 
 
+def test_compiled_acs_source_impute_step_executes_with_real_imputer() -> None:
+    manifest = SourceImputeManifest.from_path(_real_scf_manifest_path())
+    spec = load_spec(_real_us_spec_path())
+    acs_step = next(
+        step
+        for step in compile_source_impute_steps_from_manifest(
+            spec,
+            manifest,
+            imputation_steps=("acs_source_impute",),
+        )
+        if step.from_ == "acs"
+    )
+    donor = pd.DataFrame(
+        {
+            "is_household_head": [True] * 8,
+            "age": [24, 31, 39, 47, 55, 63, 71, 83],
+            "is_male": [True, False, True, False, True, False, True, False],
+            "employment_income": [
+                35_000.0,
+                55_000.0,
+                0.0,
+                90_000.0,
+                25_000.0,
+                0.0,
+                10_000.0,
+                0.0,
+            ],
+            "self_employment_income": [
+                0.0,
+                5_000.0,
+                0.0,
+                10_000.0,
+                3_000.0,
+                0.0,
+                0.0,
+                0.0,
+            ],
+            "social_security": [
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                12_000.0,
+                20_000.0,
+                18_000.0,
+            ],
+            "pension_income": [0.0, 0.0, 0.0, 5_000.0, 0.0, 3_000.0, 7_000.0, 2_000.0],
+            "household_size": [1, 2, 3, 2, 4, 1, 2, 1],
+            "state_fips": [6, 6, 12, 36, 36, 48, 48, 6],
+            "pre_subsidy_rent": [
+                14_000.0,
+                18_000.0,
+                20_000.0,
+                0.0,
+                22_000.0,
+                0.0,
+                0.0,
+                12_000.0,
+            ],
+            "real_estate_taxes": [
+                0.0,
+                0.0,
+                0.0,
+                4_500.0,
+                0.0,
+                2_000.0,
+                3_500.0,
+                0.0,
+            ],
+        }
+    )
+    target = donor.loc[[0, 3], list(acs_step.condition_on)].reset_index(drop=True)
+
+    imputed_halves, results = ImputationRunner(seed=0).run(
+        [acs_step],
+        halves={"keep": target},
+        donors={"acs": donor},
+    )
+
+    assert len(results) == 1
+    assert results[0].imputed == ["pre_subsidy_rent", "real_estate_taxes"]
+    output = imputed_halves["keep"]
+    assert output[["pre_subsidy_rent", "real_estate_taxes"]].notna().all().all()
+
+
 def test_source_impute_block_table_uses_manifest_mappings(tmp_path: Path) -> None:
     block = SourceImputeManifest.from_path(_manifest_path(tmp_path)).block("scf")
 
@@ -544,18 +637,20 @@ def test_source_impute_household_rows_maps_household_columns(
         period=2024,
     )
 
-    assert table["person_id"].tolist() == [101, 102, 201, 301]
-    assert table["household_id"].tolist() == [10, 10, 20, 30]
-    assert table["tax_unit_id"].tolist() == [10, 10, 20, 30]
-    assert table["state_fips"].tolist() == [6, 6, 36, 48]
-    assert table["weight"].tolist() == [100.0, 100.0, 200.0, 300.0]
-    assert table["tenure_type"].tolist() == [1, 1, 2, 0]
-    assert table["tenure"].tolist() == [1, 1, 2, 0]
-    assert table["household_size"].tolist() == [2, 2, 1, 1]
-    assert table["pension_income"].tolist() == [100.0, 50.0, 7_000.0, 0.0]
-    assert table["income"].tolist() == [55_100.0, 10_050.0, 25_000.0, 22_000.0]
-    assert table["sex"].tolist() == [1, 2, 2, 1]
-    assert table["year"].tolist() == [2024, 2024, 2024, 2024]
+    assert table["person_id"].tolist() == [101, 201, 301]
+    assert table["household_id"].tolist() == [10, 20, 30]
+    assert table["tax_unit_id"].tolist() == [10, 20, 30]
+    assert table["state_fips"].tolist() == [6, 36, 48]
+    assert table["weight"].tolist() == [100.0, 200.0, 300.0]
+    assert table["tenure_type"].tolist() == [1, 2, 0]
+    assert table["tenure"].tolist() == [1, 2, 0]
+    assert table["household_size"].tolist() == [2, 1, 1]
+    assert table["pension_income"].tolist() == [100.0, 7_000.0, 0.0]
+    assert table["income"].tolist() == [55_100.0, 25_000.0, 22_000.0]
+    assert table["sex"].tolist() == [1, 2, 1]
+    assert table["pre_subsidy_rent"].tolist() == [0.0, 12_000.0, 0.0]
+    assert table["real_estate_taxes"].tolist() == [3_000.0, 0.0, 0.0]
+    assert table["year"].tolist() == [2024, 2024, 2024]
 
 
 def test_source_impute_household_rows_uses_full_group_counts_with_max_rows(
@@ -574,9 +669,9 @@ def test_source_impute_household_rows_uses_full_group_counts_with_max_rows(
         period=2024,
     )
 
-    assert table["person_id"].tolist() == [101, 102]
-    assert table["household_id"].tolist() == [10, 20]
-    assert table["household_size"].tolist() == [2, 2]
+    assert table["person_id"].tolist() == [101]
+    assert table["household_id"].tolist() == [10]
+    assert table["household_size"].tolist() == [2]
 
 
 def test_source_impute_household_rows_rejects_missing_household_mapping(
@@ -602,6 +697,21 @@ def test_source_impute_household_rows_rejects_duplicate_household_ids(
         h5["household_id"] = np.array([10, 10, 30])
 
     with pytest.raises(ValueError, match="duplicate ids"):
+        load_source_impute_block_table(block, dataset_path=path, period=2024)
+
+
+def test_source_impute_household_rows_rejects_duplicate_filtered_households(
+    tmp_path: Path,
+) -> None:
+    block = SourceImputeManifest.from_path(_acs_manifest_path(tmp_path)).block("acs")
+    path = _acs_h5_path(tmp_path)
+    with h5py.File(path, "a") as h5:
+        del h5["person_household_id"]
+        h5["person_household_id"] = np.array([10, 10, 20, 30])
+        del h5["is_household_head"]
+        h5["is_household_head"] = np.array([1, 1, 1, 1])
+
+    with pytest.raises(ValueError, match="unique_row_key"):
         load_source_impute_block_table(block, dataset_path=path, period=2024)
 
 
@@ -789,9 +899,9 @@ def test_register_us_source_impute_blocks_resolves_acs_dataset(
 
     frames = registry.resolve_sources(spec)
 
-    assert frames["acs"]["person_id"].tolist() == [101, 102]
-    assert frames["acs"]["household_size"].tolist() == [2, 2]
-    assert frames["acs"]["state_fips"].tolist() == [6, 6]
+    assert frames["acs"]["person_id"].tolist() == [101]
+    assert frames["acs"]["household_size"].tolist() == [2]
+    assert frames["acs"]["state_fips"].tolist() == [6]
 
 
 def test_register_us_source_impute_blocks_matches_real_us_spec_acs_dataset(
@@ -811,12 +921,9 @@ def test_register_us_source_impute_blocks_matches_real_us_spec_acs_dataset(
     provider = registry.provider_for(spec.sources["acs"].dataset)
     frame = provider.load_frame(SourceQuery(period=2024))
 
-    assert frame.tables[EntityType.PERSON]["person_id"].tolist() == [
-        101,
-        102,
-        201,
-        301,
-    ]
+    assert frame.tables[EntityType.PERSON]["person_id"].tolist() == [101, 201, 301]
+    assert "pre_subsidy_rent" in frame.tables[EntityType.PERSON]
+    assert "rent" not in frame.tables[EntityType.PERSON]
 
 
 def test_register_us_source_impute_blocks_resolves_grouped_sipp_dataset(
@@ -1147,7 +1254,6 @@ def test_real_us_acs_manifest_block_retains_declared_targets_and_predictors(
         "is_household_head",
         "age",
         "is_male",
-        "tenure_type",
         "employment_income",
         "self_employment_income",
         "social_security",
@@ -1156,7 +1262,7 @@ def test_real_us_acs_manifest_block_retains_declared_targets_and_predictors(
         "state_fips",
     }
 
-    assert set(block.target_variables) == {"rent", "real_estate_taxes"}
+    assert set(block.target_variables) == {"pre_subsidy_rent", "real_estate_taxes"}
     assert set(block.predictors) == expected_predictors
 
     table = load_source_impute_block_table(
