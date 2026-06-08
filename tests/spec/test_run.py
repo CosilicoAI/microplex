@@ -8,6 +8,9 @@ are reported as pending.
 
 from __future__ import annotations
 
+import sys
+import types
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -34,6 +37,33 @@ US_SPINE_KEYWORDS = (
     "employment_income",
     "taxable_interest_income",
 )
+
+
+@pytest.fixture(autouse=True)
+def _discard_fake_microcalibrate_adapter():
+    yield
+    sys.modules.pop("microplex.calibration.microcalibrate_adapter", None)
+
+
+def _install_fake_microcalibrate(monkeypatch, captured: dict) -> None:
+    class FakeCalibration:
+        def __init__(self, **kwargs):
+            captured["kwargs"] = kwargs
+            self.weights = np.asarray(kwargs["weights"], dtype=float) + 1.0
+
+        def calibrate(self):
+            return pd.DataFrame({"loss": [0.0]})
+
+        def estimate(self):
+            estimate_matrix = captured["kwargs"]["estimate_matrix"]
+            return pd.Series(
+                np.asarray(estimate_matrix.to_numpy(dtype=float)).T @ self.weights
+            )
+
+    fake_microcalibrate = types.ModuleType("microcalibrate")
+    fake_microcalibrate.Calibration = FakeCalibration
+    monkeypatch.setitem(sys.modules, "microcalibrate", fake_microcalibrate)
+    sys.modules.pop("microplex.calibration.microcalibrate_adapter", None)
 
 
 def _cps(n: int = 240, seed: int = 0) -> pd.DataFrame:
@@ -231,6 +261,21 @@ def _target_set() -> TargetSet:
     )
 
 
+def _target_set_with_missing_feature() -> TargetSet:
+    target_set = _target_set()
+    target_set.add(
+        TargetSpec(
+            name="missing_feature_total",
+            entity=EntityType.TAX_UNIT,
+            value=1.0,
+            period=2024,
+            measure="not_present",
+            aggregation=TargetAggregation.SUM,
+        )
+    )
+    return target_set
+
+
 class TestRunSpec:
     def test_spine_first_requires_explicit_pack_keywords(self) -> None:
         spec = load_spec_dict(_spec_dict())
@@ -424,6 +469,131 @@ class TestRunSpec:
                 _sources(),
                 demographic_columns=DEMOGRAPHIC_COLS,
                 calibrator=calibrator,
+            )
+
+    def test_generic_entity_table_calibration_runs_after_declared_targets_loaded(
+        self,
+        monkeypatch,
+    ) -> None:
+        captured: dict = {}
+        _install_fake_microcalibrate(monkeypatch, captured)
+        spec = load_spec_dict(_spec_dict())
+        provider = RecordingTargetProvider(_target_set())
+
+        result = _run_spec(
+            spec,
+            _sources(),
+            demographic_columns=DEMOGRAPHIC_COLS,
+            target_provider=provider,
+            calibration_entity=EntityType.TAX_UNIT,
+            calibration_id_column="tax_unit_id",
+        )
+
+        assert result.pending_stages == ("export",)
+        assert result.calibration_result is not None
+        assert result.entity_table_bundle is result.calibration_result.entity_table_bundle
+        assert result.entity_table_bundle is not None
+        assert result.calibration_result.diagnostics["weight_entity"] == "tax_unit"
+        assert result.calibration_result.diagnostics["skipped_targets"] == []
+        assert captured["kwargs"]["target_names"].tolist() == [
+            "employment_income_total"
+        ]
+
+        uncalibrated = _run_spec(
+            spec,
+            _sources(),
+            demographic_columns=DEMOGRAPHIC_COLS,
+            target_provider=provider,
+        )
+        pd.testing.assert_series_equal(
+            result.frame["household_weight"],
+            uncalibrated.frame["household_weight"] + 1.0,
+            check_names=False,
+        )
+
+    def test_generic_entity_table_calibration_requires_stable_id_column(
+        self,
+    ) -> None:
+        spec = load_spec_dict(_spec_dict())
+        provider = RecordingTargetProvider(_target_set())
+
+        with pytest.raises(ValueError, match="requires calibration_id_column"):
+            _run_spec(
+                spec,
+                _sources(),
+                demographic_columns=DEMOGRAPHIC_COLS,
+                target_provider=provider,
+                calibration_entity=EntityType.TAX_UNIT,
+            )
+
+    def test_generic_entity_table_calibration_requires_loaded_declared_targets(
+        self,
+    ) -> None:
+        spec = load_spec_dict(_spec_dict())
+
+        with pytest.raises(ValueError, match="requires a loaded target_set"):
+            _run_spec(
+                spec,
+                _sources(),
+                demographic_columns=DEMOGRAPHIC_COLS,
+                calibration_entity=EntityType.TAX_UNIT,
+                calibration_id_column="tax_unit_id",
+            )
+
+    def test_generic_entity_table_calibration_rejects_skipped_targets_before_fit(
+        self,
+        monkeypatch,
+    ) -> None:
+        captured: dict = {}
+        _install_fake_microcalibrate(monkeypatch, captured)
+        spec = load_spec_dict(_spec_dict())
+        provider = RecordingTargetProvider(_target_set_with_missing_feature())
+
+        with pytest.raises(ValueError) as excinfo:
+            _run_spec(
+                spec,
+                _sources(),
+                demographic_columns=DEMOGRAPHIC_COLS,
+                target_provider=provider,
+                calibration_entity=EntityType.TAX_UNIT,
+                calibration_id_column="tax_unit_id",
+            )
+
+        message = str(excinfo.value)
+        assert "Sparse target compilation skipped target(s)" in message
+        assert "missing_feature_total" in message
+        assert "missing_features:not_present" in message
+        assert "kwargs" not in captured
+
+    def test_generic_entity_table_calibration_rejects_duplicate_record_ids(
+        self,
+    ) -> None:
+        spec = load_spec_dict(_spec_dict())
+        provider = RecordingTargetProvider(_target_set())
+
+        with pytest.raises(ValueError, match="contains duplicate ids"):
+            _run_spec(
+                spec,
+                _sources(),
+                demographic_columns=DEMOGRAPHIC_COLS,
+                target_provider=provider,
+                calibration_entity=EntityType.TAX_UNIT,
+                calibration_id_column="is_male",
+            )
+
+    def test_generic_entity_table_calibration_rejects_legacy_calibrator_combo(
+        self,
+    ) -> None:
+        spec = load_spec_dict(_spec_dict())
+
+        with pytest.raises(ValueError, match="either a legacy calibrator"):
+            _run_spec(
+                spec,
+                _sources(),
+                demographic_columns=DEMOGRAPHIC_COLS,
+                calibrator=RecordingCalibrator(),
+                calibration_entity=EntityType.TAX_UNIT,
+                calibration_id_column="tax_unit_id",
             )
 
     def test_imputation_results_recorded(self) -> None:
