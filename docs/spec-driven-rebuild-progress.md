@@ -96,6 +96,14 @@ synthetic half's income is synthesized while the kept half's real income is
 preserved (passthrough), that a split sums back, and that the target provider
 receives the declared Arch country/model-year/profile query.
 
+`run_spec` can now run the generic national/entity-table calibration path when
+the caller supplies `calibration_entity` and `calibration_id_column`: it builds a
+one-table `EntityTableBundle`, compiles the loaded `TargetSet` into the
+certified sparse target matrix path, fits through `microcalibrate`, and returns
+the calibrated frame plus stable diagnostics. It still refuses to calibrate
+without a spec-declared loaded target surface, a stable non-null unique record
+id, and an explicit `calibrate` section.
+
 ### 6. `microplex.stage_manifest` — strict stage artifact manifests
 Build stages can now write a self-verifying JSON manifest with schema version,
 stage id, declared seeds, parameters, metadata, and per-artifact relative path,
@@ -134,18 +142,19 @@ design.
 
 ## Deliberately NOT wired (clear TODOs, not faked)
 
-`run_spec` reports still-unwired stages via `PENDING_STAGES = ("targets",
+`run_spec` reports not-run stages via `PENDING_STAGES = ("targets",
 "calibrate", "export")`. If a `TargetProvider` is supplied, the `targets`
 stage is no longer pending: the runner builds a `TargetQuery` from
 `targets.arch` (`country`, `model_year`, `target_profile`,
 `calibration_target_profile`) and attaches the loaded `TargetSet` to the
-result. If no provider is supplied, `targets` remains pending. No weights or
-calibrated datasets are fabricated. Remaining TODOs:
+result. If `calibration_entity` and `calibration_id_column` are supplied,
+`calibrate` runs through the generic `EntityTableBundleMicrocalibrator`; if not,
+it remains pending. No weights or calibrated datasets are fabricated. Remaining
+TODOs:
 
-- **`calibrate` (Calibrator):** reweight to targets via the declared
-  loss/method. Core now has a strict solve-policy resolver plus a policy-aware
-  certified sparse-matrix microcalibrate adapter; the remaining work is wiring
-  country entity-table compilation into that entry point from the spec runner.
+- **`calibrate` (multi-entity/clone-local variants):** the national/entity-table
+  path is wired. More complex multi-entity and local-area clone surfaces should
+  be added only as real data demands them.
 - **`export` (Exporter):** write the PolicyEngine dataset.
 
 ## Stretch goal (Arch provider move) — assessed and deferred, not attempted
@@ -214,10 +223,8 @@ runs use the direct-venv path and `uv.lock` is left untouched.)
 
 ## What remains (next phases, in blueprint build order)
 
-1. **Wire calibrate/export into `run_spec`** (the remaining
-   `PENDING_STAGES`). Reuse core's `Calibrator`/`Reweighter` for calibrate;
-   build the generic Arch provider implementation behind the target-provider
-   seam (the deferred stretch).
+1. **Wire export into `run_spec`** and keep the generic calibration path focused
+   on the immediate national target surface first.
 2. **The Arch provider move** as scoped above — generic record protocol +
    injected config + fresh generic tests.
 3. **Provider-backed `SourceRegistry`** behind `resolve_sources` so the spec's

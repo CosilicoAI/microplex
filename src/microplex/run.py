@@ -17,15 +17,17 @@ spec-driven engine (see ``docs/spec-driven-rebuild.md`` §2) over a validated
    declared split/derive rules to the stacked frame.
 6. **Targets** (:class:`~microplex.targets.TargetProvider`) — when a provider is
    supplied, load the spec-declared target surface and attach it to the result.
-7. **Calibration** (:class:`SpecCalibrator`) — when both a target provider and a
-   calibrator are supplied, reweight the post-transform frame to the loaded
-   target surface.
+7. **Calibration** — when both a target provider and a generic entity
+   calibration binding are supplied, compile the post-transform entity table
+   into the certified sparse target matrix path and reweight with
+   ``microcalibrate``. A legacy :class:`SpecCalibrator` protocol remains
+   available as a compatibility fallback.
 
 Export is **not yet wired** here — it is marked as an explicit ``TODO`` stage
 (see :data:`PENDING_STAGES`) and the blueprint's build order (§6 step 6).
 ``run_spec`` returns the post-transform or calibrated frame plus any loaded
-target set and calibration diagnostics; a later phase will export the
-PolicyEngine dataset.
+target set, entity-table bundle, and calibration diagnostics; a later phase
+will export the PolicyEngine dataset.
 
 Source resolution contract: ``run_spec`` takes an already-loaded
 ``{source_name: DataFrame}`` mapping. Wiring the full provider-backed
@@ -42,6 +44,7 @@ from typing import Any, Protocol, runtime_checkable
 
 import pandas as pd
 
+from microplex.core import EntityType
 from microplex.imputation import (
     ImputationRunner,
     ImputationStepResult,
@@ -55,6 +58,7 @@ from microplex.spec import (
 )
 from microplex.spec_transforms import TransformEngine
 from microplex.spine import SpineBuilder, SpineBuildResult
+from microplex.targets.bundles import EntityTableBinding, EntityTableBundle
 from microplex.targets.provider import TargetProvider, TargetQuery
 from microplex.targets.spec import TargetSet
 
@@ -73,7 +77,7 @@ __all__ = [
 #: :func:`run_spec`. Each is a clear TODO, not a stub that fabricates output.
 PENDING_STAGES: tuple[str, ...] = (
     "targets",  # ArchTargetProvider: fetch + roll up the Arch target set.
-    "calibrate",  # SpecCalibrator: reweight to targets via declared loss/method.
+    "calibrate",  # Reweight only with explicit target/calibration bindings.
     "export",  # Exporter: write the PolicyEngine dataset.
 )
 
@@ -84,11 +88,12 @@ class SpecCalibrationResult:
 
     frame: pd.DataFrame
     diagnostics: Mapping[str, Any] = field(default_factory=dict)
+    entity_table_bundle: EntityTableBundle | None = None
 
 
 @runtime_checkable
 class SpecCalibrator(Protocol):
-    """Protocol for country-specific calibration bound into ``run_spec``."""
+    """Compatibility protocol for pre-entity-table calibration adapters."""
 
     def calibrate(
         self,
@@ -118,6 +123,8 @@ class RunResult:
         calibration_result: The calibration output when a calibrator was
             supplied and run; otherwise ``None`` and ``calibrate`` remains
             pending.
+        entity_table_bundle: The calibrated entity tables when the generic
+            entity-table calibration path ran; otherwise ``None``.
         pending_stages: Stages declared but not yet run (see
             :data:`PENDING_STAGES`).
     """
@@ -129,6 +136,7 @@ class RunResult:
     imputation_results: list[ImputationStepResult] = field(default_factory=list)
     target_set: TargetSet | None = None
     calibration_result: SpecCalibrationResult | None = None
+    entity_table_bundle: EntityTableBundle | None = None
     pending_stages: tuple[str, ...] = PENDING_STAGES
 
 
@@ -172,6 +180,12 @@ def run_spec(
     spine_keywords: Sequence[str] | None = None,
     target_provider: TargetProvider | None = None,
     calibrator: SpecCalibrator | None = None,
+    calibration_entity: EntityType | str | None = None,
+    calibration_id_column: str | None = None,
+    simulation_compiler: Any | None = None,
+    calibration_certificate: Mapping[str, Any] | None = None,
+    calibration_min_records_per_target: float | None = None,
+    allow_skipped_calibration_targets: bool = False,
     seed: int = 0,
 ) -> RunResult:
     """Run the wired stages of the spec-driven engine end-to-end.
@@ -195,6 +209,21 @@ def run_spec(
             post-transform frame to the loaded target surface. Requires both
             ``spec.targets`` and ``target_provider`` so calibration never runs
             against an implicit or freshly recomputed target surface.
+        calibration_entity: Optional entity label for generic entity-table
+            calibration of the post-transform frame. When set, ``run_spec``
+            builds a one-table :class:`EntityTableBundle` from ``frame`` and
+            calibrates it through ``EntityTableBundleMicrocalibrator``.
+        calibration_id_column: Record id column for the post-transform frame
+            when ``calibration_entity`` is set.
+        simulation_compiler: Optional simulator-aware target compiler for
+            targets that declare simulation modifiers.
+        calibration_certificate: Optional sparse target matrix certificate to
+            assert before fitting.
+        calibration_min_records_per_target: Optional fail-closed floor passed
+            into the calibration solve policy.
+        allow_skipped_calibration_targets: Explicit opt-in for partial target
+            surfaces. Defaults to ``False`` so skipped target rows fail before
+            fitting.
         seed: Seed forwarded to ``microimpute.Imputer``.
 
     Returns:
@@ -292,7 +321,56 @@ def run_spec(
     # Stage 6: calibration. This seam is intentionally strict: calibrating
     # without a loaded TargetSet would recreate the stale eCPS-surface failure
     # mode that the release gates now forbid.
-    if calibrator is not None:
+    if calibrator is not None and calibration_entity is not None:
+        raise ValueError(
+            "pass either a legacy calibrator or calibration_entity, not both"
+        )
+
+    entity_table_bundle: EntityTableBundle | None = None
+    if calibration_entity is not None:
+        if spec.calibrate is None:
+            raise ValueError(
+                "calibration_entity was supplied but the spec has no "
+                "'calibrate' section"
+            )
+        if target_set is None:
+            raise ValueError(
+                "calibration_entity requires a loaded target_set; supply "
+                "target_provider for the spec-declared target surface"
+            )
+        bundle_result = _calibrate_entity_frame(
+            final_frame,
+            entity=calibration_entity,
+            id_column=calibration_id_column,
+            weight_column=weight_column,
+            target_set=target_set,
+            calibrate=spec.calibrate,
+            simulation_compiler=simulation_compiler,
+            certificate=calibration_certificate,
+            min_records_per_target=calibration_min_records_per_target,
+            allow_skipped_targets=allow_skipped_calibration_targets,
+        )
+        entity_type = (
+            calibration_entity
+            if isinstance(calibration_entity, EntityType)
+            else EntityType(calibration_entity)
+        )
+        entity_table_bundle = bundle_result.bundle
+        final_frame = bundle_result.bundle.table_for(entity_type)
+        calibration_result = SpecCalibrationResult(
+            frame=final_frame,
+            diagnostics=bundle_result.diagnostics(),
+            entity_table_bundle=bundle_result.bundle,
+        )
+        pending_stages.remove("calibrate")
+        logger.info(
+            "run_spec: calibrated entity table '%s' with %d targets using '%s'/%s",
+            entity_type.value,
+            len(target_set.targets),
+            spec.calibrate.loss,
+            spec.calibrate.method.value,
+        )
+    elif calibrator is not None:
         if spec.calibrate is None:
             raise ValueError(
                 "calibrator was supplied but the spec has no 'calibrate' section"
@@ -329,7 +407,73 @@ def run_spec(
         imputation_results=imputation_results,
         target_set=target_set,
         calibration_result=calibration_result,
+        entity_table_bundle=entity_table_bundle,
         pending_stages=tuple(pending_stages),
+    )
+
+
+def _calibrate_entity_frame(
+    frame: pd.DataFrame,
+    *,
+    entity: EntityType | str,
+    id_column: str | None,
+    weight_column: str | None,
+    target_set: TargetSet,
+    calibrate: CalibrateSpec,
+    simulation_compiler: Any | None,
+    certificate: Mapping[str, Any] | None,
+    min_records_per_target: float | None,
+    allow_skipped_targets: bool,
+):
+    """Calibrate one post-transform entity frame through the generic bundle path."""
+    if id_column is None:
+        raise ValueError(
+            "calibration_entity requires calibration_id_column so weights can "
+            "be synced and audited by stable record id"
+        )
+    if id_column not in frame.columns:
+        raise ValueError(
+            f"calibration_id_column {id_column!r} is not present in the frame"
+        )
+    if frame[id_column].isna().any():
+        raise ValueError(f"calibration_id_column {id_column!r} contains null ids")
+    if not frame[id_column].is_unique:
+        raise ValueError(f"calibration_id_column {id_column!r} contains duplicate ids")
+    if weight_column is None:
+        raise ValueError("calibration_entity requires a weight_column")
+    if weight_column not in frame.columns:
+        raise ValueError(f"weight_column {weight_column!r} is not present in the frame")
+
+    try:
+        from microplex.calibration.microcalibrate_adapter import (
+            EntityTableBundleMicrocalibrator,
+        )
+    except ImportError as exc:  # pragma: no cover - depends on optional extra
+        raise ImportError(
+            "generic entity-table calibration requires the microcalibrate extra"
+        ) from exc
+
+    entity_type = entity if isinstance(entity, EntityType) else EntityType(entity)
+    bundle = EntityTableBundle(
+        weight_entity=entity_type,
+        weight_column=weight_column,
+        bindings={
+            entity_type: EntityTableBinding(
+                frame=frame,
+                id_column=id_column,
+            )
+        },
+    )
+    bundle_calibrator = EntityTableBundleMicrocalibrator(
+        simulation_compiler=simulation_compiler,
+        min_records_per_target=min_records_per_target,
+        allow_skipped_targets=allow_skipped_targets,
+    )
+    return bundle_calibrator.calibrate_bundle(
+        bundle,
+        target_set=target_set,
+        calibrate=calibrate,
+        certificate=certificate,
     )
 
 
