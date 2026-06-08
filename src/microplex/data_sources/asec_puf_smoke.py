@@ -23,6 +23,11 @@ DEFAULT_DEMOGRAPHIC_COLUMNS: tuple[str, ...] = (
     "ctc_qualifying_children",
 )
 
+DEFAULT_GEOGRAPHY_CONSTRAINT_COLUMNS: tuple[str, ...] = (
+    "state_fips",
+    "cbsa",
+)
+
 
 @dataclass(frozen=True)
 class AsecPufSupportSpineSmokeResult:
@@ -44,6 +49,7 @@ def build_asec_puf_support_spine_spec(
     calendar_year: int = 2024,
     puf_year: int = 2024,
     seed: int = 20260529,
+    geography_constraint_columns: Sequence[str] = DEFAULT_GEOGRAPHY_CONSTRAINT_COLUMNS,
 ) -> MicroplexSpec:
     """Build the minimal ASEC+PUF source and support-spine spec."""
     return load_spec_dict(
@@ -67,7 +73,13 @@ def build_asec_puf_support_spine_spec(
                 "support": {"seed": seed},
                 "halves": [
                     {"name": "cps_keep", "keep": "all"},
-                    {"name": "synthetic_puf", "strip_to": ["demographics"]},
+                    {
+                        "name": "synthetic_puf",
+                        "strip_to": [
+                            "demographics",
+                            *dict.fromkeys(geography_constraint_columns),
+                        ],
+                    },
                 ],
             },
             "imputation": [],
@@ -91,6 +103,7 @@ def run_asec_puf_support_spine_smoke(
     max_cps_rows: int | None = None,
     max_puf_rows: int | None = None,
     demographic_columns: Sequence[str] = DEFAULT_DEMOGRAPHIC_COLUMNS,
+    geography_constraint_columns: Sequence[str] = DEFAULT_GEOGRAPHY_CONSTRAINT_COLUMNS,
 ) -> AsecPufSupportSpineSmokeResult:
     """Load ASEC+PUF providers and run the support-spine stage."""
     spec = build_asec_puf_support_spine_spec(
@@ -98,6 +111,7 @@ def run_asec_puf_support_spine_smoke(
         calendar_year=calendar_year,
         puf_year=puf_year,
         seed=seed,
+        geography_constraint_columns=geography_constraint_columns,
     )
     source_registry = registry or create_us_asec_puf_source_registry(
         asec_year=asec_year,
@@ -115,7 +129,11 @@ def run_asec_puf_support_spine_smoke(
         "cps_asec": _cap_rows(sources["cps_asec"], max_cps_rows, "max_cps_rows"),
         "puf": _cap_rows(sources["puf"], max_puf_rows, "max_puf_rows"),
     }
-    _validate_source_surface(sources, demographic_columns)
+    _validate_source_surface(
+        sources,
+        demographic_columns,
+        geography_constraint_columns,
+    )
 
     run_result = run_spec(
         spec,
@@ -128,6 +146,7 @@ def run_asec_puf_support_spine_smoke(
         sources=sources,
         run_result=run_result,
         demographic_columns=demographic_columns,
+        geography_constraint_columns=geography_constraint_columns,
     )
     _validate_run_result(diagnostics, sources=sources, run_result=run_result)
     return AsecPufSupportSpineSmokeResult(
@@ -149,6 +168,7 @@ def _cap_rows(frame: pd.DataFrame, max_rows: int | None, name: str) -> pd.DataFr
 def _validate_source_surface(
     sources: Mapping[str, pd.DataFrame],
     demographic_columns: Sequence[str],
+    geography_constraint_columns: Sequence[str],
 ) -> None:
     for source_name in ("cps_asec", "puf"):
         if source_name not in sources:
@@ -171,6 +191,12 @@ def _validate_source_surface(
             f"{missing_demographics}"
         )
 
+    _validate_geography_constraint_values(
+        sources["cps_asec"],
+        geography_constraint_columns,
+        surface_name="CPS ASEC tax-unit spine",
+    )
+
 
 def _diagnostics(
     *,
@@ -178,6 +204,7 @@ def _diagnostics(
     sources: Mapping[str, pd.DataFrame],
     run_result: RunResult,
     demographic_columns: Sequence[str],
+    geography_constraint_columns: Sequence[str],
 ) -> dict[str, Any]:
     label = run_result.spine.half_label_column
     frame = run_result.frame
@@ -201,6 +228,7 @@ def _diagnostics(
         "output_rows": int(len(frame)),
         "half_counts": half_counts,
         "demographic_columns": list(demographic_columns),
+        "geography_constraint_columns": list(geography_constraint_columns),
         "shared_variables": list(SHARED_VARS),
         "shared_missing": {
             name: sorted(set(SHARED_VARS) - set(source_frame.columns))
@@ -218,6 +246,28 @@ def _sum_if_present(frame: pd.DataFrame, column: str) -> float | None:
     if column not in frame.columns:
         return None
     return float(frame[column].sum())
+
+
+def _validate_geography_constraint_values(
+    frame: pd.DataFrame,
+    columns: Sequence[str],
+    *,
+    surface_name: str,
+) -> None:
+    if not columns:
+        return
+    missing_columns = sorted(set(columns) - set(frame.columns))
+    if missing_columns:
+        raise ValueError(
+            f"{surface_name} is missing geography constraint columns: {missing_columns}"
+        )
+    has_constraint = frame.loc[:, list(columns)].notna().any(axis=1)
+    if not has_constraint.all():
+        missing_count = int((~has_constraint).sum())
+        raise ValueError(
+            f"{surface_name} has {missing_count} rows with no geography "
+            f"constraint values across {list(columns)}"
+        )
 
 
 def _validate_run_result(
@@ -238,8 +288,16 @@ def _validate_run_result(
     frame = run_result.frame
     label = run_result.spine.half_label_column
     synthetic = frame.loc[frame[label] == "synthetic_puf"]
-    if "household_weight" in synthetic and not (synthetic["household_weight"] == 0).all():
+    if (
+        "household_weight" in synthetic
+        and not (synthetic["household_weight"] == 0).all()
+    ):
         raise ValueError("synthetic_puf household weights must initialize to zero")
+    _validate_geography_constraint_values(
+        synthetic,
+        tuple(diagnostics["geography_constraint_columns"]),
+        surface_name="synthetic_puf support-spine half",
+    )
 
 
 def _build_parser() -> argparse.ArgumentParser:
