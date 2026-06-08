@@ -71,6 +71,7 @@ from microplex.data_sources.source_impute import (
     ManifestSourceImputeProvider,
     SourceImputeBlock,
     SourceImputeManifest,
+    compile_source_impute_steps_from_manifest,
     load_source_impute_block_table,
     validate_source_impute_block_supported,
 )
@@ -124,6 +125,7 @@ __all__ = [
     "ManifestSourceImputeProvider",
     "SourceImputeBlock",
     "SourceImputeManifest",
+    "compile_source_impute_steps_from_manifest",
     "load_source_impute_block_table",
     "validate_source_impute_block_supported",
     "create_us_asec_puf_source_registry",

@@ -6,6 +6,7 @@ from typing import Any
 
 import h5py
 import numpy as np
+import pandas as pd
 import pytest
 
 from microplex.core import EntityType
@@ -13,11 +14,19 @@ from microplex.core.sources import SourceQuery
 from microplex.data_sources.source_impute import (
     ManifestSourceImputeProvider,
     SourceImputeManifest,
+    compile_source_impute_steps_from_manifest,
     load_source_impute_block_table,
 )
 from microplex.data_sources.us_registry import register_us_source_impute_blocks
+from microplex.imputation import ImputationRunner
 from microplex.source_registry import SourceRegistry
-from microplex.spec import load_spec, load_spec_dict
+from microplex.spec import (
+    ImputationOrder,
+    ImputationPhase,
+    VariableOperationKind,
+    load_spec,
+    load_spec_dict,
+)
 
 
 def _manifest_path(tmp_path: Path) -> Path:
@@ -283,6 +292,27 @@ def _real_scf_h5_path(tmp_path: Path) -> Path:
     return path
 
 
+class _RecordingSourceImputer:
+    def __init__(self) -> None:
+        self.fit_kwargs: dict[str, Any] | None = None
+        self.regimes_: dict[str, str] = {}
+
+    def fit(self, **kwargs):
+        self.fit_kwargs = kwargs
+        self.regimes_ = {variable: "TEST" for variable in kwargs["imputed_variables"]}
+        return self
+
+    def predict(self, target: pd.DataFrame) -> pd.DataFrame:
+        assert self.fit_kwargs is not None
+        return pd.DataFrame(
+            {
+                variable: np.arange(len(target), dtype=float) + 1000.0
+                for variable in self.fit_kwargs["imputed_variables"]
+            },
+            index=target.index,
+        )
+
+
 def test_source_impute_manifest_loads_block(tmp_path: Path) -> None:
     manifest = SourceImputeManifest.from_path(_manifest_path(tmp_path))
 
@@ -291,6 +321,188 @@ def test_source_impute_manifest_loads_block(tmp_path: Path) -> None:
     assert block.survey_name == "scf"
     assert block.default_year == 2022
     assert block.target_variables == ("net_worth",)
+
+
+def test_compile_source_impute_steps_from_real_us_manifest() -> None:
+    manifest = SourceImputeManifest.from_path(_real_scf_manifest_path())
+    spec = load_spec(_real_us_spec_path())
+
+    steps = compile_source_impute_steps_from_manifest(
+        spec,
+        manifest,
+        imputation_steps=(
+            "scf_source_impute",
+            "sipp_source_impute",
+            "acs_source_impute",
+        ),
+    )
+
+    by_source = {step.from_: step for step in steps}
+    assert set(by_source) == {"scf", "sipp"}
+
+    scf_step = by_source["scf"]
+    scf_block = manifest.block("scf")
+    expected_scf_vars = [
+        name
+        for name, variable in spec.variables.items()
+        if variable.mp_spec
+        and variable.mp_spec.operation
+        and variable.mp_spec.operation.kind is VariableOperationKind.IMPUTE
+        and variable.mp_spec.operation.source == "scf"
+        and variable.mp_spec.operation.imputation_step == "scf_source_impute"
+        and name in scf_block.target_variables
+    ]
+    assert scf_step.onto == "both"
+    assert scf_step.at is ImputationPhase.HALVES
+    assert scf_step.order is ImputationOrder.AS_DECLARED
+    assert scf_step.synthesize is False
+    assert scf_step.condition_on == list(scf_block.predictors)
+    assert scf_step.vars == expected_scf_vars
+    assert "net_worth" not in scf_step.vars
+
+    sipp_step = by_source["sipp"]
+    sipp_block = manifest.block("sipp_assets")
+    assert sipp_step.condition_on == list(sipp_block.predictors)
+    assert sipp_step.vars == [
+        "bank_account_assets",
+        "bond_assets",
+        "stock_assets",
+    ]
+
+    compiled_vars = {variable for step in steps for variable in step.vars}
+    assert "tip_income" not in compiled_vars
+    assert "rent" not in compiled_vars
+    assert "real_estate_taxes" not in compiled_vars
+    assert "household_vehicles_owned" not in compiled_vars
+    assert "household_vehicles_value" not in compiled_vars
+
+
+def test_compile_source_impute_steps_rejects_unbacked_executable_variable(
+    tmp_path: Path,
+) -> None:
+    spec = load_spec_dict(
+        {
+            "meta": {"country": "us", "model_year": 2024},
+            "sources": {
+                "scf": {
+                    "dataset": "scf_2022",
+                    "role": "spine",
+                    "entity": "person",
+                }
+            },
+            "spine": {
+                "base": "scf",
+                "method": "support_spine",
+                "support": {"seed": 42},
+                "halves": [
+                    {"name": "keep", "keep": "all"},
+                    {"name": "strip", "strip_to": ["person_id"]},
+                ],
+            },
+            "imputation": [],
+            "variables": {
+                "not_a_manifest_target": {
+                    "mp_spec": {
+                        "method": "impute from scf",
+                        "operation": {
+                            "kind": "impute",
+                            "source": "scf",
+                            "imputation_step": "scf_source_impute",
+                        },
+                    }
+                }
+            },
+        }
+    )
+
+    with pytest.raises(ValueError, match="not_a_manifest_target"):
+        compile_source_impute_steps_from_manifest(
+            spec,
+            _manifest_path(tmp_path),
+            imputation_steps=("scf_source_impute",),
+        )
+
+
+def test_compiled_source_impute_steps_execute_on_resolved_halves(
+    tmp_path: Path,
+) -> None:
+    spec = load_spec_dict(
+        {
+            "meta": {"country": "us", "model_year": 2024},
+            "sources": {
+                "scf": {
+                    "dataset": "scf_2022",
+                    "role": "spine",
+                    "entity": "person",
+                }
+            },
+            "spine": {
+                "base": "scf",
+                "method": "support_spine",
+                "support": {"seed": 42},
+                "halves": [
+                    {"name": "keep", "keep": "all"},
+                    {"name": "synthetic", "strip_to": ["person_id"]},
+                ],
+            },
+            "imputation": [],
+            "variables": {
+                "net_worth": {
+                    "mp_spec": {
+                        "method": "impute from scf",
+                        "operation": {
+                            "kind": "impute",
+                            "source": "scf",
+                            "imputation_step": "scf_source_impute",
+                        },
+                    }
+                }
+            },
+        }
+    )
+    steps = compile_source_impute_steps_from_manifest(
+        spec,
+        _manifest_path(tmp_path),
+        imputation_steps=("scf_source_impute",),
+    )
+    donor = load_source_impute_block_table(
+        SourceImputeManifest.from_path(_manifest_path(tmp_path)).block("scf"),
+        dataset_path=_scf_h5_path(tmp_path),
+        period=2024,
+    )
+    halves = {
+        name: pd.DataFrame(
+            {
+                "person_id": [f"{name}-0", f"{name}-1"],
+                "age": [35.0, 70.0],
+                "credit_score": [660.0, 730.0],
+                "is_female": [False, True],
+                "employment_income": [45_000.0, 0.0],
+            }
+        )
+        for name in ("keep", "synthetic")
+    }
+
+    runner = ImputationRunner()
+    recorder = _RecordingSourceImputer()
+    runner._make_imputer = lambda: recorder
+    imputed_halves, results = runner.run(
+        steps,
+        halves=halves,
+        donors={"scf": donor},
+    )
+
+    assert {result.onto for result in results} == {"keep", "synthetic"}
+    assert all(result.imputed == ["net_worth"] for result in results)
+    for half in imputed_halves.values():
+        assert half["net_worth"].tolist() == [1000.0, 1001.0]
+    assert recorder.fit_kwargs is not None
+    assert recorder.fit_kwargs["predictors"] == [
+        "age",
+        "credit_score",
+        "is_female",
+        "employment_income",
+    ]
 
 
 def test_source_impute_block_table_uses_manifest_mappings(tmp_path: Path) -> None:

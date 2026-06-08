@@ -319,6 +319,16 @@ class ImputationRunner:
         if weight_col is not None and weight_col not in train_cols:
             train_cols.append(weight_col)
         train = donor[train_cols].copy()
+        required_train_cols = [*predictors, *to_impute]
+        if weight_col is not None:
+            required_train_cols.append(weight_col)
+        train = train.dropna(subset=required_train_cols)
+        if train.empty:
+            raise ValueError(
+                f"step onto='{step.onto}' from='{step.from_}': no complete donor "
+                "rows remain after dropping missing predictors, imputed "
+                "variables, or weights."
+            )
         fitted = imputer.fit(
             X_train=train,
             predictors=list(predictors),
