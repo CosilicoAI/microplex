@@ -4,6 +4,7 @@
       "survey_name": "acs",
       "block_name": null,
       "default_year": 2022,
+      "dataset_id": "acs_2024",
       "archetype": "household_income",
       "dataset_loader": {
         "module": "policyengine_us_data.datasets.acs.acs",
@@ -43,6 +44,7 @@
         },
         "fallback_person_columns": {},
         "copy_person_columns": {
+          "pension_income": "taxable_pension_income",
           "tenure": "tenure_type"
         },
         "constant_person_columns": {},
@@ -52,6 +54,9 @@
           "social_security",
           "taxable_pension_income"
         ],
+        "group_count_person_columns": {
+          "household_size": "person_household_id"
+        },
         "int_person_columns": [
           "age",
           "sex",
