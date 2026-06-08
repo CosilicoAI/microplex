@@ -15,10 +15,12 @@ from microplex.data_sources.asec_puf_smoke import (
     build_asec_puf_support_spine_spec,
     main,
     run_asec_puf_support_spine_smoke,
+    write_asec_puf_support_spine_stage_artifacts,
 )
 from microplex.data_sources.cps import CPSAsecSourceProvider, CPSDataset
 from microplex.data_sources.puf import PUFSourceProvider, download_puf, load_puf
 from microplex.source_registry import SourceRegistry
+from microplex.stage_manifest import load_stage_manifest, validate_stage_manifest
 
 
 def _cps_dataset(*, year: int, cache_dir=None, download: bool = True) -> CPSDataset:
@@ -459,6 +461,30 @@ def test_asec_puf_smoke_step_filter_still_applies_with_block_filter(
     assert recorder.fit_kwargs is None
 
 
+def test_asec_puf_smoke_writes_stage_artifacts(tmp_path: Path) -> None:
+    result = run_asec_puf_support_spine_smoke(
+        registry=_registry(),
+        block_crosswalk_path=Path(_block_crosswalk_path(tmp_path)),
+    )
+    output_dir = tmp_path / "stage"
+
+    manifest = write_asec_puf_support_spine_stage_artifacts(result, output_dir)
+
+    assert (output_dir / "support_frame.parquet").is_file()
+    assert (output_dir / "diagnostics.json").is_file()
+    assert (output_dir / "stage_manifest.json").is_file()
+    assert manifest.stage_id == "us_asec_puf_support_spine"
+    assert set(manifest.artifacts) == {"support_frame", "diagnostics"}
+    assert manifest.metadata["output_rows"] == 4
+    assert validate_stage_manifest(manifest, root=output_dir) == []
+    loaded = load_stage_manifest(output_dir / "stage_manifest.json")
+    assert loaded == manifest
+    frame = pd.read_parquet(output_dir / "support_frame.parquet")
+    assert len(frame) == result.diagnostics["output_rows"]
+    diagnostics = json.loads((output_dir / "diagnostics.json").read_text())
+    assert diagnostics["block_geography"]["assigned"] is True
+
+
 def test_asec_puf_smoke_caps_loaded_source_rows() -> None:
     result = run_asec_puf_support_spine_smoke(
         registry=_registry(),
@@ -503,6 +529,7 @@ def test_asec_puf_smoke_cli_writes_json(tmp_path, monkeypatch) -> None:
         _registry_factory,
     )
     output_path = tmp_path / "smoke.json"
+    output_dir = tmp_path / "stage"
 
     exit_code = main(
         [
@@ -512,6 +539,8 @@ def test_asec_puf_smoke_cli_writes_json(tmp_path, monkeypatch) -> None:
             str(demographics_path),
             "--output-json",
             str(output_path),
+            "--output-dir",
+            str(output_dir),
         ]
     )
 
@@ -521,6 +550,9 @@ def test_asec_puf_smoke_cli_writes_json(tmp_path, monkeypatch) -> None:
     payload = json.loads(output_path.read_text())
     assert payload["source_rows"] == {"cps_asec": 4, "puf": 3}
     assert payload["half_counts"] == {"cps_keep": 2, "synthetic_puf": 2}
+    manifest = load_stage_manifest(output_dir / "stage_manifest.json")
+    assert set(manifest.artifacts) == {"support_frame", "diagnostics"}
+    assert (output_dir / "support_frame.parquet").is_file()
 
 
 def test_load_puf_accepts_explicit_restricted_access_paths(tmp_path) -> None:
