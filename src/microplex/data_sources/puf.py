@@ -4,10 +4,24 @@ Downloads PUF from HuggingFace, uprates 2015 → target year,
 and maps to common variable schema for multi-survey fusion.
 """
 
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+
 import numpy as np
 import pandas as pd
+
+from microplex.core import EntityType
+from microplex.core.sources import (
+    EntityObservation,
+    ObservationFrame,
+    Shareability,
+    SourceArchetype,
+    SourceDescriptor,
+    SourceQuery,
+    TimeStructure,
+    apply_source_query,
+)
 
 try:
     from huggingface_hub import hf_hub_download
@@ -107,10 +121,10 @@ UPRATING_FACTORS = {
 }
 
 
-def download_puf(cache_dir: Optional[Path] = None) -> Path:
+def download_puf(cache_dir: Path | None = None) -> tuple[Path, Path]:
     """Download PUF from HuggingFace.
 
-    Returns path to downloaded CSV file.
+    Returns paths to downloaded PUF and demographics CSV files.
     """
     if not HF_AVAILABLE:
         raise ImportError("huggingface_hub required: pip install huggingface_hub")
@@ -138,7 +152,10 @@ def download_puf(cache_dir: Optional[Path] = None) -> Path:
     return Path(puf_path), Path(demo_path)
 
 
-def load_puf_raw(puf_path: Path, demographics_path: Optional[Path] = None) -> pd.DataFrame:
+def load_puf_raw(
+    puf_path: Path,
+    demographics_path: Path | None = None,
+) -> pd.DataFrame:
     """Load raw PUF data from CSV."""
     print(f"Loading PUF from {puf_path}...")
     puf = pd.read_csv(puf_path)
@@ -281,7 +298,6 @@ def expand_to_persons(df: pd.DataFrame) -> pd.DataFrame:
 
     for idx, row in df.iterrows():
         filing_status = row.get("filing_status", "SINGLE")
-        exemptions = row.get("exemptions_count", 1)
 
         # Create head record
         head = row.copy()
@@ -321,7 +337,7 @@ def expand_to_persons(df: pd.DataFrame) -> pd.DataFrame:
 def load_puf(
     target_year: int = 2024,
     expand_persons: bool = True,
-    cache_dir: Optional[Path] = None,
+    cache_dir: Path | None = None,
 ) -> pd.DataFrame:
     """Load and process PUF for multi-survey fusion.
 
@@ -353,6 +369,96 @@ def load_puf(
     print(f"  Weight sum: {df['weight'].sum():,.0f}")
 
     return df
+
+
+def _puf_variable_names(
+    table: pd.DataFrame,
+    *,
+    key_column: str = "tax_unit_id",
+    weight_column: str = "weight",
+    period_column: str = "year",
+) -> tuple[str, ...]:
+    excluded = {key_column, weight_column, period_column}
+    return tuple(column for column in table.columns if column not in excluded)
+
+
+def _expected_puf_variable_names() -> tuple[str, ...]:
+    expected = (
+        *PUF_VARIABLE_MAP.values(),
+        "rental_income",
+        "filing_status",
+        "age",
+        "is_male",
+        "_survey",
+    )
+    return tuple(
+        name
+        for name in dict.fromkeys(expected)
+        if name not in {"tax_unit_id", "weight", "year"}
+    )
+
+
+@dataclass
+class PUFSourceProvider:
+    """Provider-backed IRS SOI PUF source with a tax-unit table."""
+
+    target_year: int = 2024
+    cache_dir: Path | None = None
+    loader: Callable[..., pd.DataFrame] = load_puf
+    source_name: str = "puf"
+
+    @property
+    def descriptor(self) -> SourceDescriptor:
+        return SourceDescriptor(
+            name=self.source_name,
+            shareability=Shareability.PUBLIC,
+            time_structure=TimeStructure.CROSS_SECTION,
+            archetype=SourceArchetype.TAX_MICRODATA,
+            population="US tax units",
+            observations=(
+                EntityObservation(
+                    entity=EntityType.TAX_UNIT,
+                    key_column="tax_unit_id",
+                    variable_names=_expected_puf_variable_names(),
+                    weight_column="weight",
+                    period_column="year",
+                ),
+            ),
+        )
+
+    def load_frame(self, query: SourceQuery | None = None) -> ObservationFrame:
+        table = self.loader(
+            target_year=self.target_year,
+            expand_persons=False,
+            cache_dir=self.cache_dir,
+        ).copy()
+        if "tax_unit_id" not in table.columns:
+            table.insert(0, "tax_unit_id", pd.RangeIndex(len(table), name="tax_unit_id"))
+        if "weight" not in table.columns:
+            raise ValueError("PUF tax-unit table must contain weight")
+        table["year"] = self.target_year
+
+        frame = ObservationFrame(
+            source=SourceDescriptor(
+                name=self.source_name,
+                shareability=Shareability.PUBLIC,
+                time_structure=TimeStructure.CROSS_SECTION,
+                archetype=SourceArchetype.TAX_MICRODATA,
+                population="US tax units",
+                observations=(
+                    EntityObservation(
+                        entity=EntityType.TAX_UNIT,
+                        key_column="tax_unit_id",
+                        variable_names=_puf_variable_names(table),
+                        weight_column="weight",
+                        period_column="year",
+                    ),
+                ),
+            ),
+            tables={EntityType.TAX_UNIT: table},
+        )
+        frame.validate()
+        return apply_source_query(frame, query)
 
 
 # Variables that PUF has but CPS doesn't (will be NaN in CPS)
