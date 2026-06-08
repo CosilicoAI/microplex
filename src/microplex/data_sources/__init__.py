@@ -77,6 +77,7 @@ from microplex.data_sources.source_impute import (
 )
 from microplex.data_sources.us_registry import (
     create_us_asec_puf_source_registry,
+    register_us_declared_source_impute_blocks,
     register_us_source_impute_blocks,
 )
 
@@ -129,6 +130,7 @@ __all__ = [
     "load_source_impute_block_table",
     "validate_source_impute_block_supported",
     "create_us_asec_puf_source_registry",
+    "register_us_declared_source_impute_blocks",
     "register_us_source_impute_blocks",
     # PSID loading
     "PSIDDataset",
