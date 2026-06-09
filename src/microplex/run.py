@@ -54,6 +54,11 @@ from microplex.imputation import (
     ImputationRunner,
     ImputationStepResult,
 )
+from microplex.runtime_operations import (
+    RuntimeVariableOperationHandler,
+    RuntimeVariableOperationResult,
+    apply_runtime_variable_operations,
+)
 from microplex.source_registry import SourceRegistry
 from microplex.spec import (
     BOTH_TOKEN,
@@ -134,6 +139,9 @@ class RunResult:
         calibration_result: The calibration output when a calibrator was
             supplied and run; otherwise ``None`` and ``calibrate`` remains
             pending.
+        variable_operation_results: Runtime variable-operation batches that
+            materialized post-transform columns before target loading or
+            calibration.
         entity_table_bundle: The calibrated entity tables when the generic
             entity-table calibration path ran; otherwise ``None``.
         pending_stages: Stages declared but not yet run (see
@@ -147,6 +155,7 @@ class RunResult:
     imputation_results: list[ImputationStepResult] = field(default_factory=list)
     target_set: TargetSet | None = None
     calibration_result: SpecCalibrationResult | None = None
+    variable_operation_results: tuple[RuntimeVariableOperationResult, ...] = ()
     entity_table_bundle: EntityTableBundle | None = None
     pending_stages: tuple[str, ...] = PENDING_STAGES
 
@@ -360,6 +369,9 @@ def run_spec(
     calibration_certificate: Mapping[str, Any] | None = None,
     calibration_min_records_per_target: float | None = None,
     allow_skipped_calibration_targets: bool = False,
+    variable_operation_handlers: (
+        Mapping[str, RuntimeVariableOperationHandler] | None
+    ) = None,
     source_impute_manifest: SourceImputeManifest | str | Path | None = None,
     source_impute_blocks: Sequence[str] | None = None,
     source_impute_imputation_steps: Sequence[str] | None = None,
@@ -412,6 +424,11 @@ def run_spec(
         allow_skipped_calibration_targets: Explicit opt-in for partial target
             surfaces. Defaults to ``False`` so skipped target rows fail before
             fitting.
+        variable_operation_handlers: Optional runtime handlers keyed by
+            ``variables[*].mp_spec.operation.handler`` (or operation kind when
+            no handler is set). When supplied, ``materialize_policyengine`` and
+            ``rerandomize_takeup`` operations run after transforms and before
+            target loading/calibration.
         source_impute_manifest: Optional source-impute block manifest. When
             supplied, executable ``variables[*].mp_spec.operation`` rows backed
             by the manifest run after the spine/half imputation stage and before
@@ -520,6 +537,18 @@ def run_spec(
     # Stage 4: transforms.
     transform_engine = TransformEngine()
     final_frame = transform_engine.apply(stacked, spec.transforms)
+    variable_operation_results: tuple[RuntimeVariableOperationResult, ...] = ()
+    if variable_operation_handlers is not None:
+        final_frame, variable_operation_results = apply_runtime_variable_operations(
+            final_frame,
+            spec=spec,
+            handlers=variable_operation_handlers,
+        )
+        if variable_operation_results:
+            logger.info(
+                "run_spec: materialized %d runtime variable-operation batch(es)",
+                len(variable_operation_results),
+            )
 
     target_set: TargetSet | None = None
     calibration_result: SpecCalibrationResult | None = None
@@ -641,6 +670,7 @@ def run_spec(
         imputation_results=imputation_results,
         target_set=target_set,
         calibration_result=calibration_result,
+        variable_operation_results=variable_operation_results,
         entity_table_bundle=entity_table_bundle,
         pending_stages=tuple(pending_stages),
     )

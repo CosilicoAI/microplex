@@ -111,6 +111,10 @@ from microplex.targets.rollups import (
     tabular_rollup_target,
     target_name_fragment,
 )
+from microplex.targets.simulation import (
+    MaterializingSimulationTargetCompiler,
+    SimulationModifierHandler,
+)
 from microplex.targets.spec import (
     FilterOperator,
     TargetAggregation,
@@ -201,6 +205,8 @@ __all__ = [
     "TargetReweightingConstraint",
     "TargetReweightingDiagnostics",
     "TargetConstraintCompilationResult",
+    "MaterializingSimulationTargetCompiler",
+    "SimulationModifierHandler",
     "compile_entity_table_bundle_target_constraints",
     "compile_sparse_target_constraints",
     "calibrate_sparse_target_weights",
