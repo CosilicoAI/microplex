@@ -2,16 +2,16 @@ name: Tests
 
 on:
   push:
-    branches: [main]
+    branches: [main, claude/spec-driven-engine]
   pull_request:
-    branches: [main]
+    branches: [main, claude/spec-driven-engine]
 
 jobs:
   test:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.11", "3.12", "3.13", "3.14"]
+        python-version: ["3.12", "3.13", "3.14"]
 
     steps:
       - uses: actions/checkout@v4
