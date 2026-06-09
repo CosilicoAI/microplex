@@ -1,0 +1,71 @@
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/Users/maxghenis/CosilicoAI/microplex-us/src/microplex_us/pipelines/ecps_replacement_comparison.py", line 1170, in <module>
+    raise SystemExit(main())
+                     ~~~~^^
+  File "/Users/maxghenis/CosilicoAI/microplex-us/src/microplex_us/pipelines/ecps_replacement_comparison.py", line 1142, in main
+    written = write_sound_ecps_replacement_comparison(
+        output_path,
+    ...<19 lines>...
+        force=args.force,
+    )
+  File "/Users/maxghenis/CosilicoAI/microplex-us/src/microplex_us/pipelines/ecps_replacement_comparison.py", line 345, in write_sound_ecps_replacement_comparison
+    payload = build_sound_ecps_replacement_comparison(**kwargs)
+  File "/Users/maxghenis/CosilicoAI/microplex-us/src/microplex_us/pipelines/ecps_replacement_comparison.py", line 120, in build_sound_ecps_replacement_comparison
+    candidate_inputs = _extract_pe_native_loss_inputs(
+        input_dataset_path=matched_candidate_path,
+    ...<3 lines>...
+        skip_tax_expenditure_targets=skip_tax_expenditure_targets,
+    )
+  File "/Users/maxghenis/CosilicoAI/microplex-us/src/microplex_us/pipelines/ecps_replacement_comparison.py", line 608, in _extract_pe_native_loss_inputs
+    raise RuntimeError(f"PE-native loss-matrix extraction failed: {detail}")
+RuntimeError: PE-native loss-matrix extraction failed: Traceback (most recent call last):
+  File "/Users/maxghenis/PolicyEngine/policyengine-us-data/.venv/lib/python3.13/site-packages/policyengine_core/holders/holder.py", line 271, in _to_array
+    value = value.astype(self.variable.dtype)
+ValueError: invalid literal for int() with base 10: b'ME-02'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "<string>", line 36, in <module>
+    loss_matrix, targets_array = build_loss_matrix(dataset_cls, PERIOD)
+                                 ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/maxghenis/PolicyEngine/policyengine-us-data/policyengine_us_data/utils/loss.py", line 121, in build_loss_matrix
+    df = pe_to_soi(dataset, time_period)
+  File "/Users/maxghenis/PolicyEngine/policyengine-us-data/policyengine_us_data/utils/soi.py", line 10, in pe_to_soi
+    pe_sim = Microsimulation(dataset=pe_dataset)
+  File "/Users/maxghenis/PolicyEngine/policyengine-us-data/.venv/lib/python3.13/site-packages/policyengine_us/system.py", line 219, in __init__
+    super().__init__(*args, **kwargs)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/Users/maxghenis/PolicyEngine/policyengine-us-data/.venv/lib/python3.13/site-packages/policyengine_core/simulations/simulation.py", line 197, in __init__
+    self.build_from_dataset()
+    ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "/Users/maxghenis/PolicyEngine/policyengine-us-data/.venv/lib/python3.13/site-packages/policyengine_core/simulations/simulation.py", line 374, in build_from_dataset
+    self.set_input(
+    ~~~~~~~~~~~~~~^
+        variable,
+        ^^^^^^^^^
+        time_period,
+        ^^^^^^^^^^^^
+        data[variable][time_period],
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/Users/maxghenis/PolicyEngine/policyengine-us-data/.venv/lib/python3.13/site-packages/policyengine_core/simulations/simulation.py", line 1241, in set_input
+    self.get_holder(variable_name).set_input(
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        period, value, self.branch_name
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/Users/maxghenis/PolicyEngine/policyengine-us-data/.venv/lib/python3.13/site-packages/policyengine_core/holders/holder.py", line 244, in set_input
+    return self._set(period, array, branch_name)
+           ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/maxghenis/PolicyEngine/policyengine-us-data/.venv/lib/python3.13/site-packages/policyengine_core/holders/holder.py", line 286, in _set
+    value = self._to_array(value)
+  File "/Users/maxghenis/PolicyEngine/policyengine-us-data/.venv/lib/python3.13/site-packages/policyengine_core/holders/holder.py", line 273, in _to_array
+    raise ValueError(
+    ...<6 lines>...
+    )
+ValueError: Unable to set value "[b'ME-02' b'ME-01' b'ME-02' ... b'MA-05' b'MA-06' b'MA-03']" for variable "congressional_district_geoid", as the variable dtype "<class 'numpy.int32'>" does not match the value dtype "|S5".

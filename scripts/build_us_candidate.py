@@ -65,6 +65,144 @@ MICROUNIT_RAW_COLUMNS = (
     "A_HSCOL",
 )
 
+# Raw ASEC columns backing CPS-threadable contract variables (mapping rules
+# mirror the eCPS loader in policyengine-us-data cps.py).
+EXTRA_ASEC_COLUMNS = (
+    "CSP_VAL",
+    "CHSP_VAL",
+    "DIS_VAL1",
+    "DIS_VAL2",
+    "DIS_SC1",
+    "DIS_SC2",
+    "NOW_GRP",
+    "NOW_MRK",
+    "WICYN",
+    "PHIP_VAL",
+    "POTC_VAL",
+    "PMED_VAL",
+    "PEDISDRS",
+    "PEDISEAR",
+    "PEDISEYE",
+    "PEDISOUT",
+    "PEDISPHY",
+    "PEDISREM",
+    "RESNSS1",
+    "RESNSS2",
+    "SPM_ENGVAL",
+)
+
+# Contract-required columns eCPS sources from PUF/SIPP/SCF detail our v1
+# donor surface does not carry. Explicit zero/false defaults, recorded in
+# the export gate's `defaulted` accounting. Iterate in v2.
+V1_ZERO_DEFAULTS: dict[str, object] = {
+    **{
+        c: 0.0
+        for c in (
+            "alimony_expense",
+            "bank_account_assets",
+            "bond_assets",
+            "stock_assets",
+            "casualty_loss",
+            "educator_expense",
+            "estate_income",
+            "farm_rent_income",
+            "salt_refund_income",
+            "non_sch_d_capital_gains",
+            "partnership_se_income",
+            "miscellaneous_income",
+            "qualified_tuition_expenses",
+            "investment_income_elected_form_4952",
+            "unreimbursed_business_employee_expenses",
+            "long_term_capital_gains_on_collectibles",
+            "tip_income",
+            "survivor_benefits",
+            "educational_assistance",
+            "financial_assistance",
+            "employer_sponsored_insurance_premiums",
+            "roth_401k_contributions",
+            "roth_401k_contributions_desired",
+            "roth_ira_contributions",
+            "roth_ira_contributions_desired",
+            "traditional_401k_contributions",
+            "traditional_401k_contributions_desired",
+            "traditional_ira_contributions_desired",
+            "self_employed_pension_contributions",
+            "self_employed_pension_contributions_desired",
+            "health_savings_account_ald",
+        )
+    },
+    "receives_housing_assistance": False,
+    "takes_up_housing_assistance_if_eligible": False,
+    "takes_up_medicare_if_eligible": True,
+    "reported_owns_employer_sponsored_health_insurance_at_interview": False,
+    "is_surviving_spouse": False,
+}
+
+
+def _derive_person_columns(person: pd.DataFrame) -> pd.DataFrame:
+    """Derive CPS-threadable contract columns (eCPS loader rules)."""
+    p = person.copy()
+    num = lambda c: pd.to_numeric(p.get(c, 0), errors="coerce").fillna(0)  # noqa: E731
+    p["child_support_received"] = num("CSP_VAL").astype(float)
+    p["child_support_expense"] = num("CHSP_VAL").astype(float)
+    p["disability_benefits"] = (
+        num("DIS_VAL1") * (num("DIS_SC1") != 1)
+        + num("DIS_VAL2") * (num("DIS_SC2") != 1)
+    ).astype(float)
+    p["has_esi"] = (num("NOW_GRP") == 1).astype(bool)
+    p["has_marketplace_health_coverage"] = (num("NOW_MRK") == 1).astype(bool)
+    p["receives_wic"] = (num("WICYN") == 1).astype(bool)
+    p["health_insurance_premiums_without_medicare_part_b"] = num(
+        "PHIP_VAL"
+    ).astype(float)
+    p["over_the_counter_health_expenses"] = num("POTC_VAL").astype(float)
+    p["other_medical_expenses"] = num("PMED_VAL").astype(float)
+    dis_flags = ["PEDISDRS", "PEDISEAR", "PEDISEYE", "PEDISOUT", "PEDISPHY", "PEDISREM"]
+    p["is_disabled"] = (
+        pd.concat([num(c) == 1 for c in dis_flags], axis=1).any(axis=1)
+    ).astype(bool)
+    p["cps_race"] = num("race").astype(int)
+    p["is_female"] = (num("sex") == 2).astype(bool)
+    p["is_hispanic"] = (num("hispanic") == 1).astype(bool)
+    p["is_household_head"] = num("A_EXPRRP").isin([1, 2]).astype(bool)
+    p["is_separated"] = (num("A_MARITL") == 6).astype(bool)
+    p["is_unmarried_partner_of_household_head"] = (
+        num("A_EXPRRP") == 13
+    ).astype(bool)
+    # own children: count persons naming me as parent within the household.
+    key = p["household_id"].astype(str)
+    me = key + ":" + num("A_LINENO").astype(int).astype(str)
+    par1 = key + ":" + num("PEPAR1").astype(int).astype(str)
+    par2 = key + ":" + num("PEPAR2").astype(int).astype(str)
+    counts = par1.value_counts().add(par2.value_counts(), fill_value=0)
+    p["own_children_in_household"] = me.map(counts).fillna(0).astype(float)
+    # household child counts (eCPS groups by household).
+    u18 = (num("A_AGE") < 18).groupby(p["household_id"]).transform("sum")
+    u6 = (num("A_AGE") < 6).groupby(p["household_id"]).transform("sum")
+    p["count_under_18"] = u18.astype(float)
+    p["count_under_6"] = u6.astype(float)
+    # Social security split by RESNSS reason codes, age-62 fallback.
+    ss = pd.to_numeric(p.get("social_security", 0), errors="coerce").fillna(0)
+    r1, r2 = num("RESNSS1"), num("RESNSS2")
+    retired = (r1 == 1) | (r2 == 1)
+    disabled = ((r1 == 2) | (r2 == 2)) & ~retired
+    survivor = (r1.isin([3, 5]) | r2.isin([3, 5])) & ~retired & ~disabled
+    dependent = (
+        (r1.isin([4, 6, 7]) | r2.isin([4, 6, 7]))
+        & ~retired
+        & ~disabled
+        & ~survivor
+    )
+    unclassified = (ss > 0) & ~(retired | disabled | survivor | dependent)
+    age = num("A_AGE")
+    retired = retired | (unclassified & (age >= 62))
+    disabled = disabled | (unclassified & (age < 62))
+    p["social_security_retirement"] = (ss * retired).astype(float)
+    p["social_security_disability"] = (ss * disabled).astype(float)
+    p["social_security_survivors"] = (ss * survivor).astype(float)
+    p["social_security_dependents"] = (ss * dependent).astype(float)
+    return p
+
 # Person-level ASEC harmonized income columns that sum to tax-unit totals.
 PERSON_INCOME_COLUMNS = (
     "employment_income",
@@ -103,6 +241,9 @@ PUF_IMPUTE_VARS = (
     "charitable_noncash",
     "mortgage_interest_paid",
     "real_estate_tax_paid",
+    "student_loan_interest",
+    "ira_deduction",
+    "farm_income",
 )
 CPS_MEASURED = (
     "employment_income",
@@ -116,7 +257,6 @@ CPS_MEASURED = (
 
 # donor/common name -> PolicyEngine contract name at person allocation.
 DONOR_TO_PE = {
-    "unemployment_compensation": "taxable_unemployment_compensation",
     "ira_distributions": "taxable_ira_distributions",
     "alimony_received": "alimony_income",
     "charitable_cash": "charitable_cash_donations",
@@ -124,6 +264,7 @@ DONOR_TO_PE = {
     "mortgage_interest_paid": "interest_deduction",
     "real_estate_tax_paid": "real_estate_taxes",
     "ordinary_dividend_income": "non_qualified_dividend_income",
+    "ira_deduction": "traditional_ira_contributions",
 }
 
 SHARED_PREDICTORS = ("age", "is_joint", "n_people", "n_children")
@@ -218,9 +359,19 @@ def _assign_blocks(
         households.loc[idx, "county_fips"] = (
             chosen["geoid"].astype(str).str[:5].to_numpy()
         )
-        households.loc[idx, "congressional_district_geoid"] = (
-            chosen["cd_id"].astype(str).to_numpy()
+        district = (
+            chosen["cd_id"]
+            .astype(str)
+            .str.extract(r"(\d+)$")[0]
+            .fillna("0")
+            .astype(int)
         )
+        households.loc[idx, "congressional_district_geoid"] = (
+            int(state) * 100 + district
+        ).to_numpy()
+    households["congressional_district_geoid"] = pd.to_numeric(
+        households["congressional_district_geoid"], errors="coerce"
+    ).fillna(0).astype(np.int32)
     return households
 
 
@@ -290,7 +441,9 @@ def main() -> int:
     log("stage A: loading ASEC persons/households")
     ds = load_cps_asec(
         year=args.asec_year,
-        extra_person_columns=list(MICROUNIT_RAW_COLUMNS) + ["PH_SEQ"],
+        extra_person_columns=(
+            list(MICROUNIT_RAW_COLUMNS) + ["PH_SEQ"] + list(EXTRA_ASEC_COLUMNS)
+        ),
     )
     persons = ds.persons.to_pandas()
     households = ds.households.to_pandas()
@@ -299,7 +452,12 @@ def main() -> int:
     # ---- Stage B: unit structure ------------------------------------------
     log("stage B: unit assignment (microunit)")
     units = assign_us_unit_structure(persons, year=args.calendar_year)
-    person = units.person
+    person = units.person.rename(
+        columns={
+            "wage_income": "employment_income",
+            "interest_income": "taxable_interest_income",
+        }
+    )
     log(
         f"  tax_units={len(units.tax_unit):,} spm={len(units.spm_unit):,} "
         f"families={len(units.family):,} marital={len(units.marital_unit):,}"
@@ -416,12 +574,31 @@ def main() -> int:
             person["non_qualified_dividend_income"]
             - person["qualified_dividend_income"]
         ).clip(lower=0.0)
+    person = _derive_person_columns(person)
+    # Pre-response copies and aliases the contract requires alongside the
+    # base variables.
+    person["employment_income_before_lsr"] = person["employment_income"]
+    person["self_employment_income_before_lsr"] = person[
+        "self_employment_income"
+    ]
+    person["long_term_capital_gains_before_response"] = person[
+        "long_term_capital_gains"
+    ]
+    person["taxable_unemployment_compensation"] = person[
+        "unemployment_compensation"
+    ]
+    person["farm_operations_income"] = person["farm_income"]
+    person["taxable_private_pension_income"] = person["taxable_pension_income"]
+    person["tax_exempt_private_pension_income"] = person[
+        "tax_exempt_pension_income"
+    ]
     person["person_household_id"] = person["household_id"]
     person["person_id"] = np.arange(1, len(person) + 1, dtype=np.int64)
     person["age"] = person["A_AGE"].astype(float)
 
     hh_ids = person["person_household_id"].unique()
     hh = households[households["household_id"].isin(hh_ids)].copy()
+    hh["tract_geoid"] = hh["block_geoid"].astype(str).str[:11]
 
     def unit_table(id_col: str, source: pd.DataFrame | None = None) -> pd.DataFrame:
         ids = np.sort(person[f"person_{id_col}"].unique())
@@ -431,15 +608,43 @@ def main() -> int:
             t = t.merge(extra, on=id_col, how="left")
         return t
 
+    spm = unit_table("spm_unit_id")
+    if "SPM_ENGVAL" in person.columns:
+        eng = (
+            pd.to_numeric(person["SPM_ENGVAL"], errors="coerce")
+            .fillna(0.0)
+            .groupby(person["person_spm_unit_id"])
+            .max()
+        )
+        spm["spm_unit_energy_subsidy"] = (
+            spm["spm_unit_id"].map(eng).fillna(0.0).astype(float)
+        )
+
     class _Key:
         def __init__(self, value: str):
             self.value = value
 
+    # Group-owned id columns must exist only on their group tables; the
+    # person table carries them as join keys until this point.
+    person = person.drop(
+        columns=[
+            c
+            for c in (
+                "household_id",
+                "tax_unit_id",
+                "spm_unit_id",
+                "family_id",
+                "marital_unit_id",
+                "household_weight",
+            )
+            if c in person.columns
+        ]
+    )
     entity_frames = {
         _Key("person"): person,
         _Key("household"): hh,
         _Key("tax_unit"): unit_table("tax_unit_id", units_tu),
-        _Key("spm_unit"): unit_table("spm_unit_id"),
+        _Key("spm_unit"): spm,
         _Key("family"): unit_table("family_id"),
         _Key("marital_unit"): unit_table("marital_unit_id"),
     }
@@ -453,6 +658,8 @@ def main() -> int:
         (REPO / "packs/us/manifests/export_defaults.json").read_text()
     )
     defaults.pop("_source", None)
+    for column, value in V1_ZERO_DEFAULTS.items():
+        defaults.setdefault(column, value)
     candidate_h5 = out / "candidate_policyengine_us.h5"
     gate = export_policyengine_us_dataset(
         entity_frames,
@@ -463,6 +670,41 @@ def main() -> int:
         allow_incomplete=smoke,
     )
     (out / "export_gate.json").write_text(json.dumps(gate.to_dict(), indent=2))
+    # Sibling export in the eCPS time-period layout ({variable}/{period}
+    # datasets) — the format the comparison harness and HF artifacts use.
+    import h5py
+
+    tp_h5 = out / "candidate_timeperiod.h5"
+    allowed = set(contract.required) | set(contract.optional)
+    from policyengine_us.data import USSingleYearDataset
+
+    saved = USSingleYearDataset(file_path=str(candidate_h5))
+    saved_tables = [
+        saved.person,
+        saved.household,
+        saved.tax_unit,
+        saved.spm_unit,
+        saved.family,
+        saved.marital_unit,
+    ]
+    with h5py.File(tp_h5, "w") as handle:
+        seen: set[str] = set()
+        for frame in saved_tables:
+            if frame is None or len(frame) == 0:
+                continue
+            for column in frame.columns:
+                if column in seen or column not in allowed:
+                    continue
+                seen.add(column)
+                values = frame[column].to_numpy()
+                if values.dtype.kind in {"U", "O"}:
+                    values = values.astype("S")
+                elif values.dtype.kind == "b":
+                    values = values.astype(bool)
+                grp = handle.create_group(column)
+                grp.create_dataset(str(args.calendar_year), data=values)
+        missing_tp = sorted(set(contract.required) - seen)
+    log(f"  time-period export: {tp_h5.name} cols={len(seen)} missing={len(missing_tp)}")
     log(
         f"  gate passed={gate.passed} missing={len(gate.missing_required)} "
         f"defaulted={len(gate.defaulted)} dropped={len(gate.dropped)}"
@@ -478,7 +720,7 @@ def main() -> int:
             "-m",
             "microplex_us.pipelines.ecps_replacement_comparison",
             "--candidate-dataset",
-            str(candidate_h5),
+            str(out / "candidate_timeperiod.h5"),
             "--baseline-dataset",
             str(args.baseline_h5),
             "--output-dir",
