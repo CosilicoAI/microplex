@@ -62,6 +62,28 @@ def test_us_arch_manifest_loads_and_pack_remains_content_only():
     assert not list((ROOT / "packs/us").rglob("*.py"))
 
 
+def test__given_us_arch_manifest__then_legacy_mapping_surface_is_expanded():
+    manifest = _manifest()
+
+    assert len(manifest.payload["target_mappings"]) >= 160
+    assert len(manifest.payload["amount_measures"]) >= 60
+    assert len(manifest.payload["count_aliases"]) >= 21
+    assert (
+        manifest.payload["target_mappings"]["irs_soi.total_income_tax"]["variable"]
+        == "income_tax_liability"
+    )
+    assert (
+        manifest.payload["target_mappings"]["cms_medicaid.total_chip_enrollment"][
+            "target_type"
+        ]
+        == "SKIP"
+    )
+    assert (
+        "irs_soi.returns_with_state_and_local_taxes"
+        in manifest.payload["skip_concepts"]
+    )
+
+
 def test_manifest_maps_soi_state_agi_count_row_through_jsonl(tmp_path: Path):
     manifest = _manifest()
     path = tmp_path / "consumer_facts.jsonl"
@@ -125,6 +147,18 @@ def test_manifest_adds_legacy_positive_filter_for_count_alias():
     assert ("employment_income", ">", 0) in manifest.constraints_of(fact)
 
 
+def test__given_legacy_count_alias__then_manifest_adds_explicit_positive_filter():
+    manifest = _manifest()
+    fact = ArchConsumerFact(
+        _fact_row("irs_soi.returns_with_premium_tax_credit", aggregation="count")
+    )
+
+    assert manifest.variable_of(fact) == "aca_ptc_returns"
+    assert manifest.entity_of("aca_ptc_returns") is EntityType.TAX_UNIT
+    assert manifest.count_measure(EntityType.TAX_UNIT) == "tax_unit_count"
+    assert ("aca_ptc", ">", 0) in manifest.constraints_of(fact)
+
+
 def test_manifest_maps_amount_variable_to_support_measure():
     manifest = _manifest()
     fact = ArchConsumerFact(_fact_row("irs_soi.total_wages"))
@@ -146,6 +180,136 @@ def test_manifest_maps_amount_variable_to_support_measure():
     target = provider.load_target_set().targets[0]
     assert target.entity is EntityType.PERSON
     assert target.measure == "employment_income"
+
+
+def test__given_legacy_amount_alias__then_provider_uses_support_measure():
+    manifest = _manifest()
+    fact = ArchConsumerFact(_fact_row("irs_soi.total_income_tax"))
+
+    row_record = manifest.variable_of(fact)
+    assert row_record == "income_tax_liability"
+    assert manifest.entity_of(row_record) is EntityType.TAX_UNIT
+    assert manifest.measure_of(row_record) == "income_tax"
+
+    records = load_arch_target_records_from_facts(manifest, [fact])
+    provider = ArchTargetProvider(
+        records=records,
+        config=manifest.pipeline_config(target_year=2024),
+        entity_of=manifest.entity_of,
+        measure_of=manifest.measure_of,
+        geo_feature=manifest.geo_feature,
+        count_measure=manifest.count_measure,
+    )
+    target = provider.load_target_set().targets[0]
+    assert target.entity is EntityType.TAX_UNIT
+    assert target.measure == "income_tax"
+
+
+def test__given_positive_amount_domain__then_filter_uses_measure_alias():
+    manifest = _manifest()
+    fact = ArchConsumerFact(_fact_row("irs_soi.taxable_net_capital_gains"))
+
+    assert manifest.variable_of(fact) == "net_capital_gains_amount"
+    assert manifest.measure_of("net_capital_gains_amount") == "net_capital_gains"
+    assert ("net_capital_gains", ">", 0) in manifest.constraints_of(fact)
+
+
+def test__given_positive_constraint_alias__then_manifest_maps_truthy_and_falsey():
+    manifest = _manifest()
+    receiving = ArchConsumerFact(
+        _fact_row(
+            "usda_snap.total_benefits",
+            constraints=[
+                {
+                    "variable": "snap_receipt_status",
+                    "operator": "eq",
+                    "value": "receiving_food_stamps_snap",
+                }
+            ],
+        )
+    )
+    not_receiving = ArchConsumerFact(
+        _fact_row(
+            "usda_snap.total_benefits",
+            constraints=[
+                {
+                    "variable": "snap_receipt_status",
+                    "operator": "eq",
+                    "value": "not_receiving_food_stamps_snap",
+                }
+            ],
+        )
+    )
+
+    assert ("snap", ">", 0) in manifest.constraints_of(receiving)
+    assert ("snap", "==", 0) in manifest.constraints_of(not_receiving)
+
+
+def test__given_ignored_constraint__then_manifest_drops_and_normalizes_filters():
+    manifest = _manifest()
+    fact = ArchConsumerFact(
+        _fact_row(
+            "irs_soi.adjusted_gross_income",
+            constraints=[
+                {
+                    "variable": "amount_basis",
+                    "operator": "=",
+                    "value": "nominal",
+                },
+                {
+                    "variable": "us:statutes/26/62#adjusted_gross_income",
+                    "operator": "eq",
+                    "value": 1,
+                },
+            ],
+        )
+    )
+
+    constraints = manifest.constraints_of(fact)
+    assert ("adjusted_gross_income", "==", 1) in constraints
+    assert all(variable != "amount_basis" for variable, _, _ in constraints)
+
+
+def test__given_unsupported_legacy_count__then_provider_skips_record():
+    manifest = _manifest()
+    fact = ArchConsumerFact(
+        _fact_row("cms_medicaid.total_chip_enrollment", aggregation="count")
+    )
+
+    assert manifest.variable_of(fact) == "chip_total_enrollment"
+    assert manifest.target_type_of(fact) == "SKIP"
+
+    records = load_arch_target_records_from_facts(manifest, [fact])
+    provider = ArchTargetProvider(
+        records=records,
+        config=manifest.pipeline_config(target_year=2024),
+        entity_of=manifest.entity_of,
+        measure_of=manifest.measure_of,
+        geo_feature=manifest.geo_feature,
+        count_measure=manifest.count_measure,
+    )
+    assert len(provider.load_target_set().targets) == 0
+
+
+def test__given_declared_skip_concept__then_provider_skips_record():
+    manifest = _manifest()
+    fact = ArchConsumerFact(
+        _fact_row("cbo.adjusted_gross_income_projection", aggregation="sum")
+    )
+
+    assert manifest.variable_of(fact) == "cbo.adjusted_gross_income_projection"
+    assert manifest.target_type_of(fact) == "SKIP"
+
+    records = load_arch_target_records_from_facts(manifest, [fact])
+    provider = ArchTargetProvider(
+        records=records,
+        config=manifest.pipeline_config(target_year=2024),
+        entity_of=manifest.entity_of,
+        measure_of=manifest.measure_of,
+        geo_feature=manifest.geo_feature,
+        count_measure=manifest.count_measure,
+    )
+    assert len(provider.load_target_set().targets) == 0
 
 
 def test_manifest_maps_state_cms_count_and_provider_uses_person_count():

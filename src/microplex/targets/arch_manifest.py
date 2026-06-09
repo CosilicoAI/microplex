@@ -63,6 +63,8 @@ class ArchTargetManifest:
 
     def target_type_of(self, fact: ArchConsumerFact) -> str:
         """Return COUNT/AMOUNT/etc. after applying manifest concept mappings."""
+        if self._fact_matches_skip(fact):
+            return "SKIP"
         entry = self.target_mapping_for_fact(fact)
         if entry and entry.get("target_type") is not None:
             return str(entry["target_type"]).upper()
@@ -176,7 +178,19 @@ class ArchTargetManifest:
             bea_wage_component_variables=bea_wage_component_variables,
             age_soi=_bool(derivations.get("age_soi"), default=True),
             soi_source=str(derivations.get("soi_source", "IRS_SOI")),
+            skip=self.skip,
             state_fips_of=self.state_fips_of,
+        )
+
+    def skip(self, record: ArchTargetRecord) -> bool:
+        """Return whether a loaded/derived Arch target record is not usable."""
+        if record.variable in _string_set(self.payload.get("skip_variables")):
+            return True
+        skip_concepts = _string_set(self.payload.get("skip_concepts"))
+        return any(
+            concept in skip_concepts
+            for concept in (record.concept, record.source_concept)
+            if concept is not None
         )
 
     def target_mapping_for_fact(self, fact: ArchConsumerFact) -> Mapping[str, Any]:
@@ -191,15 +205,33 @@ class ArchTargetManifest:
         self, variable: str, operator: str, value: Any
     ) -> tuple[tuple[str, str, Any], ...]:
         constraints = mapping_value(self.payload.get("constraints"))
+        if variable in _string_set(constraints.get("ignored")):
+            return ()
+
+        canonical_operator = self._canonical_constraint_operator(operator)
+        aliases = mapping_value(constraints.get("aliases"))
+        mapped_variable = str(aliases.get(variable, variable))
+
         positive_aliases = mapping_value(constraints.get("positive_aliases"))
-        if variable in positive_aliases and operator in {"=", "=="}:
-            feature = str(positive_aliases[variable])
+        positive_feature = positive_aliases.get(variable) or positive_aliases.get(
+            mapped_variable
+        )
+        if positive_feature is not None and canonical_operator == "==":
+            feature = str(positive_feature)
             if _truthy_constraint_value(value):
                 return ((feature, ">", 0),)
-            return ((feature, "==", 0),)
+            if _falsey_constraint_value(value):
+                return ((feature, "==", 0),)
+            return ((feature, canonical_operator, value),)
 
-        aliases = mapping_value(constraints.get("aliases"))
-        return ((str(aliases.get(variable, variable)), operator, value),)
+        return ((mapped_variable, canonical_operator, value),)
+
+    def _canonical_constraint_operator(self, operator: str) -> str:
+        operator_text = str(operator).strip()
+        operator_aliases = mapping_value(
+            mapping_value(self.payload.get("constraints")).get("operator_aliases")
+        )
+        return str(operator_aliases.get(operator_text.lower(), operator_text))
 
     def _geography_constraint(
         self, fact: ArchConsumerFact
@@ -238,14 +270,16 @@ class ArchTargetManifest:
         return None
 
     def _positive_amount_filter_measure(self, variable: str) -> str | None:
-        positive_amount_filters = self.payload.get("positive_amount_filters", ())
-        if not isinstance(positive_amount_filters, Sequence) or isinstance(
-            positive_amount_filters, str
+        positive_amount_filters = _string_set(
+            self.payload.get("positive_amount_filters")
+        )
+        measure = self.measure_of(variable) or variable
+        if (
+            variable not in positive_amount_filters
+            and measure not in positive_amount_filters
         ):
             return None
-        if variable not in positive_amount_filters:
-            return None
-        return self.measure_of(variable) or variable
+        return measure
 
     def _entity_for_variable(self, variable: str) -> str | None:
         entities = mapping_value(self.payload.get("entities"))
@@ -280,6 +314,10 @@ class ArchTargetManifest:
 
     def _geo_features(self) -> Mapping[str, Any]:
         return mapping_value(self._geography().get("features"))
+
+    def _fact_matches_skip(self, fact: ArchConsumerFact) -> bool:
+        skip_concepts = _string_set(self.payload.get("skip_concepts"))
+        return any(concept in skip_concepts for concept in _concept_candidates(fact))
 
 
 def load_arch_target_manifest(pathlike: str | Path) -> ArchTargetManifest:
@@ -350,9 +388,35 @@ def _constraint_value_key(value: Any) -> str:
 
 
 def _truthy_constraint_value(value: Any) -> bool:
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value) == 1.0
     if isinstance(value, str):
-        return value.strip().lower() not in {"", "0", "false", "no", "none"}
+        return value.strip().lower() in {
+            "1",
+            "1.0",
+            "true",
+            "yes",
+            "y",
+            "receiving_food_stamps_snap",
+        }
     return bool(value)
+
+
+def _falsey_constraint_value(value: Any) -> bool:
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value) == 0.0
+    if isinstance(value, str):
+        return value.strip().lower() in {
+            "",
+            "0",
+            "0.0",
+            "false",
+            "no",
+            "n",
+            "none",
+            "not_receiving_food_stamps_snap",
+        }
+    return not bool(value)
 
 
 def _bool(value: Any, *, default: bool) -> bool:
@@ -365,6 +429,16 @@ def _bool(value: Any, *, default: bool) -> bool:
 
 def _optional_string(value: Any) -> str | None:
     return str(value) if value not in (None, "") else None
+
+
+def _string_set(value: Any) -> frozenset[str]:
+    if value is None:
+        return frozenset()
+    if isinstance(value, str):
+        return frozenset({value})
+    if not isinstance(value, Sequence):
+        return frozenset()
+    return frozenset(str(item) for item in value)
 
 
 __all__ = [

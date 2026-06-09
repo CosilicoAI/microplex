@@ -11,43 +11,229 @@
       "district": "congressional_district",
       "congressional_district": "congressional_district"
     },
-    "state_geoid_prefixes": ["0400000US"]
+    "state_geoid_prefixes": [
+      "0400000US"
+    ]
   },
+  "skip_concepts": [
+    "cbo.adjusted_gross_income_projection",
+    "cbo.net_business_income_projection",
+    "cbo.net_capital_gain_projection",
+    "cbo.qualified_dividend_income_projection",
+    "cbo.taxable_interest_and_ordinary_dividends_excluding_qualified_dividends_projection",
+    "cbo.wages_and_salaries_projection",
+    "irs_soi.returns_with_state_and_local_taxes",
+    "irs_soi.state_and_local_taxes"
+  ],
+  "skip_variables": [
+    "bea_regional_wages_salaries_place_of_work_amount",
+    "regional_contributions_for_government_social_insurance",
+    "regional_residence_adjustment",
+    "regional_supplements_to_wages_and_salaries",
+    "ssi_avg_monthly_payment",
+    "ssi_federal_payments",
+    "ssi_state_supplementation"
+  ],
   "target_mappings": {
-    "irs_soi.individual_income_tax_returns": {
-      "variable": "tax_unit_count",
-      "target_type": "COUNT",
+    "bea_nipa.disposable_personal_income": {
+      "variable": "disposable_personal_income",
+      "target_type": "RATE",
       "entity": "tax_unit"
     },
-    "irs_soi.adjusted_gross_income": {
-      "variable": "adjusted_gross_income",
-      "target_type": "AMOUNT",
+    "bea_nipa.employer_contributions_for_employee_pension_and_insurance_funds": {
+      "variable": "employer_pension_and_insurance_contributions",
+      "target_type": "RATE",
       "entity": "tax_unit"
     },
-    "us:statutes/26/62#adjusted_gross_income": {
-      "variable": "adjusted_gross_income",
-      "target_type": "AMOUNT",
+    "bea_nipa.employer_contributions_for_government_social_insurance": {
+      "variable": "employer_government_social_insurance_contributions",
+      "target_type": "RATE",
       "entity": "tax_unit"
     },
-    "irs_soi.returns_with_total_wages": {
-      "variable": "wages_salaries_returns",
-      "target_type": "COUNT",
+    "bea_nipa.farm_proprietors_income": {
+      "variable": "farm_proprietors_income",
+      "target_type": "RATE",
       "entity": "tax_unit"
     },
-    "irs_soi.total_wages": {
-      "variable": "wages_salaries_amount",
+    "bea_nipa.government_social_benefits_to_persons": {
+      "variable": "government_social_benefits_to_persons",
+      "target_type": "RATE",
+      "entity": "tax_unit"
+    },
+    "bea_nipa.medicaid_benefits": {
+      "variable": "medicaid_benefits",
       "target_type": "AMOUNT",
       "entity": "person"
     },
-    "us:statutes/26/62#input.wages": {
-      "variable": "wages_salaries_amount",
+    "bea_nipa.medicare_benefits": {
+      "variable": "medicare_benefits",
+      "target_type": "RATE",
+      "entity": "tax_unit"
+    },
+    "bea_nipa.nonfarm_proprietors_income": {
+      "variable": "nonfarm_proprietors_income",
+      "target_type": "RATE",
+      "entity": "tax_unit"
+    },
+    "bea_nipa.other_current_transfer_receipts_from_business_net": {
+      "variable": "other_current_transfer_receipts_from_business_net",
+      "target_type": "RATE",
+      "entity": "tax_unit"
+    },
+    "bea_nipa.other_government_social_benefits_to_persons": {
+      "variable": "other_government_social_benefits_to_persons",
+      "target_type": "RATE",
+      "entity": "tax_unit"
+    },
+    "bea_nipa.personal_current_taxes": {
+      "variable": "personal_current_taxes",
+      "target_type": "RATE",
+      "entity": "tax_unit"
+    },
+    "bea_nipa.personal_current_transfer_receipts": {
+      "variable": "personal_current_transfer_receipts",
+      "target_type": "RATE",
+      "entity": "tax_unit"
+    },
+    "bea_nipa.personal_dividend_income": {
+      "variable": "personal_dividend_income_amount",
       "target_type": "AMOUNT",
       "entity": "person"
     },
-    "cms_aca.marketplace_plan_selections": {
-      "variable": "aca_marketplace_plan_selections",
+    "bea_nipa.personal_income": {
+      "variable": "personal_income",
+      "target_type": "RATE",
+      "entity": "tax_unit"
+    },
+    "bea_nipa.personal_interest_income": {
+      "variable": "personal_interest_income_amount",
+      "target_type": "RATE",
+      "entity": "tax_unit"
+    },
+    "bea_nipa.personal_outlays": {
+      "variable": "personal_outlays",
+      "target_type": "RATE",
+      "entity": "tax_unit"
+    },
+    "bea_nipa.personal_saving": {
+      "variable": "personal_saving",
+      "target_type": "RATE",
+      "entity": "tax_unit"
+    },
+    "bea_nipa.personal_saving_rate": {
+      "variable": "personal_saving_rate",
+      "target_type": "RATE",
+      "entity": "tax_unit"
+    },
+    "bea_nipa.proprietors_income_with_inventory_valuation_and_capital_consumption_adjustments": {
+      "variable": "proprietors_income_amount",
+      "target_type": "AMOUNT",
+      "entity": "person"
+    },
+    "bea_nipa.rental_income_of_persons_with_capital_consumption_adjustment": {
+      "variable": "rental_income_amount",
+      "target_type": "AMOUNT",
+      "entity": "person"
+    },
+    "bea_nipa.social_security_benefits": {
+      "variable": "social_security_benefits",
+      "target_type": "AMOUNT",
+      "entity": "person"
+    },
+    "bea_nipa.supplements_to_wages_and_salaries": {
+      "variable": "supplements_to_wages_and_salaries",
+      "target_type": "RATE",
+      "entity": "tax_unit"
+    },
+    "bea_nipa.unemployment_insurance_benefits": {
+      "variable": "unemployment_insurance_benefits",
+      "target_type": "AMOUNT",
+      "entity": "person"
+    },
+    "bea_nipa.veterans_benefits": {
+      "variable": "veterans_benefits",
+      "target_type": "RATE",
+      "entity": "tax_unit"
+    },
+    "bea_nipa.wages_and_salaries": {
+      "variable": "employment_income_before_lsr_amount",
+      "target_type": "AMOUNT",
+      "entity": "tax_unit"
+    },
+    "bea_regional.contributions_for_government_social_insurance": {
+      "variable": "regional_contributions_for_government_social_insurance",
+      "target_type": "RATE",
+      "entity": "tax_unit"
+    },
+    "bea_regional.dividends_interest_and_rent": {
+      "variable": "regional_dividends_interest_and_rent",
+      "target_type": "RATE",
+      "entity": "tax_unit"
+    },
+    "bea_regional.personal_current_transfer_receipts": {
+      "variable": "regional_personal_current_transfer_receipts",
+      "target_type": "RATE",
+      "entity": "tax_unit"
+    },
+    "bea_regional.personal_income": {
+      "variable": "regional_personal_income",
+      "target_type": "RATE",
+      "entity": "tax_unit"
+    },
+    "bea_regional.proprietors_income": {
+      "variable": "proprietors_income_amount",
+      "target_type": "AMOUNT",
+      "entity": "person"
+    },
+    "bea_regional.residence_adjustment": {
+      "variable": "regional_residence_adjustment",
+      "target_type": "RATE",
+      "entity": "tax_unit"
+    },
+    "bea_regional.supplements_to_wages_and_salaries": {
+      "variable": "regional_supplements_to_wages_and_salaries",
+      "target_type": "RATE",
+      "entity": "tax_unit"
+    },
+    "bea_regional.wages_and_salaries": {
+      "variable": "bea_regional_wages_salaries_place_of_work_amount",
+      "target_type": "AMOUNT",
+      "entity": "tax_unit"
+    },
+    "census.population_projection": {
+      "variable": "population",
       "target_type": "COUNT",
       "entity": "person"
+    },
+    "census_acs.household_count": {
+      "variable": "household_count",
+      "target_type": "COUNT",
+      "entity": "household"
+    },
+    "census_acs.person_count": {
+      "variable": "population",
+      "target_type": "COUNT",
+      "entity": "person"
+    },
+    "census_decennial.occupied_housing_units": {
+      "variable": "household_count",
+      "target_type": "COUNT",
+      "entity": "household"
+    },
+    "census_decennial.resident_population": {
+      "variable": "population",
+      "target_type": "COUNT",
+      "entity": "person"
+    },
+    "census_pep.resident_population": {
+      "variable": "population",
+      "target_type": "COUNT",
+      "entity": "person"
+    },
+    "census_stc.individual_income_tax_collections": {
+      "variable": "state_individual_income_tax_collections",
+      "target_type": "AMOUNT",
+      "entity": "tax_unit"
     },
     "cms_aca.aptc_consumers": {
       "variable": "aca_aptc_consumers",
@@ -58,22 +244,990 @@
       "variable": "aca_average_monthly_aptc",
       "target_type": "RATE",
       "entity": "person"
+    },
+    "cms_aca.marketplace_effectuated_enrollment": {
+      "variable": "aca_marketplace_enrollment",
+      "target_type": "COUNT",
+      "entity": "person"
+    },
+    "cms_aca.marketplace_plan_selections": {
+      "variable": "aca_marketplace_plan_selections",
+      "target_type": "COUNT",
+      "entity": "person"
+    },
+    "cms_medicaid.medicaid_chip_child_enrollment": {
+      "variable": "medicaid_chip_child_enrollment",
+      "target_type": "SKIP",
+      "entity": "tax_unit"
+    },
+    "cms_medicaid.total_adult_medicaid_enrollment": {
+      "variable": "adult_medicaid_enrollment",
+      "target_type": "SKIP",
+      "entity": "tax_unit"
+    },
+    "cms_medicaid.total_chip_enrollment": {
+      "variable": "chip_total_enrollment",
+      "target_type": "SKIP",
+      "entity": "tax_unit"
+    },
+    "cms_medicaid.total_medicaid_chip_enrollment": {
+      "variable": "medicaid_chip_total_enrollment",
+      "target_type": "SKIP",
+      "entity": "tax_unit"
+    },
+    "cms_medicaid.total_medicaid_enrollment": {
+      "variable": "medicaid_total_enrollment",
+      "target_type": "COUNT",
+      "entity": "person"
+    },
+    "cms_medicare.part_b_premium_income": {
+      "variable": "medicare_part_b_premiums",
+      "target_type": "AMOUNT",
+      "entity": "person"
+    },
+    "cms_nhe.medicaid_title_xix_expenditures": {
+      "variable": "medicaid_benefits",
+      "target_type": "AMOUNT",
+      "entity": "person"
+    },
+    "federal_reserve.z1.households_nonprofits_net_worth": {
+      "variable": "net_worth_amount",
+      "target_type": "AMOUNT",
+      "entity": "household"
+    },
+    "hhs_acf_liheap.households_served_by_state_programs": {
+      "variable": "liheap_household_count",
+      "target_type": "COUNT",
+      "entity": "household"
+    },
+    "hhs_acf_tanf.average_monthly_tanf_adult_recipients": {
+      "variable": "tanf_adult_recipient_count",
+      "target_type": "SKIP",
+      "entity": "tax_unit"
+    },
+    "hhs_acf_tanf.average_monthly_tanf_child_recipients": {
+      "variable": "tanf_child_recipient_count",
+      "target_type": "SKIP",
+      "entity": "tax_unit"
+    },
+    "hhs_acf_tanf.average_monthly_tanf_no_parent_families": {
+      "variable": "tanf_no_parent_family_count",
+      "target_type": "SKIP",
+      "entity": "tax_unit"
+    },
+    "hhs_acf_tanf.average_monthly_tanf_one_parent_families": {
+      "variable": "tanf_one_parent_family_count",
+      "target_type": "SKIP",
+      "entity": "tax_unit"
+    },
+    "hhs_acf_tanf.average_monthly_tanf_total_families": {
+      "variable": "tanf_family_count",
+      "target_type": "COUNT",
+      "entity": "spm_unit"
+    },
+    "hhs_acf_tanf.average_monthly_tanf_total_recipients": {
+      "variable": "tanf_recipient_count",
+      "target_type": "COUNT",
+      "entity": "person"
+    },
+    "hhs_acf_tanf.average_monthly_tanf_two_parent_families": {
+      "variable": "tanf_two_parent_family_count",
+      "target_type": "SKIP",
+      "entity": "tax_unit"
+    },
+    "hhs_acf_tanf.cash_assistance_expenditures": {
+      "variable": "tanf_cash_assistance",
+      "target_type": "AMOUNT",
+      "entity": "spm_unit"
+    },
+    "irs_soi.additional_child_tax_credit": {
+      "variable": "actc_amount",
+      "target_type": "AMOUNT",
+      "entity": "tax_unit"
+    },
+    "irs_soi.adjusted_gross_income": {
+      "variable": "adjusted_gross_income",
+      "target_type": "AMOUNT",
+      "entity": "tax_unit"
+    },
+    "irs_soi.alimony_paid": {
+      "variable": "alimony_paid_amount",
+      "target_type": "AMOUNT",
+      "entity": "tax_unit"
+    },
+    "irs_soi.alimony_received": {
+      "variable": "alimony_received_amount",
+      "target_type": "AMOUNT",
+      "entity": "tax_unit"
+    },
+    "irs_soi.capital_asset_net_gain_less_loss": {
+      "variable": "capital_asset_net_gain_less_loss",
+      "target_type": "AMOUNT",
+      "entity": "tax_unit"
+    },
+    "irs_soi.child_tax_credit": {
+      "variable": "ctc_amount",
+      "target_type": "AMOUNT",
+      "entity": "tax_unit"
+    },
+    "irs_soi.contributions_deduction": {
+      "variable": "charitable_amount",
+      "target_type": "AMOUNT",
+      "entity": "tax_unit"
+    },
+    "irs_soi.deductible_points": {
+      "variable": "deductible_points_amount",
+      "target_type": "AMOUNT",
+      "entity": "tax_unit"
+    },
+    "irs_soi.earned_income_credit": {
+      "variable": "eitc_amount",
+      "target_type": "AMOUNT",
+      "entity": "tax_unit"
+    },
+    "irs_soi.eic_earned_income": {
+      "variable": "eic_earned_income",
+      "target_type": "AMOUNT",
+      "entity": "tax_unit"
+    },
+    "irs_soi.eic_refundable_portion": {
+      "variable": "eitc_refundable_portion",
+      "target_type": "AMOUNT",
+      "entity": "tax_unit"
+    },
+    "irs_soi.form_w2_401k_elective_deferrals": {
+      "variable": "traditional_401k_contributions",
+      "target_type": "AMOUNT",
+      "entity": "person"
+    },
+    "irs_soi.form_w2_designated_roth_401k_contributions": {
+      "variable": "roth_401k_contributions",
+      "target_type": "AMOUNT",
+      "entity": "person"
+    },
+    "irs_soi.form_w2_social_security_tip_income": {
+      "variable": "tip_income",
+      "target_type": "AMOUNT",
+      "entity": "person"
+    },
+    "irs_soi.form_w2_social_security_tip_returns": {
+      "variable": "tip_income_returns",
+      "target_type": "SKIP",
+      "entity": "tax_unit"
+    },
+    "irs_soi.form_w2_social_security_tip_taxpayers": {
+      "variable": "tip_income_taxpayers",
+      "target_type": "SKIP",
+      "entity": "tax_unit"
+    },
+    "irs_soi.home_mortgage_interest_paid_to_financial_institutions": {
+      "variable": "mortgage_interest_paid_amount",
+      "target_type": "AMOUNT",
+      "entity": "tax_unit"
+    },
+    "irs_soi.home_mortgage_interest_paid_to_individuals": {
+      "variable": "home_mortgage_personal_seller_amount",
+      "target_type": "AMOUNT",
+      "entity": "tax_unit"
+    },
+    "irs_soi.income_tax_after_credits": {
+      "variable": "income_tax_liability",
+      "target_type": "AMOUNT",
+      "entity": "tax_unit"
+    },
+    "irs_soi.income_tax_before_credits": {
+      "variable": "income_tax_before_credits_amount",
+      "target_type": "AMOUNT",
+      "entity": "tax_unit"
+    },
+    "irs_soi.individual_income_tax_returns": {
+      "variable": "tax_unit_count",
+      "target_type": "COUNT",
+      "entity": "tax_unit"
+    },
+    "irs_soi.individual_income_tax_returns_excluding_dependents": {
+      "variable": "tax_unit_count",
+      "target_type": "COUNT",
+      "entity": "tax_unit"
+    },
+    "irs_soi.interest_paid_deduction": {
+      "variable": "interest_paid_deduction_amount",
+      "target_type": "AMOUNT",
+      "entity": "tax_unit"
+    },
+    "irs_soi.investment_interest_expense_deduction": {
+      "variable": "investment_interest_paid_amount",
+      "target_type": "AMOUNT",
+      "entity": "person"
+    },
+    "irs_soi.limited_state_local_taxes": {
+      "variable": "limited_state_local_taxes_amount",
+      "target_type": "AMOUNT",
+      "entity": "tax_unit"
+    },
+    "irs_soi.medical_dental_expense_deduction": {
+      "variable": "medical_dental_expense_amount",
+      "target_type": "AMOUNT",
+      "entity": "tax_unit"
+    },
+    "irs_soi.ordinary_dividends": {
+      "variable": "ordinary_dividends_amount",
+      "target_type": "AMOUNT",
+      "entity": "person"
+    },
+    "irs_soi.partnership_scorp_income": {
+      "variable": "partnership_scorp_income_amount",
+      "target_type": "AMOUNT",
+      "entity": "tax_unit"
+    },
+    "irs_soi.payments_to_keogh_plan": {
+      "variable": "self_employed_pension_contribution_ald",
+      "target_type": "AMOUNT",
+      "entity": "tax_unit"
+    },
+    "irs_soi.premium_tax_credit": {
+      "variable": "aca_aptc_amount",
+      "target_type": "AMOUNT",
+      "entity": "tax_unit"
+    },
+    "irs_soi.qualified_business_income_deduction": {
+      "variable": "qbi_amount",
+      "target_type": "AMOUNT",
+      "entity": "tax_unit"
+    },
+    "irs_soi.qualified_dividends": {
+      "variable": "qualified_dividends_amount",
+      "target_type": "AMOUNT",
+      "entity": "person"
+    },
+    "irs_soi.real_estate_taxes": {
+      "variable": "real_estate_taxes_amount",
+      "target_type": "AMOUNT",
+      "entity": "tax_unit"
+    },
+    "irs_soi.rental_royalty_income": {
+      "variable": "rental_royalty_income_amount",
+      "target_type": "AMOUNT",
+      "entity": "person"
+    },
+    "irs_soi.returns_with_additional_child_tax_credit": {
+      "variable": "actc_claims",
+      "target_type": "COUNT",
+      "entity": "tax_unit"
+    },
+    "irs_soi.returns_with_alimony_paid": {
+      "variable": "alimony_paid_returns",
+      "target_type": "COUNT",
+      "entity": "tax_unit"
+    },
+    "irs_soi.returns_with_alimony_received": {
+      "variable": "alimony_received_returns",
+      "target_type": "COUNT",
+      "entity": "tax_unit"
+    },
+    "irs_soi.returns_with_capital_asset_net_gain_less_loss": {
+      "variable": "capital_asset_net_gain_less_loss_returns",
+      "target_type": "SKIP",
+      "entity": "tax_unit"
+    },
+    "irs_soi.returns_with_child_tax_credit": {
+      "variable": "ctc_claims",
+      "target_type": "COUNT",
+      "entity": "tax_unit"
+    },
+    "irs_soi.returns_with_contributions_deduction": {
+      "variable": "charitable_returns",
+      "target_type": "COUNT",
+      "entity": "tax_unit"
+    },
+    "irs_soi.returns_with_deductible_points": {
+      "variable": "deductible_points_returns",
+      "target_type": "COUNT",
+      "entity": "tax_unit"
+    },
+    "irs_soi.returns_with_earned_income_credit": {
+      "variable": "eitc_claims",
+      "target_type": "COUNT",
+      "entity": "tax_unit"
+    },
+    "irs_soi.returns_with_eic_earned_income": {
+      "variable": "eic_earned_income_returns",
+      "target_type": "SKIP",
+      "entity": "tax_unit"
+    },
+    "irs_soi.returns_with_eic_refundable_portion": {
+      "variable": "eitc_refundable_portion_returns",
+      "target_type": "SKIP",
+      "entity": "tax_unit"
+    },
+    "irs_soi.returns_with_home_mortgage_interest_paid_to_financial_institutions": {
+      "variable": "mortgage_interest_paid_returns",
+      "target_type": "COUNT",
+      "entity": "tax_unit"
+    },
+    "irs_soi.returns_with_home_mortgage_interest_paid_to_individuals": {
+      "variable": "home_mortgage_personal_seller_returns",
+      "target_type": "COUNT",
+      "entity": "tax_unit"
+    },
+    "irs_soi.returns_with_income_tax_after_credits": {
+      "variable": "income_tax_liability_returns",
+      "target_type": "COUNT",
+      "entity": "tax_unit"
+    },
+    "irs_soi.returns_with_income_tax_before_credits": {
+      "variable": "income_tax_before_credits_returns",
+      "target_type": "COUNT",
+      "entity": "tax_unit"
+    },
+    "irs_soi.returns_with_interest_paid_deduction": {
+      "variable": "interest_paid_deduction_returns",
+      "target_type": "COUNT",
+      "entity": "tax_unit"
+    },
+    "irs_soi.returns_with_investment_interest_expense_deduction": {
+      "variable": "investment_interest_paid_returns",
+      "target_type": "COUNT",
+      "entity": "tax_unit"
+    },
+    "irs_soi.returns_with_itemized_deductions": {
+      "variable": "itemized_deductions_returns",
+      "target_type": "SKIP",
+      "entity": "tax_unit"
+    },
+    "irs_soi.returns_with_limited_state_local_taxes": {
+      "variable": "limited_state_local_taxes_returns",
+      "target_type": "COUNT",
+      "entity": "tax_unit"
+    },
+    "irs_soi.returns_with_medical_dental_expense_deduction": {
+      "variable": "medical_claims",
+      "target_type": "COUNT",
+      "entity": "tax_unit"
+    },
+    "irs_soi.returns_with_ordinary_dividends": {
+      "variable": "ordinary_dividends_returns",
+      "target_type": "COUNT",
+      "entity": "tax_unit"
+    },
+    "irs_soi.returns_with_partnership_scorp_income": {
+      "variable": "partnership_scorp_income_returns",
+      "target_type": "COUNT",
+      "entity": "tax_unit"
+    },
+    "irs_soi.returns_with_premium_tax_credit": {
+      "variable": "aca_ptc_returns",
+      "target_type": "COUNT",
+      "entity": "tax_unit"
+    },
+    "irs_soi.returns_with_qualified_business_income_deduction": {
+      "variable": "qbi_claims",
+      "target_type": "COUNT",
+      "entity": "tax_unit"
+    },
+    "irs_soi.returns_with_qualified_dividends": {
+      "variable": "qualified_dividends_returns",
+      "target_type": "COUNT",
+      "entity": "tax_unit"
+    },
+    "irs_soi.returns_with_real_estate_taxes": {
+      "variable": "real_estate_taxes_claims",
+      "target_type": "COUNT",
+      "entity": "tax_unit"
+    },
+    "irs_soi.returns_with_rental_royalty_income": {
+      "variable": "rental_royalty_income_returns",
+      "target_type": "COUNT",
+      "entity": "tax_unit"
+    },
+    "irs_soi.returns_with_schedule_c_income": {
+      "variable": "schedule_c_income_returns",
+      "target_type": "COUNT",
+      "entity": "tax_unit"
+    },
+    "irs_soi.returns_with_state_local_income_or_sales_taxes": {
+      "variable": "state_local_income_or_sales_tax_returns",
+      "target_type": "COUNT",
+      "entity": "tax_unit"
+    },
+    "irs_soi.returns_with_tax_credits": {
+      "variable": "tax_credits_returns",
+      "target_type": "SKIP",
+      "entity": "tax_unit"
+    },
+    "irs_soi.returns_with_tax_exempt_interest": {
+      "variable": "tax_exempt_interest_returns",
+      "target_type": "COUNT",
+      "entity": "tax_unit"
+    },
+    "irs_soi.returns_with_taxable_income": {
+      "variable": "taxable_income_returns",
+      "target_type": "SKIP",
+      "entity": "tax_unit"
+    },
+    "irs_soi.returns_with_taxable_interest": {
+      "variable": "taxable_interest_returns",
+      "target_type": "COUNT",
+      "entity": "tax_unit"
+    },
+    "irs_soi.returns_with_taxable_ira_distributions": {
+      "variable": "taxable_ira_distributions_returns",
+      "target_type": "COUNT",
+      "entity": "tax_unit"
+    },
+    "irs_soi.returns_with_taxable_net_capital_gains": {
+      "variable": "net_capital_gains_returns",
+      "target_type": "COUNT",
+      "entity": "tax_unit"
+    },
+    "irs_soi.returns_with_taxable_pension_income": {
+      "variable": "taxable_pension_income_returns",
+      "target_type": "COUNT",
+      "entity": "tax_unit"
+    },
+    "irs_soi.returns_with_taxable_social_security_benefits": {
+      "variable": "taxable_social_security_returns",
+      "target_type": "COUNT",
+      "entity": "tax_unit"
+    },
+    "irs_soi.returns_with_total_earned_income_credit": {
+      "variable": "eitc_claims",
+      "target_type": "COUNT",
+      "entity": "tax_unit"
+    },
+    "irs_soi.returns_with_total_income": {
+      "variable": "total_income_returns",
+      "target_type": "SKIP",
+      "entity": "tax_unit"
+    },
+    "irs_soi.returns_with_total_income_tax": {
+      "variable": "income_tax_liability_returns",
+      "target_type": "COUNT",
+      "entity": "tax_unit"
+    },
+    "irs_soi.returns_with_total_wages": {
+      "variable": "wages_salaries_returns",
+      "target_type": "COUNT",
+      "entity": "tax_unit"
+    },
+    "irs_soi.returns_with_unemployment_compensation": {
+      "variable": "unemployment_compensation_returns",
+      "target_type": "COUNT",
+      "entity": "tax_unit"
+    },
+    "irs_soi.roth_ira_contributions": {
+      "variable": "roth_ira_contributions",
+      "target_type": "AMOUNT",
+      "entity": "person"
+    },
+    "irs_soi.roth_ira_contributors": {
+      "variable": "roth_ira_contributors",
+      "target_type": "SKIP",
+      "entity": "tax_unit"
+    },
+    "irs_soi.schedule_c_income": {
+      "variable": "schedule_c_income_amount",
+      "target_type": "AMOUNT",
+      "entity": "person"
+    },
+    "irs_soi.standard_deduction": {
+      "variable": "standard_deduction",
+      "target_type": "AMOUNT",
+      "entity": "tax_unit"
+    },
+    "irs_soi.state_local_income_or_sales_taxes": {
+      "variable": "state_local_income_or_sales_tax_amount",
+      "target_type": "AMOUNT",
+      "entity": "tax_unit"
+    },
+    "irs_soi.tax_credits": {
+      "variable": "tax_credits",
+      "target_type": "AMOUNT",
+      "entity": "tax_unit"
+    },
+    "irs_soi.tax_exempt_interest": {
+      "variable": "tax_exempt_interest_amount",
+      "target_type": "AMOUNT",
+      "entity": "person"
+    },
+    "irs_soi.tax_filer_individuals": {
+      "variable": "tax_filer_individual_count",
+      "target_type": "COUNT",
+      "entity": "person"
+    },
+    "irs_soi.taxable_income": {
+      "variable": "taxable_income",
+      "target_type": "AMOUNT",
+      "entity": "tax_unit"
+    },
+    "irs_soi.taxable_interest": {
+      "variable": "taxable_interest_amount",
+      "target_type": "AMOUNT",
+      "entity": "person"
+    },
+    "irs_soi.taxable_ira_distributions": {
+      "variable": "taxable_ira_distributions_amount",
+      "target_type": "AMOUNT",
+      "entity": "person"
+    },
+    "irs_soi.taxable_net_capital_gains": {
+      "variable": "net_capital_gains_amount",
+      "target_type": "AMOUNT",
+      "entity": "tax_unit"
+    },
+    "irs_soi.taxable_pension_income": {
+      "variable": "taxable_pension_income_amount",
+      "target_type": "AMOUNT",
+      "entity": "person"
+    },
+    "irs_soi.taxable_social_security_benefits": {
+      "variable": "taxable_social_security_amount",
+      "target_type": "AMOUNT",
+      "entity": "person"
+    },
+    "irs_soi.total_earned_income_credit": {
+      "variable": "eitc_amount",
+      "target_type": "AMOUNT",
+      "entity": "tax_unit"
+    },
+    "irs_soi.total_income": {
+      "variable": "total_income",
+      "target_type": "AMOUNT",
+      "entity": "tax_unit"
+    },
+    "irs_soi.total_income_tax": {
+      "variable": "income_tax_liability",
+      "target_type": "AMOUNT",
+      "entity": "tax_unit"
+    },
+    "irs_soi.total_itemized_deductions": {
+      "variable": "itemized_deductions",
+      "target_type": "AMOUNT",
+      "entity": "tax_unit"
+    },
+    "irs_soi.total_wages": {
+      "variable": "wages_salaries_amount",
+      "target_type": "AMOUNT",
+      "entity": "person"
+    },
+    "irs_soi.traditional_ira_contributions": {
+      "variable": "traditional_ira_contributions",
+      "target_type": "AMOUNT",
+      "entity": "person"
+    },
+    "irs_soi.traditional_ira_contributors": {
+      "variable": "traditional_ira_contributors",
+      "target_type": "SKIP",
+      "entity": "tax_unit"
+    },
+    "irs_soi.unemployment_compensation": {
+      "variable": "unemployment_compensation_amount",
+      "target_type": "AMOUNT",
+      "entity": "person"
+    },
+    "ssa.ssi_payment_amount": {
+      "variable": "ssi_total_payments",
+      "target_type": "AMOUNT",
+      "entity": "person"
+    },
+    "ssa.ssi_recipient_count": {
+      "variable": "ssi_recipients",
+      "target_type": "COUNT",
+      "entity": "person"
+    },
+    "us:statutes/26/62#adjusted_gross_income": {
+      "variable": "adjusted_gross_income",
+      "target_type": "AMOUNT",
+      "entity": "tax_unit"
+    },
+    "us:statutes/26/62#input.wages": {
+      "variable": "wages_salaries_amount",
+      "target_type": "AMOUNT",
+      "entity": "person"
+    },
+    "usda_snap.average_monthly_benefit_per_person": {
+      "variable": "snap_average_monthly_benefit_per_person",
+      "target_type": "RATE",
+      "entity": "tax_unit"
+    },
+    "usda_snap.average_monthly_households": {
+      "variable": "snap_household_count",
+      "target_type": "COUNT",
+      "entity": "household"
+    },
+    "usda_snap.average_monthly_persons": {
+      "variable": "snap_participant_count",
+      "target_type": "COUNT",
+      "entity": "person"
+    },
+    "usda_snap.total_benefits": {
+      "variable": "snap_benefits",
+      "target_type": "AMOUNT",
+      "entity": "household"
     }
   },
   "entities": {
-    "adjusted_gross_income": "tax_unit",
-    "tax_unit_count": "tax_unit",
-    "wages_salaries_amount": "person",
-    "wages_salaries_returns": "tax_unit",
-    "aca_marketplace_plan_selections": "person",
+    "aca_aptc_amount": "tax_unit",
     "aca_aptc_consumers": "person",
-    "aca_average_monthly_aptc": "person"
+    "aca_average_monthly_aptc": "person",
+    "aca_marketplace_enrollment": "person",
+    "aca_marketplace_plan_selections": "person",
+    "aca_ptc_returns": "tax_unit",
+    "actc_amount": "tax_unit",
+    "actc_claims": "tax_unit",
+    "adjusted_gross_income": "tax_unit",
+    "adult_medicaid_enrollment": "tax_unit",
+    "alimony_paid_amount": "tax_unit",
+    "alimony_paid_returns": "tax_unit",
+    "alimony_received_amount": "tax_unit",
+    "alimony_received_returns": "tax_unit",
+    "bea_regional_wages_salaries_place_of_work_amount": "tax_unit",
+    "capital_asset_net_gain_less_loss": "tax_unit",
+    "capital_asset_net_gain_less_loss_returns": "tax_unit",
+    "charitable_amount": "tax_unit",
+    "charitable_deduction": "tax_unit",
+    "charitable_returns": "tax_unit",
+    "chip_total_enrollment": "tax_unit",
+    "ctc_amount": "tax_unit",
+    "ctc_claims": "tax_unit",
+    "deductible_mortgage_interest": "tax_unit",
+    "deductible_points_amount": "tax_unit",
+    "deductible_points_returns": "tax_unit",
+    "disposable_personal_income": "tax_unit",
+    "dividend_income": "person",
+    "eic_earned_income": "tax_unit",
+    "eic_earned_income_returns": "tax_unit",
+    "eitc": "tax_unit",
+    "eitc_amount": "tax_unit",
+    "eitc_claims": "tax_unit",
+    "eitc_refundable_portion": "tax_unit",
+    "eitc_refundable_portion_returns": "tax_unit",
+    "employer_government_social_insurance_contributions": "tax_unit",
+    "employer_pension_and_insurance_contributions": "tax_unit",
+    "employment_income": "person",
+    "employment_income_before_lsr_amount": "tax_unit",
+    "farm_proprietors_income": "tax_unit",
+    "government_social_benefits_to_persons": "tax_unit",
+    "home_mortgage_personal_seller_amount": "tax_unit",
+    "home_mortgage_personal_seller_returns": "tax_unit",
+    "household_count": "household",
+    "income_tax": "tax_unit",
+    "income_tax_before_credits": "tax_unit",
+    "income_tax_before_credits_amount": "tax_unit",
+    "income_tax_before_credits_returns": "tax_unit",
+    "income_tax_liability": "tax_unit",
+    "income_tax_liability_returns": "tax_unit",
+    "income_tax_positive": "tax_unit",
+    "interest_deduction": "tax_unit",
+    "interest_paid_deduction_amount": "tax_unit",
+    "interest_paid_deduction_returns": "tax_unit",
+    "investment_interest_expense": "person",
+    "investment_interest_paid_amount": "person",
+    "investment_interest_paid_returns": "tax_unit",
+    "itemized_deductions": "tax_unit",
+    "itemized_deductions_returns": "tax_unit",
+    "liheap_household_count": "household",
+    "limited_state_local_taxes_amount": "tax_unit",
+    "limited_state_local_taxes_returns": "tax_unit",
+    "long_term_capital_gains": "person",
+    "long_term_capital_gains_amount": "person",
+    "medicaid": "person",
+    "medicaid_benefits": "person",
+    "medicaid_chip_child_enrollment": "tax_unit",
+    "medicaid_chip_total_enrollment": "tax_unit",
+    "medicaid_enrollment": "person",
+    "medicaid_total_enrollment": "person",
+    "medical_amount": "tax_unit",
+    "medical_claims": "tax_unit",
+    "medical_dental_expense_amount": "tax_unit",
+    "medical_expense_deduction": "tax_unit",
+    "medicare_benefits": "tax_unit",
+    "medicare_part_b_premiums": "person",
+    "mortgage_interest_amount": "tax_unit",
+    "mortgage_interest_paid_amount": "tax_unit",
+    "mortgage_interest_paid_returns": "tax_unit",
+    "net_capital_gains_amount": "tax_unit",
+    "net_capital_gains_returns": "tax_unit",
+    "net_worth": "household",
+    "net_worth_amount": "household",
+    "non_refundable_ctc": "tax_unit",
+    "nonfarm_proprietors_income": "tax_unit",
+    "ordinary_dividends_amount": "person",
+    "ordinary_dividends_returns": "tax_unit",
+    "other_current_transfer_receipts_from_business_net": "tax_unit",
+    "other_government_social_benefits_to_persons": "tax_unit",
+    "partnership_scorp_income_amount": "tax_unit",
+    "partnership_scorp_income_returns": "tax_unit",
+    "personal_current_taxes": "tax_unit",
+    "personal_current_transfer_receipts": "tax_unit",
+    "personal_dividend_income_amount": "person",
+    "personal_income": "tax_unit",
+    "personal_interest_income_amount": "tax_unit",
+    "personal_outlays": "tax_unit",
+    "personal_saving": "tax_unit",
+    "personal_saving_rate": "tax_unit",
+    "population": "person",
+    "proprietors_income_amount": "person",
+    "qbi_amount": "tax_unit",
+    "qbi_claims": "tax_unit",
+    "qualified_business_income_deduction": "tax_unit",
+    "qualified_dividend_income": "person",
+    "qualified_dividends_amount": "person",
+    "qualified_dividends_returns": "tax_unit",
+    "real_estate_taxes": "tax_unit",
+    "real_estate_taxes_amount": "tax_unit",
+    "real_estate_taxes_claims": "tax_unit",
+    "refundable_ctc": "tax_unit",
+    "regional_contributions_for_government_social_insurance": "tax_unit",
+    "regional_dividends_interest_and_rent": "tax_unit",
+    "regional_personal_current_transfer_receipts": "tax_unit",
+    "regional_personal_income": "tax_unit",
+    "regional_residence_adjustment": "tax_unit",
+    "regional_supplements_to_wages_and_salaries": "tax_unit",
+    "rental_income": "person",
+    "rental_income_amount": "person",
+    "rental_royalty_income_amount": "person",
+    "rental_royalty_income_returns": "tax_unit",
+    "roth_401k_contributions": "person",
+    "roth_ira_contributions": "person",
+    "roth_ira_contributors": "tax_unit",
+    "salt": "tax_unit",
+    "salt_amount": "tax_unit",
+    "salt_deduction": "tax_unit",
+    "salt_refund_income": "person",
+    "schedule_c_income_amount": "person",
+    "schedule_c_income_returns": "tax_unit",
+    "self_employed_pension_contribution_ald": "tax_unit",
+    "self_employment_income": "person",
+    "short_term_capital_gains": "person",
+    "short_term_capital_gains_amount": "person",
+    "snap": "household",
+    "snap_average_monthly_benefit_per_person": "tax_unit",
+    "snap_benefits": "household",
+    "snap_household_count": "household",
+    "snap_participant_count": "person",
+    "social_security": "person",
+    "social_security_benefits": "person",
+    "social_security_dependents": "person",
+    "social_security_dependents_benefits": "person",
+    "social_security_disability": "person",
+    "social_security_disability_benefits": "person",
+    "social_security_retirement": "person",
+    "social_security_retirement_benefits": "person",
+    "social_security_survivors": "person",
+    "social_security_survivors_benefits": "person",
+    "ssi": "person",
+    "ssi_payments": "person",
+    "ssi_recipients": "person",
+    "ssi_total_payments": "person",
+    "standard_deduction": "tax_unit",
+    "state_income_tax": "tax_unit",
+    "state_individual_income_tax_collections": "tax_unit",
+    "state_local_income_or_sales_tax_amount": "tax_unit",
+    "state_local_income_or_sales_tax_returns": "tax_unit",
+    "state_local_refunds_amount": "person",
+    "supplements_to_wages_and_salaries": "tax_unit",
+    "tanf": "spm_unit",
+    "tanf_adult_recipient_count": "tax_unit",
+    "tanf_cash_assistance": "spm_unit",
+    "tanf_child_recipient_count": "tax_unit",
+    "tanf_family_count": "spm_unit",
+    "tanf_no_parent_family_count": "tax_unit",
+    "tanf_one_parent_family_count": "tax_unit",
+    "tanf_recipient_count": "person",
+    "tanf_two_parent_family_count": "tax_unit",
+    "tax_credits": "tax_unit",
+    "tax_credits_returns": "tax_unit",
+    "tax_exempt_interest_amount": "person",
+    "tax_exempt_interest_income": "person",
+    "tax_exempt_interest_returns": "tax_unit",
+    "tax_filer_individual_count": "person",
+    "tax_unit_count": "tax_unit",
+    "tax_unit_partnership_s_corp_income": "tax_unit",
+    "taxable_income": "tax_unit",
+    "taxable_income_returns": "tax_unit",
+    "taxable_interest_amount": "person",
+    "taxable_interest_income": "person",
+    "taxable_interest_returns": "tax_unit",
+    "taxable_ira_distributions": "person",
+    "taxable_ira_distributions_amount": "person",
+    "taxable_ira_distributions_returns": "tax_unit",
+    "taxable_pension_income": "person",
+    "taxable_pension_income_amount": "person",
+    "taxable_pension_income_returns": "tax_unit",
+    "taxable_social_security": "person",
+    "taxable_social_security_amount": "person",
+    "taxable_social_security_returns": "tax_unit",
+    "tip_income": "person",
+    "tip_income_returns": "tax_unit",
+    "tip_income_taxpayers": "tax_unit",
+    "total_income": "tax_unit",
+    "total_income_returns": "tax_unit",
+    "traditional_401k_contributions": "person",
+    "traditional_ira_contributions": "person",
+    "traditional_ira_contributors": "tax_unit",
+    "unemployment_compensation": "person",
+    "unemployment_compensation_amount": "person",
+    "unemployment_compensation_returns": "tax_unit",
+    "unemployment_insurance_benefits": "person",
+    "veterans_benefits": "tax_unit",
+    "wages_salaries_amount": "person",
+    "wages_salaries_returns": "tax_unit"
   },
   "amount_measures": {
+    "aca_aptc_amount": "aca_ptc",
+    "actc_amount": "refundable_ctc",
     "adjusted_gross_income": "adjusted_gross_income",
+    "alimony_paid_amount": "alimony_expense",
+    "alimony_received_amount": "alimony_income",
+    "charitable_amount": "charitable_deduction",
+    "ctc_amount": "non_refundable_ctc",
+    "deductible_points_amount": "deductible_mortgage_interest",
+    "eitc_amount": "eitc",
+    "employment_income_before_lsr_amount": "employment_income_before_lsr",
+    "home_mortgage_personal_seller_amount": "deductible_mortgage_interest",
+    "income_tax_before_credits_amount": "income_tax_before_credits",
+    "income_tax_liability": "income_tax",
+    "interest_paid_deduction_amount": "interest_deduction",
+    "investment_interest_paid_amount": "investment_interest_expense",
+    "limited_state_local_taxes_amount": "salt_deduction",
+    "long_term_capital_gains_amount": "long_term_capital_gains",
+    "medicaid_benefits": "medicaid",
+    "medical_amount": "medical_expense_deduction",
+    "medical_dental_expense_amount": "medical_expense_deduction",
+    "medicare_part_b_premiums": "medicare_part_b_premiums",
+    "mortgage_interest_amount": "deductible_mortgage_interest",
+    "mortgage_interest_paid_amount": "deductible_mortgage_interest",
+    "net_capital_gains_amount": "net_capital_gains",
+    "net_worth": "net_worth",
+    "net_worth_amount": "net_worth",
+    "ordinary_dividends_amount": "dividend_income",
+    "partnership_scorp_income_amount": "tax_unit_partnership_s_corp_income",
+    "personal_dividend_income_amount": "dividend_income",
+    "qbi_amount": "qualified_business_income_deduction",
+    "qualified_dividends_amount": "qualified_dividend_income",
+    "real_estate_taxes_amount": "real_estate_taxes",
+    "rental_income_amount": "rental_income",
+    "rental_royalty_income_amount": "rental_income",
+    "roth_ira_contributions": "roth_ira_contributions",
+    "salt_amount": "salt",
+    "schedule_c_income_amount": "self_employment_income",
+    "short_term_capital_gains_amount": "short_term_capital_gains",
+    "snap_benefits": "snap",
+    "social_security_benefits": "social_security",
+    "social_security_dependents_benefits": "social_security_dependents",
+    "social_security_disability_benefits": "social_security_disability",
+    "social_security_retirement_benefits": "social_security_retirement",
+    "social_security_survivors_benefits": "social_security_survivors",
+    "ssi_payments": "ssi",
+    "ssi_total_payments": "ssi",
+    "state_individual_income_tax_collections": "state_income_tax",
+    "state_local_income_or_sales_tax_amount": "state_and_local_sales_or_income_tax",
+    "state_local_refunds_amount": "salt_refund_income",
+    "tanf_cash_assistance": "tanf",
+    "tax_exempt_interest_amount": "tax_exempt_interest_income",
+    "taxable_interest_amount": "taxable_interest_income",
+    "taxable_ira_distributions_amount": "taxable_ira_distributions",
+    "taxable_pension_income_amount": "taxable_pension_income",
+    "taxable_social_security_amount": "taxable_social_security",
+    "tip_income": "tip_income",
+    "traditional_ira_contributions": "traditional_ira_contributions",
+    "unemployment_compensation_amount": "unemployment_compensation",
+    "unemployment_insurance_benefits": "unemployment_compensation",
     "wages_salaries_amount": "employment_income"
   },
   "count_aliases": {
+    "aca_aptc_consumers": {
+      "count_measure": "person_count",
+      "entity": "person",
+      "positive_filter_measure": "aca_ptc"
+    },
+    "aca_marketplace_enrollment": {
+      "count_measure": "person_count",
+      "entity": "person",
+      "positive_filter_measure": "aca_ptc"
+    },
+    "aca_marketplace_plan_selections": {
+      "count_measure": "person_count",
+      "entity": "person"
+    },
+    "aca_ptc_returns": {
+      "count_measure": "tax_unit_count",
+      "entity": "tax_unit",
+      "positive_filter_measure": "aca_ptc"
+    },
+    "alimony_paid_returns": {
+      "count_measure": "tax_unit_count",
+      "entity": "tax_unit",
+      "positive_filter_measure": "alimony_expense"
+    },
+    "alimony_received_returns": {
+      "count_measure": "tax_unit_count",
+      "entity": "tax_unit",
+      "positive_filter_measure": "alimony_income"
+    },
+    "household_count": {
+      "count_measure": "household_count",
+      "entity": "household"
+    },
+    "income_tax_before_credits_returns": {
+      "count_measure": "tax_unit_count",
+      "entity": "tax_unit",
+      "positive_filter_measure": "income_tax_before_credits"
+    },
+    "income_tax_liability_returns": {
+      "count_measure": "tax_unit_count",
+      "entity": "tax_unit",
+      "positive_filter_measure": "income_tax"
+    },
+    "liheap_household_count": {
+      "count_measure": "household_count",
+      "entity": "household",
+      "positive_filter_measure": "spm_unit_energy_subsidy_reported"
+    },
+    "medicaid_enrollment": {
+      "count_measure": "person_count",
+      "entity": "person",
+      "positive_filter_measure": "medicaid_enrolled"
+    },
+    "medicaid_total_enrollment": {
+      "count_measure": "person_count",
+      "entity": "person",
+      "positive_filter_measure": "medicaid_enrolled"
+    },
+    "population": {
+      "count_measure": "person_count",
+      "entity": "person"
+    },
+    "snap_household_count": {
+      "count_measure": "household_count",
+      "entity": "household",
+      "positive_filter_measure": "snap"
+    },
+    "snap_participant_count": {
+      "count_measure": "person_count",
+      "entity": "person",
+      "positive_filter_measure": "snap"
+    },
+    "ssi_recipients": {
+      "count_measure": "person_count",
+      "entity": "person",
+      "positive_filter_measure": "ssi"
+    },
+    "tanf_family_count": {
+      "count_measure": "spm_unit_count",
+      "entity": "spm_unit",
+      "positive_filter_measure": "tanf"
+    },
+    "tanf_recipient_count": {
+      "count_measure": "person_count",
+      "entity": "person",
+      "positive_filter_measure": "tanf"
+    },
+    "tax_filer_individual_count": {
+      "count_measure": "person_count",
+      "entity": "person"
+    },
     "tax_unit_count": {
       "count_measure": "tax_unit_count",
       "entity": "tax_unit"
@@ -82,15 +1236,6 @@
       "count_measure": "tax_unit_count",
       "entity": "tax_unit",
       "positive_filter_measure": "employment_income"
-    },
-    "aca_marketplace_plan_selections": {
-      "count_measure": "person_count",
-      "entity": "person"
-    },
-    "aca_aptc_consumers": {
-      "count_measure": "person_count",
-      "entity": "person",
-      "positive_filter_measure": "aca_ptc"
     }
   },
   "count_measures": {
@@ -109,14 +1254,62 @@
       "amount_suffix": "_amount"
     }
   ],
+  "positive_amount_filters": [
+    "net_capital_gains"
+  ],
   "constraints": {
     "aliases": {
-      "us:statutes/26/62#adjusted_gross_income": "adjusted_gross_income"
+      "age": "age",
+      "eitc_qualifying_children": "eitc_child_count",
+      "irs_soi.adjusted_gross_income": "adjusted_gross_income",
+      "is_tax_filer": "tax_unit_is_filer",
+      "snap_receipt_status": "snap",
+      "ssi_category": "ssi_category",
+      "us.tax.earned_income_credit_qualifying_children": "eitc_child_count",
+      "us:statutes/26/62#adjusted_gross_income": "adjusted_gross_income",
+      "us_social_security_and_ssi.program_payment_type": "program_payment_type"
     },
-    "positive_aliases": {}
+    "positive_aliases": {
+      "aca": "aca_ptc",
+      "aca_marketplace": "aca_ptc",
+      "aca_ptc": "aca_ptc",
+      "is_aca_ptc_eligible": "aca_ptc",
+      "is_medicaid": "medicaid_enrolled",
+      "medicaid": "medicaid_enrolled",
+      "medicaid_enrolled": "medicaid_enrolled",
+      "selected_marketplace_plan_benchmark_ratio": "aca_ptc",
+      "snap": "snap",
+      "ssi": "ssi",
+      "total_self_employment_income": "self_employment_income",
+      "used_aca_ptc": "aca_ptc"
+    },
+    "operator_aliases": {
+      "<>": "!=",
+      "=": "==",
+      "eq": "==",
+      "ne": "!=",
+      "neq": "!="
+    },
+    "ignored": [
+      "administering_entity",
+      "amount_basis",
+      "bea_nipa.series_code",
+      "bea_regional.geo_name",
+      "bea_regional.line_code",
+      "bea_regional.table_name",
+      "medicare.financing_component",
+      "medicare.part",
+      "program"
+    ]
   },
   "derivations": {
     "age_soi": true,
-    "soi_source": "IRS_SOI"
+    "soi_source": "IRS_SOI",
+    "component_sum_map": {
+      "salt_amount": [
+        "state_local_income_or_sales_tax_amount",
+        "real_estate_taxes_amount"
+      ]
+    }
   }
 }
