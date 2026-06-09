@@ -6851,7 +6851,7 @@ variables:
       notes: Must remain represented in the spec until the runtime SourceRegistry/transform/export stage implements the final
         rule.
   takes_up_aca_if_eligible:
-    entity: person
+    entity: tax_unit
     role: takeup_input_contract
     temporary: true
     ecps:
@@ -6878,7 +6878,7 @@ variables:
         summary: Temporary declaration until takeup transforms are fully serialized.
       notes: Must be explicit because forbidden *_reported takeup columns are not substitutes for required takeup input leaves.
   takes_up_dc_ptc:
-    entity: person
+    entity: tax_unit
     role: takeup_input_contract
     temporary: true
     ecps:
@@ -7067,7 +7067,7 @@ variables:
         summary: Temporary declaration until takeup transforms are fully serialized.
       notes: Must be explicit because forbidden *_reported takeup columns are not substitutes for required takeup input leaves.
   takes_up_snap_if_eligible:
-    entity: person
+    entity: spm_unit
     role: takeup_input_contract
     temporary: true
     ecps:
@@ -7121,7 +7121,7 @@ variables:
         summary: Temporary declaration until takeup transforms are fully serialized.
       notes: Must be explicit because forbidden *_reported takeup columns are not substitutes for required takeup input leaves.
   takes_up_tanf_if_eligible:
-    entity: person
+    entity: spm_unit
     role: takeup_input_contract
     temporary: true
     ecps:
@@ -8131,7 +8131,7 @@ variables:
         valid default. MP legacy currently has an export default for this required column; verify source passthrough or transform
         before promotion.
   would_claim_wic:
-    entity: spm_unit
+    entity: person
     role: takeup_input_contract
     temporary: true
     ecps:

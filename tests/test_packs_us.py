@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 from microplex.content_package import run_content_package_checks
+from microplex.policyengine_us import TAKEUP_VARIABLE_ENTITY
 from microplex.spec import CalibrationMethod, load_spec
 
 ROOT = Path(__file__).parents[1]
@@ -69,6 +70,13 @@ def test_us_pack_calibration_stays_apg_without_l0_target_records() -> None:
     assert spec.calibrate is not None
     assert spec.calibrate.method is CalibrationMethod.APG
     assert spec.calibrate.target_records is None
+
+
+def test_us_pack_takeup_variables_match_policyengine_us_entities() -> None:
+    spec = load_spec(US_SPEC)
+
+    for variable, entity in TAKEUP_VARIABLE_ENTITY.items():
+        assert spec.variables[variable].entity == entity.value
 
 
 def test_us_pack_frozen_benchmark_disables_l0() -> None:
