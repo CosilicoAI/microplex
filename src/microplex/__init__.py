@@ -92,6 +92,9 @@ _LAZY_EXPORTS = {
     "run_multi_source_benchmark": "microplex.dgp",
     "RegisteredSourceProvider": "microplex.source_registry",
     "SourceRegistry": "microplex.source_registry",
+    "RuntimeVariableOperationHandler": "microplex.runtime_operations",
+    "RuntimeVariableOperationResult": "microplex.runtime_operations",
+    "apply_runtime_variable_operations": "microplex.runtime_operations",
 }
 
 
@@ -107,6 +110,7 @@ def __getattr__(name: str):
         raise AttributeError(f"module 'microplex' has no attribute {name!r}")
     globals()[name] = value
     return value
+
 
 __all__ = [
     # Core synthesis
@@ -188,4 +192,8 @@ __all__ = [
     # Spec source loading
     "RegisteredSourceProvider",
     "SourceRegistry",
+    # Runtime operation handlers
+    "RuntimeVariableOperationHandler",
+    "RuntimeVariableOperationResult",
+    "apply_runtime_variable_operations",
 ]

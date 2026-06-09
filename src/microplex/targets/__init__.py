@@ -113,7 +113,9 @@ from microplex.targets.rollups import (
 )
 from microplex.targets.simulation import (
     MaterializedSimulationTargetCompiler,
+    MaterializingSimulationTargetCompiler,
     SimulationFeatureMaterializer,
+    SimulationModifierHandler,
 )
 from microplex.targets.spec import (
     FilterOperator,
@@ -207,6 +209,8 @@ __all__ = [
     "TargetReweightingConstraint",
     "TargetReweightingDiagnostics",
     "TargetConstraintCompilationResult",
+    "MaterializingSimulationTargetCompiler",
+    "SimulationModifierHandler",
     "compile_entity_table_bundle_target_constraints",
     "compile_sparse_target_constraints",
     "calibrate_sparse_target_weights",

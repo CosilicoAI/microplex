@@ -1,11 +1,10 @@
-"""Simulation-backed target compiler adapters.
+"""Simulation-aware target compilation helpers.
 
-The sparse calibration path can compile ordinary targets directly from entity
-tables. Targets whose measures/filters must first be computed by a tax-benefit
-model declare ``TargetSpec.sim_modifiers`` and route through a
-``SimulationTargetCompiler``. This module provides a generic compiler that
-delegates feature materialization to an injected adapter, then reuses the same
-frame-based target compiler for the resulting columns.
+Country-specific simulator logic stays outside core. The helpers here provide
+two generic adapters for targets whose measure or filter features are produced
+by a runtime simulator: one that applies modifier handlers target-by-target,
+and one that delegates grouped feature materialization to an injected adapter.
+Both paths then reuse the ordinary frame-backed target compiler.
 """
 
 from __future__ import annotations
@@ -14,6 +13,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import Protocol, runtime_checkable
 
+import numpy as np
 import pandas as pd
 
 from microplex.core import EntityType
@@ -25,7 +25,9 @@ from microplex.targets.spec import TargetSimulationModifier, TargetSpec
 
 __all__ = [
     "MaterializedSimulationTargetCompiler",
+    "MaterializingSimulationTargetCompiler",
     "SimulationFeatureMaterializer",
+    "SimulationModifierHandler",
 ]
 
 
@@ -54,7 +56,7 @@ class MaterializedSimulationTargetCompiler:
         *,
         targets: Sequence[TargetSpec],
         entity_frames: Mapping[EntityType, pd.DataFrame],
-        entity_weight_indexes: Mapping[EntityType, pd.Series],
+        entity_weight_indexes: Mapping[EntityType, pd.Series | np.ndarray],
     ) -> TargetConstraintCompilationResult:
         constraints = []
         skipped = []
@@ -73,6 +75,78 @@ class MaterializedSimulationTargetCompiler:
             )
             constraints.extend(compiled.constraints)
             skipped.extend(compiled.skipped_targets)
+        return TargetConstraintCompilationResult(
+            constraints=tuple(constraints),
+            skipped_targets=tuple(skipped),
+        )
+
+
+@runtime_checkable
+class SimulationModifierHandler(Protocol):
+    """Handler protocol for one target simulation modifier."""
+
+    def apply_simulation_modifier(
+        self,
+        entity_frames: Mapping[EntityType, pd.DataFrame],
+        *,
+        target: TargetSpec,
+        modifier: TargetSimulationModifier,
+        entity_weight_indexes: Mapping[EntityType, pd.Series | np.ndarray],
+    ) -> Mapping[EntityType, pd.DataFrame]:
+        """Return entity frames after applying ``modifier`` for ``target``."""
+
+
+class MaterializingSimulationTargetCompiler:
+    """Compile simulator-modified targets through registered handlers.
+
+    Each target is materialized independently, preserving target order and
+    letting the existing frame-target compiler produce the final sparse row.
+    This is deliberately generic: a handler can run PolicyEngine, rerandomize
+    takeup inputs, or apply another simulator-specific transform.
+    """
+
+    def __init__(
+        self,
+        modifier_handlers: Mapping[str, SimulationModifierHandler],
+    ) -> None:
+        self.modifier_handlers = dict(modifier_handlers)
+
+    def compile_simulation_target_constraints(
+        self,
+        *,
+        targets: Sequence[TargetSpec],
+        entity_frames: Mapping[EntityType, pd.DataFrame],
+        entity_weight_indexes: Mapping[EntityType, pd.Series | np.ndarray],
+    ) -> TargetConstraintCompilationResult:
+        constraints = []
+        skipped: list[tuple[str, str]] = []
+        for target in targets:
+            frames = {entity: frame.copy() for entity, frame in entity_frames.items()}
+            skip_reason: str | None = None
+            for modifier in target.sim_modifiers:
+                handler = self.modifier_handlers.get(modifier.name)
+                if handler is None:
+                    skip_reason = f"missing_simulation_modifier_handler:{modifier.name}"
+                    break
+                frames = _apply_modifier_handler(
+                    handler,
+                    frames,
+                    target=target,
+                    modifier=modifier,
+                    entity_weight_indexes=entity_weight_indexes,
+                )
+            if skip_reason is not None:
+                skipped.append((target.name, skip_reason))
+                continue
+
+            compilation = compile_target_reweighting_constraints(
+                targets=[replace(target, sim_modifiers=())],
+                entity_frames=frames,
+                entity_weight_indexes=dict(entity_weight_indexes),
+            )
+            constraints.extend(compilation.constraints)
+            skipped.extend(compilation.skipped_targets)
+
         return TargetConstraintCompilationResult(
             constraints=tuple(constraints),
             skipped_targets=tuple(skipped),
@@ -118,18 +192,73 @@ def _merged_entity_frames(
 ) -> dict[EntityType, pd.DataFrame]:
     merged = {entity: frame.copy() for entity, frame in entity_frames.items()}
     for entity, simulated in materialized_frames.items():
-        base = merged.get(entity)
+        entity_type = entity if isinstance(entity, EntityType) else EntityType(entity)
+        if not isinstance(simulated, pd.DataFrame):
+            raise TypeError(
+                "simulation materializer returned "
+                f"{type(simulated).__name__} for entity {entity_type.value!r}; "
+                "expected pandas.DataFrame."
+            )
+        base = merged.get(entity_type)
         if base is None:
             base = pd.DataFrame(index=simulated.index)
-            merged[entity] = base
+            merged[entity_type] = base
         if len(base) != len(simulated):
             raise ValueError(
                 f"simulation materializer returned {len(simulated)} rows for "
-                f"{entity.value}, expected {len(base)}"
+                f"{entity_type.value}, expected {len(base)}"
             )
         simulated = simulated.reset_index(drop=True)
         base = base.reset_index(drop=True)
         for column in simulated.columns:
             base[column] = simulated[column]
-        merged[entity] = base
+        merged[entity_type] = base
+    return merged
+
+
+def _apply_modifier_handler(
+    handler: SimulationModifierHandler,
+    entity_frames: Mapping[EntityType, pd.DataFrame],
+    *,
+    target: TargetSpec,
+    modifier: TargetSimulationModifier,
+    entity_weight_indexes: Mapping[EntityType, pd.Series | np.ndarray],
+) -> dict[EntityType, pd.DataFrame]:
+    apply_method = getattr(handler, "apply_simulation_modifier", None)
+    if apply_method is not None:
+        updated = apply_method(
+            entity_frames,
+            target=target,
+            modifier=modifier,
+            entity_weight_indexes=entity_weight_indexes,
+        )
+    else:
+        updated = handler(  # type: ignore[operator]
+            entity_frames,
+            target=target,
+            modifier=modifier,
+            entity_weight_indexes=entity_weight_indexes,
+        )
+    if not isinstance(updated, Mapping):
+        raise TypeError(
+            "Simulation modifier handler returned "
+            f"{type(updated).__name__}; expected a mapping of entity frames."
+        )
+    merged = dict(entity_frames)
+    for entity, frame in updated.items():
+        entity_type = entity if isinstance(entity, EntityType) else EntityType(entity)
+        if not isinstance(frame, pd.DataFrame):
+            raise TypeError(
+                f"Simulation modifier handler returned {type(frame).__name__} "
+                f"for entity {entity_type.value!r}; expected pandas.DataFrame."
+            )
+        if entity_type in entity_frames and len(frame) != len(
+            entity_frames[entity_type]
+        ):
+            raise ValueError(
+                "Simulation modifier handler changed row count for entity "
+                f"{entity_type.value!r} from {len(entity_frames[entity_type])} "
+                f"to {len(frame)}."
+            )
+        merged[entity_type] = frame
     return merged

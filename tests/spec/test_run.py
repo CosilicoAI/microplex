@@ -1207,6 +1207,116 @@ class TestRunSpec:
             call["imputed_variables"] == ["source_impute_asset"] for call in calls
         )
 
+    def test_runtime_variable_operation_handlers_run_after_transforms(self) -> None:
+        class TakeupHandler:
+            def apply_variable_operations(
+                self,
+                frame: pd.DataFrame,
+                *,
+                variables,
+                spec,
+                operation_kind,
+            ) -> pd.DataFrame:
+                assert operation_kind.value == "rerandomize_takeup"
+                assert spec.meta.country == "us"
+                out = frame.copy()
+                for variable_name in variables:
+                    out[variable_name] = out["total_market_income"].gt(0)
+                return out
+
+        data = _spec_dict()
+        data["variables"] = {
+            "takes_up_snap_if_eligible": {
+                "entity": "person",
+                "mp_spec": {
+                    "method": "fixture takeup",
+                    "operation": {
+                        "kind": "rerandomize_takeup",
+                        "handler": "policyengine_us_takeup",
+                    },
+                },
+            }
+        }
+        spec = load_spec_dict(data)
+
+        result = _run_spec(
+            spec,
+            _sources(),
+            demographic_columns=DEMOGRAPHIC_COLS,
+            variable_operation_handlers={
+                "policyengine_us_takeup": TakeupHandler(),
+            },
+        )
+
+        assert "takes_up_snap_if_eligible" in result.frame.columns
+        assert result.frame["takes_up_snap_if_eligible"].dtype == bool
+        assert [batch.variables for batch in result.variable_operation_results] == [
+            ("takes_up_snap_if_eligible",)
+        ]
+
+    def test_runtime_variable_operation_handlers_fail_closed_when_missing(self) -> None:
+        data = _spec_dict()
+        data["variables"] = {
+            "income_tax": {
+                "entity": "tax_unit",
+                "mp_spec": {
+                    "method": "PolicyEngine formula",
+                    "operation": {
+                        "kind": "materialize_policyengine",
+                        "handler": "policyengine_us",
+                    },
+                },
+            }
+        }
+        spec = load_spec_dict(data)
+
+        with pytest.raises(
+            ValueError,
+            match="No runtime variable operation handler registered",
+        ):
+            _run_spec(
+                spec,
+                _sources(),
+                demographic_columns=DEMOGRAPHIC_COLS,
+                variable_operation_handlers={},
+            )
+
+    def test_runtime_variable_operation_handlers_must_materialize_columns(self) -> None:
+        class EmptyHandler:
+            def apply_variable_operations(
+                self,
+                frame: pd.DataFrame,
+                *,
+                variables,
+                spec,
+                operation_kind,
+            ) -> pd.DataFrame:
+                _ = (variables, spec, operation_kind)
+                return frame.copy()
+
+        data = _spec_dict()
+        data["variables"] = {
+            "income_tax": {
+                "entity": "tax_unit",
+                "mp_spec": {
+                    "method": "PolicyEngine formula",
+                    "operation": {
+                        "kind": "materialize_policyengine",
+                        "handler": "policyengine_us",
+                    },
+                },
+            }
+        }
+        spec = load_spec_dict(data)
+
+        with pytest.raises(ValueError, match="did not materialize"):
+            _run_spec(
+                spec,
+                _sources(),
+                demographic_columns=DEMOGRAPHIC_COLS,
+                variable_operation_handlers={"policyengine_us": EmptyHandler()},
+            )
+
 
 class TestResolveSources:
     def test_missing_source_raises(self) -> None:
