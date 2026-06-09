@@ -2,16 +2,16 @@ name: Tests
 
 on:
   push:
-    branches: [main]
+    branches: [main, claude/spec-driven-engine]
   pull_request:
-    branches: [main]
+    branches: [main, claude/spec-driven-engine]
 
 jobs:
   test:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.11", "3.12", "3.13", "3.14"]
+        python-version: ["3.12", "3.13", "3.14"]
 
     steps:
       - uses: actions/checkout@v4
@@ -21,10 +21,15 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[dev]"
+          # uv (not pip) so [tool.uv.sources] is honored — microimpute is
+          # pinned to a git rev there; plain pip resolves PyPI instead and
+          # gets an Imputer API the spec engine cannot run against.
+          uv pip install --system -e ".[dev]"
 
       - name: Run tests
         run: |
