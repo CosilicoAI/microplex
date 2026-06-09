@@ -10,7 +10,9 @@ from microplex.core import EntityType
 from microplex.targets.arch import ArchConsumerFact, load_arch_target_records
 from microplex.targets.arch_manifest import (
     ArchTargetManifest,
+    arch_target_provider_from_consumer_facts,
     load_arch_target_manifest,
+    load_manifest_arch_target_records,
 )
 from microplex.targets.arch_provider import ArchTargetProvider
 
@@ -134,6 +136,75 @@ def test_manifest_maps_soi_state_agi_count_row_through_jsonl(tmp_path: Path):
     assert target.entity is EntityType.TAX_UNIT
     assert target.measure == "tax_unit_count"
     assert sum(filter_.feature == "state_fips" for filter_ in target.filters) == 1
+
+
+def test__given_arch_source_suite_directory__then_manifest_loads_target_records(
+    tmp_path: Path,
+) -> None:
+    suite_dir = tmp_path / "arch_source_suites" / "soi-table-1-2-2024"
+    suite_dir.mkdir(parents=True)
+    path = suite_dir / "consumer_facts.jsonl"
+    path.write_text(
+        json.dumps(
+            _fact_row(
+                "irs_soi.individual_income_tax_returns",
+                aggregation="count",
+                value=123,
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    manifest = _manifest()
+
+    records = load_manifest_arch_target_records(
+        manifest, tmp_path / "arch_source_suites"
+    )
+
+    assert len(records) == 1
+    assert records[0].variable == "tax_unit_count"
+    assert records[0].target_type == "COUNT"
+
+
+def test__given_arch_source_suite_directory__then_manifest_builds_provider(
+    tmp_path: Path,
+) -> None:
+    suite_dir = tmp_path / "arch_source_suites" / "soi-table-1-2-2024"
+    suite_dir.mkdir(parents=True)
+    path = suite_dir / "consumer_facts.jsonl"
+    path.write_text(
+        json.dumps(
+            _fact_row(
+                "irs_soi.individual_income_tax_returns",
+                aggregation="count",
+                value=123,
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    provider = arch_target_provider_from_consumer_facts(
+        US_ARCH_MANIFEST,
+        tmp_path / "arch_source_suites",
+        target_year=2024,
+    )
+    target_set = provider.load_target_set()
+
+    assert len(target_set.targets) == 1
+    assert target_set.targets[0].measure == "tax_unit_count"
+
+
+def test__given_empty_arch_source_suite_directory__then_manifest_loader_fails_closed(
+    tmp_path: Path,
+) -> None:
+    suite_dir = tmp_path / "arch_source_suites"
+    suite_dir.mkdir()
+
+    import pytest
+
+    with pytest.raises(FileNotFoundError, match="consumer_facts.jsonl"):
+        load_manifest_arch_target_records(_manifest(), suite_dir)
 
 
 def test_manifest_adds_legacy_positive_filter_for_count_alias():

@@ -66,6 +66,7 @@ from microplex.spec import (
 )
 from microplex.spec_transforms import TransformEngine
 from microplex.spine import SpineBuilder, SpineBuildResult
+from microplex.targets.arch_manifest import arch_target_provider_from_consumer_facts
 from microplex.targets.bundles import EntityTableBinding, EntityTableBundle
 from microplex.targets.provider import TargetProvider, TargetQuery
 from microplex.targets.spec import TargetSet
@@ -349,6 +350,9 @@ def run_spec(
     weight_column: str | None = "household_weight",
     spine_keywords: Sequence[str] | None = None,
     target_provider: TargetProvider | None = None,
+    arch_consumer_fact_paths: str | Path | Sequence[str | Path] | None = None,
+    arch_reference_consumer_fact_paths: str | Path | Sequence[str | Path] | None = None,
+    arch_target_manifest_base: str | Path | None = None,
     calibrator: SpecCalibrator | None = None,
     calibration_entity: EntityType | str | None = None,
     calibration_id_column: str | None = None,
@@ -378,10 +382,21 @@ def run_spec(
             broad generic substrings that can mis-tier variables.
         target_provider: Optional provider used to load the spec-declared target
             surface. When omitted, targets remain an explicit pending stage.
+        arch_consumer_fact_paths: Optional Arch consumer-fact JSONL files or
+            artifact directories used to construct an ``ArchTargetProvider``
+            from ``spec.targets.arch.manifest``. Mutually exclusive with
+            ``target_provider``.
+        arch_reference_consumer_fact_paths: Optional Arch consumer-fact JSONL
+            files or artifact directories used only as derivation reference
+            records. Requires ``arch_consumer_fact_paths``.
+        arch_target_manifest_base: Base directory for a relative
+            ``spec.targets.arch.manifest`` path when constructing an Arch target
+            provider from JSONL artifacts.
         calibrator: Optional country-specific calibrator used to reweight the
             post-transform frame to the loaded target surface. Requires both
-            ``spec.targets`` and ``target_provider`` so calibration never runs
-            against an implicit or freshly recomputed target surface.
+            ``spec.targets`` and either ``target_provider`` or
+            ``arch_consumer_fact_paths`` so calibration never runs against an
+            implicit target surface.
         calibration_entity: Optional entity label for generic entity-table
             calibration of the post-transform frame. When set, ``run_spec``
             builds a one-table :class:`EntityTableBundle` from ``frame`` and
@@ -416,6 +431,11 @@ def run_spec(
         KeyError: if a declared source has no frame.
         ValueError: on spine/imputation/transform validation failures.
     """
+    _validate_target_provider_inputs(
+        target_provider=target_provider,
+        arch_consumer_fact_paths=arch_consumer_fact_paths,
+        arch_reference_consumer_fact_paths=arch_reference_consumer_fact_paths,
+    )
     resolved_groups = _resolved_column_groups(
         column_groups=column_groups,
         demographic_columns=demographic_columns,
@@ -508,9 +528,16 @@ def run_spec(
     # Stage 5: targets. A provider-backed load is the first non-faked seam for
     # the clean scoring/calibration surface. Calibration/export still remain
     # explicit TODOs; we deliberately do not fabricate weights or a dataset.
-    if spec.targets is not None and target_provider is not None:
+    resolved_target_provider = _target_provider_from_inputs(
+        spec,
+        target_provider=target_provider,
+        arch_consumer_fact_paths=arch_consumer_fact_paths,
+        arch_reference_consumer_fact_paths=arch_reference_consumer_fact_paths,
+        arch_target_manifest_base=arch_target_manifest_base,
+    )
+    if spec.targets is not None and resolved_target_provider is not None:
         target_query = _target_query_from_spec(spec)
-        target_set = target_provider.load_target_set(target_query)
+        target_set = resolved_target_provider.load_target_set(target_query)
         pending_stages.remove("targets")
         logger.info(
             "run_spec: loaded %d targets for profile '%s' (calibration profile '%s')",
@@ -880,6 +907,70 @@ def _resolve_spine_keywords(
                 "run_spec received an empty spine_keywords list for order: spine_first"
             )
     return tuple(spine_keywords or ())
+
+
+def _validate_target_provider_inputs(
+    *,
+    target_provider: TargetProvider | None,
+    arch_consumer_fact_paths: str | Path | Sequence[str | Path] | None,
+    arch_reference_consumer_fact_paths: str | Path | Sequence[str | Path] | None,
+) -> None:
+    if target_provider is not None and arch_consumer_fact_paths is not None:
+        raise ValueError(
+            "pass either target_provider or arch_consumer_fact_paths, not both"
+        )
+    if (
+        arch_reference_consumer_fact_paths is not None
+        and arch_consumer_fact_paths is None
+    ):
+        raise ValueError(
+            "arch_reference_consumer_fact_paths requires arch_consumer_fact_paths"
+        )
+
+
+def _target_provider_from_inputs(
+    spec: MicroplexSpec,
+    *,
+    target_provider: TargetProvider | None,
+    arch_consumer_fact_paths: str | Path | Sequence[str | Path] | None,
+    arch_reference_consumer_fact_paths: str | Path | Sequence[str | Path] | None,
+    arch_target_manifest_base: str | Path | None,
+) -> TargetProvider | None:
+    if arch_consumer_fact_paths is None:
+        return target_provider
+    if spec.targets is None:
+        raise ValueError(
+            "arch_consumer_fact_paths were supplied but the spec has no targets section"
+        )
+    return arch_target_provider_from_consumer_facts(
+        _resolve_arch_target_manifest_path(
+            spec.targets.arch.manifest,
+            base=arch_target_manifest_base,
+        ),
+        arch_consumer_fact_paths,
+        target_year=spec.targets.arch.model_year,
+        reference_paths=arch_reference_consumer_fact_paths,
+    )
+
+
+def _resolve_arch_target_manifest_path(
+    manifest: str | None,
+    *,
+    base: str | Path | None,
+) -> Path:
+    if manifest is None:
+        raise ValueError(
+            "arch_consumer_fact_paths require targets.arch.manifest in the spec"
+        )
+    path = Path(manifest)
+    if path.is_absolute():
+        return path
+    if base is None:
+        raise ValueError(
+            "arch_target_manifest_base is required to resolve relative "
+            f"targets.arch.manifest {manifest!r}"
+        )
+    return Path(base) / path
 
 
 def _target_query_from_spec(spec: MicroplexSpec) -> TargetQuery:
