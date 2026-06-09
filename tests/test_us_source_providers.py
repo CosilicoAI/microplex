@@ -15,6 +15,7 @@ from microplex.data_sources.cps import (
 from microplex.data_sources.puf import SHARED_VARS, PUFSourceProvider
 from microplex.data_sources.us_registry import create_us_asec_puf_source_registry
 from microplex.spec import load_spec_dict
+from microplex.targets import entity_table_bundle_from_observation_frame
 
 
 def _cps_dataset(*, year: int, cache_dir=None, download: bool = True) -> CPSDataset:
@@ -380,6 +381,57 @@ def test_us_asec_puf_registry_uses_spec_dataset_ids(monkeypatch) -> None:
     assert frames["puf"]["tax_unit_id"].tolist() == [0, 1]
     assert "employment_income" in frames["cps_asec"]
     assert "employment_income" in frames["puf"]
+
+
+def test_us_asec_puf_registry_exposes_cps_observation_frame_for_bundle(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "microplex.data_sources.us_registry.CPSAsecSourceProvider",
+        lambda **kwargs: CPSAsecSourceProvider(loader=_cps_dataset, **kwargs),
+    )
+    monkeypatch.setattr(
+        "microplex.data_sources.us_registry.PUFSourceProvider",
+        lambda **kwargs: PUFSourceProvider(loader=_puf_frame, **kwargs),
+    )
+    registry = create_us_asec_puf_source_registry(download_cps=False)
+    spec = load_spec_dict(
+        {
+            "meta": {"country": "us", "model_year": 2024},
+            "sources": {
+                "cps_asec": {
+                    "dataset": "cps_asec_2025_calendar_2024",
+                    "role": "spine",
+                },
+                "puf": {"dataset": "puf_2024", "role": "donor"},
+            },
+            "spine": {
+                "base": "cps_asec",
+                "method": "support_spine",
+                "support": {"seed": 42},
+                "halves": [
+                    {"name": "cps_keep", "keep": "all"},
+                    {"name": "synthetic_puf", "strip_to": ["tax_unit_id"]},
+                ],
+            },
+            "imputation": [],
+        }
+    )
+
+    frame = registry.resolve_observation_frame(spec, "cps_asec")
+    bundle = entity_table_bundle_from_observation_frame(
+        frame,
+        weight_entity=EntityType.HOUSEHOLD,
+    )
+
+    assert set(bundle.available_entities()) == {
+        EntityType.HOUSEHOLD,
+        EntityType.PERSON,
+        EntityType.TAX_UNIT,
+    }
+    assert bundle.weight_column == "household_weight"
+    assert bundle.entity_weight_indexes()[EntityType.PERSON].tolist() == [0, 0, 1]
+    assert bundle.entity_weight_indexes()[EntityType.TAX_UNIT].tolist() == [0, 1]
 
 
 def test_registry_resolved_asec_puf_shared_vars_overlap(monkeypatch) -> None:

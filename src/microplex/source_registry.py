@@ -80,6 +80,23 @@ class SourceRegistry:
         source_name: str,
     ) -> pd.DataFrame:
         """Load and select one frame declared in ``spec``."""
+        observation_frame = self.resolve_observation_frame(spec, source_name)
+        source_spec = spec.sources[source_name]
+        registered = self._registered_provider(source_spec.dataset)
+        entity = self._select_entity(
+            source_name=source_name,
+            source_spec=source_spec,
+            registered=registered,
+            observation_frame=observation_frame,
+        )
+        return observation_frame.tables[entity].copy()
+
+    def resolve_observation_frame(
+        self,
+        spec: MicroplexSpec,
+        source_name: str,
+    ) -> ObservationFrame:
+        """Load the full observation frame declared for one source."""
         try:
             source_spec = spec.sources[source_name]
         except KeyError as exc:
@@ -98,18 +115,22 @@ class SourceRegistry:
         )
         observation_frame = registered.provider.load_frame(query)
         observation_frame.validate()
-        entity = self._select_entity(
-            source_name=source_name,
-            source_spec=source_spec,
-            registered=registered,
-            observation_frame=observation_frame,
-        )
-        return observation_frame.tables[entity].copy()
+        return observation_frame
 
     def resolve_sources(self, spec: MicroplexSpec) -> dict[str, pd.DataFrame]:
         """Load and select frames for every source declared in ``spec``."""
         return {
             source_name: self.resolve_source(spec, source_name)
+            for source_name in spec.sources
+        }
+
+    def resolve_observation_frames(
+        self,
+        spec: MicroplexSpec,
+    ) -> dict[str, ObservationFrame]:
+        """Load full observation frames for every source declared in ``spec``."""
+        return {
+            source_name: self.resolve_observation_frame(spec, source_name)
             for source_name in spec.sources
         }
 
