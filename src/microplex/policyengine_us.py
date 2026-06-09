@@ -60,6 +60,11 @@ TAKEUP_VARIABLE_PROGRAM: dict[str, str] = {
     "takes_up_tanf_if_eligible": "tanf",
 }
 
+TAKEUP_VARIABLE_RATE_PARAMETER: dict[str, str] = {
+    **TAKEUP_VARIABLE_PROGRAM,
+    "would_claim_wic": "wic_takeup",
+}
+
 TAKEUP_VARIABLES_BY_PROGRAM: dict[str, tuple[str, ...]] = {}
 for _variable, _program in TAKEUP_VARIABLE_PROGRAM.items():
     TAKEUP_VARIABLES_BY_PROGRAM.setdefault(_program, tuple())
@@ -96,6 +101,20 @@ class PolicyEngineUSTakeupRerandomizer(Protocol):
         modifiers: Sequence[TargetSimulationModifier],
     ) -> Mapping[EntityType, pd.DataFrame]:
         """Return entity frames with the requested take-up columns present."""
+
+
+@runtime_checkable
+class PolicyEngineUSTakeupRateSource(Protocol):
+    """Resolve per-row PolicyEngine-US take-up rates."""
+
+    def rate_for_takeup_variable(
+        self,
+        variable: str,
+        frame: pd.DataFrame,
+        *,
+        period: int | str,
+    ) -> float | np.ndarray:
+        """Return a scalar rate or row-aligned rates for ``variable``."""
 
 
 @dataclass
@@ -248,7 +267,7 @@ class PolicyEngineUSRuntimeAdapter(RuntimeVariableOperationHandler):
 class SeededPolicyEngineUSTakeupRerandomizer:
     """Simple deterministic take-up rerandomizer with caller-supplied rates."""
 
-    rates: Mapping[str, float]
+    rates: Mapping[str, float] | PolicyEngineUSTakeupRateSource
     seed: int = 0
 
     def rerandomize_takeup(
@@ -259,7 +278,7 @@ class SeededPolicyEngineUSTakeupRerandomizer:
         period: int | str,
         modifiers: Sequence[TargetSimulationModifier],
     ) -> Mapping[EntityType, pd.DataFrame]:
-        del period, modifiers
+        del modifiers
         frames = _copy_entity_frames(entity_frames)
         for entity, variables in variables_by_entity.items():
             if entity not in frames:
@@ -269,11 +288,98 @@ class SeededPolicyEngineUSTakeupRerandomizer:
                 )
             frame = frames[entity].copy()
             for variable in variables:
-                rate = _rate_for_takeup_variable(variable, self.rates)
+                rate = _rate_for_takeup_variable(
+                    variable,
+                    self.rates,
+                    frame=frame,
+                    period=period,
+                )
                 rng = _stable_rng(self.seed, variable)
                 frame[variable] = rng.random(len(frame)) < rate
             frames[entity] = frame
         return frames
+
+
+@dataclass(frozen=True)
+class PolicyEngineUSDataTakeupRateSource:
+    """Rate source matching legacy ``policyengine-us-data`` take-up inputs."""
+
+    loader: Any | None = None
+
+    def rate_for_takeup_variable(
+        self,
+        variable: str,
+        frame: pd.DataFrame,
+        *,
+        period: int | str,
+    ) -> float | np.ndarray:
+        if variable == "takes_up_eitc":
+            rates = self._load("eitc", period)
+            return _rates_by_numeric_child_count(
+                variable,
+                frame,
+                rates,
+                column="eitc_child_count",
+                default=0.85,
+                max_key=3,
+            )
+        if variable == "takes_up_medicaid_if_eligible":
+            rates = self._load("medicaid", period)
+            return _rates_by_string_column(
+                variable,
+                frame,
+                rates,
+                column="state_code_str",
+                default=0.93,
+            )
+        if variable == "would_claim_wic":
+            rates = self._load("wic_takeup", period)
+            return _rates_by_string_column(
+                variable,
+                frame,
+                rates,
+                column="wic_category_str",
+                default=0.0,
+            )
+        if variable == "would_file_taxes_voluntarily":
+            rate = _scalar_rate(
+                variable,
+                self._load("voluntary_filing", period),
+            )
+            if "takes_up_eitc" not in frame:
+                raise ValueError(
+                    "Legacy voluntary filing take-up requires "
+                    "'takes_up_eitc' on the tax_unit frame."
+                )
+            takes_up_eitc = frame["takes_up_eitc"].astype(bool).to_numpy()
+            return np.where(takes_up_eitc, 0.0, rate)
+
+        parameter = TAKEUP_VARIABLE_RATE_PARAMETER.get(variable)
+        if parameter is None:
+            raise ValueError(f"Unknown PolicyEngine-US take-up variable {variable!r}.")
+        unsupported = {
+            "housing_assistance",
+            "medicare",
+            "wic",
+        }
+        if parameter in unsupported:
+            raise ValueError(
+                "No legacy policyengine-us-data take-up rate parameter is "
+                f"declared for {variable!r}."
+            )
+        return _scalar_rate(variable, self._load(parameter, period))
+
+    def _load(self, parameter: str, period: int | str) -> Any:
+        year = _period_year(period)
+        if self.loader is not None:
+            return self.loader(parameter, year)
+        try:
+            from policyengine_us_data.parameters import load_take_up_rate
+        except ImportError as exc:  # pragma: no cover - optional dependency
+            raise ImportError(
+                "PolicyEngine-US data take-up rates require policyengine-us-data."
+            ) from exc
+        return load_take_up_rate(parameter, year)
 
 
 @dataclass(frozen=True)
@@ -530,18 +636,114 @@ def _merge_runtime_columns(
 
 def _rate_for_takeup_variable(
     variable: str,
-    rates: Mapping[str, float],
-) -> float:
+    rates: Mapping[str, float] | PolicyEngineUSTakeupRateSource,
+    *,
+    frame: pd.DataFrame,
+    period: int | str,
+) -> float | np.ndarray:
+    if isinstance(rates, PolicyEngineUSTakeupRateSource):
+        return _validate_rate(
+            variable,
+            rates.rate_for_takeup_variable(variable, frame, period=period),
+            expected_rows=len(frame),
+        )
     program = TAKEUP_VARIABLE_PROGRAM.get(variable)
     raw_rate = rates.get(variable)
     if raw_rate is None and program is not None:
         raw_rate = rates.get(program)
     if raw_rate is None:
         raise ValueError(f"No take-up rate supplied for {variable!r}.")
+    return _validate_rate(variable, raw_rate, expected_rows=len(frame))
+
+
+def _validate_rate(
+    variable: str,
+    raw_rate: Any,
+    *,
+    expected_rows: int,
+) -> float | np.ndarray:
+    array = np.asarray(raw_rate, dtype=float)
+    if array.ndim == 0:
+        rate = float(array)
+        if not 0.0 <= rate <= 1.0:
+            raise ValueError(f"Take-up rate for {variable!r} must be in [0, 1].")
+        return rate
+    if len(array) != expected_rows:
+        raise ValueError(
+            f"Take-up rates for {variable!r} have {len(array)} rows; "
+            f"expected {expected_rows}."
+        )
+    if not np.all((0.0 <= array) & (array <= 1.0)):
+        raise ValueError(f"Take-up rates for {variable!r} must be in [0, 1].")
+    return array
+
+
+def _scalar_rate(variable: str, raw_rate: Any) -> float:
     rate = float(raw_rate)
     if not 0.0 <= rate <= 1.0:
         raise ValueError(f"Take-up rate for {variable!r} must be in [0, 1].")
     return rate
+
+
+def _rates_by_string_column(
+    variable: str,
+    frame: pd.DataFrame,
+    rates: Mapping[Any, Any],
+    *,
+    column: str,
+    default: float,
+) -> np.ndarray:
+    if column not in frame:
+        raise ValueError(
+            f"Legacy {variable!r} take-up rates require column {column!r}."
+        )
+    mapped_rates = {
+        _string_key(key): _scalar_rate(variable, value) for key, value in rates.items()
+    }
+    default_rate = _scalar_rate(variable, default)
+    return np.array(
+        [
+            mapped_rates.get(_string_key(value), default_rate)
+            for value in frame[column].to_numpy()
+        ],
+        dtype=float,
+    )
+
+
+def _rates_by_numeric_child_count(
+    variable: str,
+    frame: pd.DataFrame,
+    rates: Mapping[Any, Any],
+    *,
+    column: str,
+    default: float,
+    max_key: int,
+) -> np.ndarray:
+    if column not in frame:
+        raise ValueError(
+            f"Legacy {variable!r} take-up rates require column {column!r}."
+        )
+    numeric_rates = {
+        int(key): _scalar_rate(variable, value) for key, value in rates.items()
+    }
+    default_rate = _scalar_rate(variable, default)
+    values = []
+    for raw_value in frame[column].to_numpy():
+        key = min(int(raw_value), max_key)
+        values.append(numeric_rates.get(key, default_rate))
+    return np.asarray(values, dtype=float)
+
+
+def _string_key(value: Any) -> str:
+    if isinstance(value, bytes):
+        return value.decode()
+    return str(value)
+
+
+def _period_year(period: int | str) -> int:
+    if isinstance(period, str):
+        return int(period[:4])
+    return int(period)
 
 
 def _stable_rng(seed: int, variable: str) -> np.random.Generator:
@@ -591,10 +793,13 @@ __all__ = [
     "POLICYENGINE_US_TAKEUP_HANDLER",
     "PolicyEngineUSMicrosimulationMaterializer",
     "PolicyEngineUSRuntimeAdapter",
+    "PolicyEngineUSDataTakeupRateSource",
+    "PolicyEngineUSTakeupRateSource",
     "PolicyEngineUSTakeupRerandomizer",
     "PolicyEngineUSVariableMaterializer",
     "SeededPolicyEngineUSTakeupRerandomizer",
     "TAKEUP_VARIABLE_ENTITY",
     "TAKEUP_VARIABLE_PROGRAM",
+    "TAKEUP_VARIABLE_RATE_PARAMETER",
     "TAKEUP_VARIABLES_BY_PROGRAM",
 ]
