@@ -152,6 +152,27 @@ def test_subnational_geo_level_requires_geo_id():
         )
 
 
+def test_state_geography_via_constraint_without_geo_id():
+    # Dominant real Arch pattern (all 1173 STATE rows in the legacy SOI DB): a
+    # STATE record carries its state as a `state_fips` constraint and has no
+    # geography_id. It is fully scoped, so it must convert (not fail closed)
+    # with the constraint preserved as the geography filter.
+    spec = arch_target_record_to_target_spec(
+        _rec(
+            "agi",
+            1.0,
+            geographic_level="STATE",
+            geography_id=None,
+            constraints=(("state_fips", "==", "06"),),
+        ),
+        entity="tax_unit",
+    )
+    geo = [f for f in spec.filters if f.feature == "state_fips"]
+    assert len(geo) == 1
+    assert geo[0].value == "06"
+    assert spec.aggregation is TargetAggregation.SUM
+
+
 def test_constraints_become_target_filters():
     spec = arch_target_record_to_target_spec(
         _rec("agi", 1.0, constraints=(("state_fips", "==", "06"),)),

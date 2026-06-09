@@ -178,28 +178,40 @@ def arch_target_record_to_target_spec(
                 f"for {record.variable!r}; inject a geo_feature mapping before "
                 "converting subnational targets"
             )
-        if record.geography_id is None:
+        if feature in constrained_features:
+            # Geography is already carried as a constraint — the dominant Arch
+            # pattern (e.g. a STATE record with `state_fips == "06"` in its
+            # stratum constraints and no `geography_id`). It is already fully
+            # scoped, so do not require `geography_id` and do not duplicate the
+            # filter. If a redundant `geography_id` is also present, verify it
+            # agrees with the constraint rather than silently diverging.
+            if record.geography_id is not None:
+                geography_id = str(record.geography_id)
+                existing_geo_filters = [
+                    filter_ for filter_ in filters if filter_.feature == feature
+                ]
+                if not any(
+                    _geo_filter_matches(filter_, geography_id)
+                    for filter_ in existing_geo_filters
+                ):
+                    raise ValueError(
+                        f"conflicting Arch geography for {record.variable!r}: "
+                        f"metadata {feature} == {geography_id!r} but constraints "
+                        f"include {existing_geo_filters!r}"
+                    )
+        elif record.geography_id is None:
+            # Subnational level but geography is in neither geography_id nor a
+            # constraint — genuinely unscoped, fail closed.
             raise ValueError(
                 f"Arch geography level {record.geographic_level!r} for "
-                f"{record.variable!r} requires geography_id"
+                f"{record.variable!r} requires geography_id or a "
+                f"{feature!r} constraint"
             )
-        geography_id = str(record.geography_id)
-        if feature in constrained_features:
-            existing_geo_filters = [
-                filter_ for filter_ in filters if filter_.feature == feature
-            ]
-            if not any(
-                _geo_filter_matches(filter_, geography_id)
-                for filter_ in existing_geo_filters
-            ):
-                raise ValueError(
-                    f"conflicting Arch geography for {record.variable!r}: "
-                    f"metadata {feature} == {geography_id!r} but constraints "
-                    f"include {existing_geo_filters!r}"
-                )
         else:
             filters.append(
-                TargetFilter(feature=feature, operator="==", value=geography_id)
+                TargetFilter(
+                    feature=feature, operator="==", value=str(record.geography_id)
+                )
             )
     lineage = {
         "arch_variable": record.variable,
