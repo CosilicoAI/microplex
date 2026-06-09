@@ -8,11 +8,13 @@ import pytest
 
 from microplex.core import EntityType
 from microplex.policyengine_us import (
+    POLICYENGINE_US_RUNTIME_HANDLER,
     POLICYENGINE_US_TAKEUP_HANDLER,
     PolicyEngineUSDataTakeupRateSource,
     PolicyEngineUSMicrosimulationMaterializer,
     PolicyEngineUSRuntimeAdapter,
     SeededPolicyEngineUSTakeupRerandomizer,
+    create_policyengine_us_runtime_adapter,
 )
 from microplex.runtime_operations import apply_runtime_variable_operations
 from microplex.spec import load_spec_dict
@@ -168,6 +170,67 @@ def test_simulation_materializer_runs_takeup_before_policyengine() -> None:
     adapter = PolicyEngineUSRuntimeAdapter(
         materializer=materializer,
         takeup_rerandomizer=SeededPolicyEngineUSTakeupRerandomizer({"snap": 1.0}),
+    )
+    target = TargetSpec(
+        name="snap_total",
+        entity=EntityType.SPM_UNIT,
+        value=100.0,
+        period=2024,
+        measure="snap",
+        sim_modifiers=(
+            TargetSimulationModifier("rerandomize_takeup", {"program": "snap"}),
+            TargetSimulationModifier(
+                "materialize_policyengine",
+                {"model": "policyengine-us"},
+            ),
+        ),
+    )
+
+    frames = adapter.materialize_simulation_features(
+        targets=(target,),
+        entity_frames={EntityType.SPM_UNIT: pd.DataFrame({"spm_unit_id": [1, 2]})},
+        modifiers=target.sim_modifiers,
+    )
+
+    assert frames[EntityType.SPM_UNIT]["takes_up_snap_if_eligible"].tolist() == [
+        True,
+        True,
+    ]
+    assert frames[EntityType.SPM_UNIT]["snap"].tolist() == [10.0, 10.0]
+    assert materializer.calls[0]["has_snap_takeup"] is True
+
+
+def test_default_runtime_adapter_factory_uses_lazy_us_backends() -> None:
+    adapter = create_policyengine_us_runtime_adapter(seed=123, period=2024)
+
+    assert isinstance(adapter.materializer, PolicyEngineUSMicrosimulationMaterializer)
+    assert isinstance(
+        adapter.takeup_rerandomizer,
+        SeededPolicyEngineUSTakeupRerandomizer,
+    )
+    assert isinstance(
+        adapter.takeup_rerandomizer.rates,
+        PolicyEngineUSDataTakeupRateSource,
+    )
+    assert adapter.takeup_rerandomizer.seed == 123
+    assert adapter.period == 2024
+    assert set(adapter.runtime_variable_operation_handlers()) == {
+        POLICYENGINE_US_RUNTIME_HANDLER,
+        POLICYENGINE_US_TAKEUP_HANDLER,
+    }
+
+
+def test_runtime_adapter_factory_materializes_simulation_with_legacy_rates() -> None:
+    materializer = RecordingPolicyEngineMaterializer()
+
+    def loader(parameter, year):
+        assert (parameter, year) == ("snap", 2024)
+        return 1.0
+
+    adapter = create_policyengine_us_runtime_adapter(
+        materializer=materializer,
+        takeup_rates=PolicyEngineUSDataTakeupRateSource(loader=loader),
+        period=2024,
     )
     target = TargetSpec(
         name="snap_total",

@@ -470,6 +470,45 @@ class PolicyEngineUSMicrosimulationMaterializer:
         return Microsimulation(dataset=dataset)
 
 
+def create_policyengine_us_runtime_adapter(
+    *,
+    materializer: PolicyEngineUSVariableMaterializer | None = None,
+    takeup_rerandomizer: PolicyEngineUSTakeupRerandomizer | None = None,
+    takeup_rates: Mapping[str, float] | PolicyEngineUSTakeupRateSource | None = None,
+    seed: int = 0,
+    period: int | str | None = None,
+) -> PolicyEngineUSRuntimeAdapter:
+    """Create the default PolicyEngine-US runtime adapter for real builds.
+
+    The returned adapter is ready to supply both ``run_spec`` runtime variable
+    handlers and the simulator-aware calibration compiler. Optional
+    ``policyengine-us`` and ``policyengine-us-data`` imports remain lazy inside
+    the concrete materializer/rate source so generic Microplex imports stay
+    lightweight.
+    """
+    resolved_materializer = (
+        materializer
+        if materializer is not None
+        else PolicyEngineUSMicrosimulationMaterializer()
+    )
+    resolved_takeup_rerandomizer = takeup_rerandomizer
+    if resolved_takeup_rerandomizer is None:
+        resolved_takeup_rates = (
+            takeup_rates
+            if takeup_rates is not None
+            else PolicyEngineUSDataTakeupRateSource()
+        )
+        resolved_takeup_rerandomizer = SeededPolicyEngineUSTakeupRerandomizer(
+            resolved_takeup_rates,
+            seed=seed,
+        )
+    return PolicyEngineUSRuntimeAdapter(
+        materializer=resolved_materializer,
+        takeup_rerandomizer=resolved_takeup_rerandomizer,
+        period=period,
+    )
+
+
 def _variables_by_spec_entity(
     variables: Mapping[str, VariableSpec],
 ) -> dict[EntityType, tuple[str, ...]]:
@@ -802,4 +841,5 @@ __all__ = [
     "TAKEUP_VARIABLE_PROGRAM",
     "TAKEUP_VARIABLE_RATE_PARAMETER",
     "TAKEUP_VARIABLES_BY_PROGRAM",
+    "create_policyengine_us_runtime_adapter",
 ]
