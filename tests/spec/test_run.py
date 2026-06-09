@@ -8,8 +8,10 @@ are reported as pending.
 
 from __future__ import annotations
 
+import json
 import sys
 import types
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -48,6 +50,7 @@ US_SPINE_KEYWORDS = (
     "employment_income",
     "taxable_interest_income",
 )
+ROOT = Path(__file__).resolve().parents[2]
 
 
 @pytest.fixture(autouse=True)
@@ -208,6 +211,7 @@ def _spec_dict() -> dict:
             "arch": {
                 "country": "us",
                 "model_year": 2024,
+                "manifest": "manifests/arch_targets.json",
                 "target_profile": "pe_native_broad",
                 "calibration_target_profile": "pe_native_broad_source_backed",
             }
@@ -508,6 +512,30 @@ def _target_set_with_missing_feature() -> TargetSet:
     return target_set
 
 
+def _arch_consumer_fact_row(
+    concept: str,
+    *,
+    aggregation: str = "count",
+    period: int = 2024,
+    value: float = 1.0,
+) -> dict:
+    return {
+        "aggregation": {"method": aggregation},
+        "geography": {"id": "0100000US", "level": "country"},
+        "observed_measure": {
+            "source_concept": concept,
+            "source_name": "irs_soi",
+            "source_table": "fixture",
+            "unit": "count" if aggregation == "count" else "usd",
+        },
+        "period": {"type": "tax_year", "value": period},
+        "schema_version": "arch.consumer_fact.v1",
+        "source": {"source_name": "irs_soi", "source_table": "fixture"},
+        "universe_constraints": {"constraints": []},
+        "value": value,
+    }
+
+
 class TestRunSpec:
     def test_spine_first_requires_explicit_pack_keywords(self) -> None:
         spec = load_spec_dict(_spec_dict())
@@ -667,6 +695,82 @@ class TestRunSpec:
             "target_profile": "pe_native_broad",
             "calibration_target_profile": "pe_native_broad_source_backed",
         }
+
+    def test__given_arch_consumer_fact_paths__then_declared_target_surface_loads(
+        self, tmp_path: Path
+    ) -> None:
+        facts = tmp_path / "consumer_facts.jsonl"
+        facts.write_text(
+            json.dumps(
+                _arch_consumer_fact_row(
+                    "irs_soi.individual_income_tax_returns",
+                    value=123.0,
+                ),
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        spec = load_spec_dict(_spec_dict())
+
+        result = _run_spec(
+            spec,
+            _sources(),
+            demographic_columns=DEMOGRAPHIC_COLS,
+            arch_consumer_fact_paths=[facts],
+            arch_target_manifest_base=ROOT / "packs/us",
+        )
+
+        assert result.target_set is not None
+        assert result.pending_stages == ("calibrate", "export")
+        assert len(result.target_set.targets) == 1
+        target = result.target_set.targets[0]
+        assert target.entity is EntityType.TAX_UNIT
+        assert target.measure == "tax_unit_count"
+        assert target.value == 123.0
+
+    def test__given_target_provider_and_arch_paths__then_run_spec_rejects_ambiguity(
+        self, tmp_path: Path
+    ) -> None:
+        facts = tmp_path / "consumer_facts.jsonl"
+        facts.write_text(
+            json.dumps(_arch_consumer_fact_row("irs_soi.individual_income_tax_returns"))
+            + "\n",
+            encoding="utf-8",
+        )
+        spec = load_spec_dict(_spec_dict())
+
+        with pytest.raises(
+            ValueError,
+            match="target_provider or arch_consumer_fact_paths",
+        ):
+            _run_spec(
+                spec,
+                _sources(),
+                demographic_columns=DEMOGRAPHIC_COLS,
+                target_provider=RecordingTargetProvider(_target_set()),
+                arch_consumer_fact_paths=[facts],
+                arch_target_manifest_base=ROOT / "packs/us",
+            )
+
+    def test__given_relative_arch_manifest_without_base__then_run_spec_fails_closed(
+        self, tmp_path: Path
+    ) -> None:
+        facts = tmp_path / "consumer_facts.jsonl"
+        facts.write_text(
+            json.dumps(_arch_consumer_fact_row("irs_soi.individual_income_tax_returns"))
+            + "\n",
+            encoding="utf-8",
+        )
+        spec = load_spec_dict(_spec_dict())
+
+        with pytest.raises(ValueError, match="arch_target_manifest_base"):
+            _run_spec(
+                spec,
+                _sources(),
+                demographic_columns=DEMOGRAPHIC_COLS,
+                arch_consumer_fact_paths=[facts],
+            )
 
     def test_calibrator_runs_after_declared_targets_are_loaded(self) -> None:
         spec = load_spec_dict(_spec_dict())

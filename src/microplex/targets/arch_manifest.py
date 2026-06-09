@@ -20,10 +20,11 @@ from microplex.targets.arch import (
     arch_consumer_fact_geography_id,
     arch_consumer_fact_geography_level,
     arch_consumer_fact_target_type,
+    load_arch_target_records,
     mapping_value,
 )
 from microplex.targets.arch_derivations import ArchTargetRecord
-from microplex.targets.arch_provider import ArchPipelineConfig
+from microplex.targets.arch_provider import ArchPipelineConfig, ArchTargetProvider
 
 ARCH_TARGET_MANIFEST_SCHEMA_VERSION = "microplex.arch_targets.v1"
 
@@ -324,6 +325,86 @@ def load_arch_target_manifest(pathlike: str | Path) -> ArchTargetManifest:
     return ArchTargetManifest.from_path(pathlike)
 
 
+def load_manifest_arch_target_records(
+    manifest: ArchTargetManifest,
+    consumer_fact_paths: str | Path | Sequence[str | Path],
+    *,
+    period: int | None = None,
+) -> tuple[ArchTargetRecord, ...]:
+    """Load consumer-fact JSONL rows through a declarative Arch manifest."""
+    return load_arch_target_records(
+        _resolve_consumer_fact_files(consumer_fact_paths),
+        period=period,
+        variable_of=manifest.variable_of,
+        target_type_of=manifest.target_type_of,
+        constraints_of=manifest.constraints_of,
+        geography_level_of=manifest.geography_level_of,
+        geography_id_of=manifest.geography_id_of,
+    )
+
+
+def arch_target_provider_from_consumer_facts(
+    manifest_path: str | Path,
+    consumer_fact_paths: str | Path | Sequence[str | Path],
+    *,
+    target_year: int | None = None,
+    reference_paths: str | Path | Sequence[str | Path] | None = None,
+) -> ArchTargetProvider:
+    """Build an Arch target provider from a manifest and JSONL artifacts.
+
+    ``consumer_fact_paths`` may point to JSONL files, directories containing a
+    direct ``consumer_facts.jsonl``, or directories with suite subdirectories
+    containing ``consumer_facts.jsonl``. The target year configures the Arch
+    derivation pipeline; rows are not period-filtered here because derivations
+    need historic records for aging and carry-forward behavior.
+    """
+    manifest = load_arch_target_manifest(manifest_path)
+    records = load_manifest_arch_target_records(manifest, consumer_fact_paths)
+    reference_records = (
+        load_manifest_arch_target_records(manifest, reference_paths)
+        if reference_paths is not None
+        else None
+    )
+    return ArchTargetProvider(
+        records=records,
+        reference_records=reference_records,
+        config=manifest.pipeline_config(target_year=target_year),
+        entity_of=manifest.entity_of,
+        measure_of=manifest.measure_of,
+        geo_feature=manifest.geo_feature,
+        count_measure=manifest.count_measure,
+    )
+
+
+def _resolve_consumer_fact_files(
+    paths: str | Path | Sequence[str | Path],
+) -> tuple[Path, ...]:
+    path_items = (paths,) if isinstance(paths, (str, Path)) else tuple(paths)
+    if not path_items:
+        raise ValueError("at least one Arch consumer fact path is required")
+
+    files: list[Path] = []
+    for pathlike in path_items:
+        path = Path(pathlike)
+        if path.is_file():
+            files.append(path)
+            continue
+        if path.is_dir():
+            matches: list[Path] = []
+            direct = path / "consumer_facts.jsonl"
+            if direct.is_file():
+                matches.append(direct)
+            matches.extend(sorted(path.glob("*/consumer_facts.jsonl")))
+            if not matches:
+                raise FileNotFoundError(
+                    f"No consumer_facts.jsonl files found under {path}"
+                )
+            files.extend(matches)
+            continue
+        raise FileNotFoundError(f"Arch consumer fact path does not exist: {path}")
+    return tuple(dict.fromkeys(files))
+
+
 def _concept_candidates(fact: ArchConsumerFact) -> tuple[str, ...]:
     concept_alignment = mapping_value(fact.row.get("concept_alignment"))
     observed_measure = mapping_value(fact.row.get("observed_measure"))
@@ -444,5 +525,7 @@ def _string_set(value: Any) -> frozenset[str]:
 __all__ = [
     "ARCH_TARGET_MANIFEST_SCHEMA_VERSION",
     "ArchTargetManifest",
+    "arch_target_provider_from_consumer_facts",
+    "load_manifest_arch_target_records",
     "load_arch_target_manifest",
 ]
