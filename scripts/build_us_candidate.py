@@ -77,16 +77,68 @@ PERSON_INCOME_COLUMNS = (
 )
 
 
-def _load_spec_imputation_steps() -> list[dict]:
-    """Lift the ASEC+PUF imputation steps from the canonical pack spec."""
-    spec = yaml.safe_load((REPO / "packs/us/specs/us-2024.yaml").read_text())
-    steps = []
-    for step in spec.get("imputation", []):
-        if step.get("from") == "puf":
-            steps.append(step)
-    if not steps:
-        raise RuntimeError("no PUF imputation steps found in packs spec")
-    return steps
+# Donor-named variables the PUF source actually carries, imputed at
+# tax-unit grain. CPS-measured ones (also on the spine base) are listed in
+# CPS_MEASURED; the rest are PUF-only detail imputed onto both halves.
+PUF_IMPUTE_VARS = (
+    "employment_income",
+    "self_employment_income",
+    "social_security",
+    "taxable_pension_income",
+    "taxable_interest_income",
+    "unemployment_compensation",
+    "rental_income",
+    "partnership_s_corp_income",
+    "farm_income",
+    "tax_exempt_interest_income",
+    "qualified_dividend_income",
+    "ordinary_dividend_income",
+    "short_term_capital_gains",
+    "long_term_capital_gains",
+    "taxable_pension_income",
+    "total_pension_income",
+    "ira_distributions",
+    "alimony_received",
+    "charitable_cash",
+    "charitable_noncash",
+    "mortgage_interest_paid",
+    "real_estate_tax_paid",
+)
+CPS_MEASURED = (
+    "employment_income",
+    "self_employment_income",
+    "social_security",
+    "taxable_pension_income",
+    "taxable_interest_income",
+    "unemployment_compensation",
+    "rental_income",
+)
+
+# donor/common name -> PolicyEngine contract name at person allocation.
+DONOR_TO_PE = {
+    "unemployment_compensation": "taxable_unemployment_compensation",
+    "ira_distributions": "taxable_ira_distributions",
+    "alimony_received": "alimony_income",
+    "charitable_cash": "charitable_cash_donations",
+    "charitable_noncash": "charitable_non_cash_donations",
+    "mortgage_interest_paid": "interest_deduction",
+    "real_estate_tax_paid": "real_estate_taxes",
+    "ordinary_dividend_income": "non_qualified_dividend_income",
+}
+
+SHARED_PREDICTORS = ("age", "is_joint", "n_people", "n_children")
+
+
+def _build_imputation_steps() -> list[dict]:
+    """v1 ASEC+PUF imputation graph over donor-available variables."""
+    puf_vars = list(dict.fromkeys(PUF_IMPUTE_VARS))
+    puf_only = [v for v in puf_vars if v not in CPS_MEASURED]
+    return [
+        {"onto": "synthetic_puf", "from": "puf", "vars": puf_vars,
+         "order": "spine_first"},
+        {"onto": "cps_keep", "from": "puf", "vars": puf_only,
+         "condition_on": ["demographics", *CPS_MEASURED]},
+    ]
 
 
 def _aggregate_tax_units(person: pd.DataFrame, tax_unit: pd.DataFrame) -> pd.DataFrame:
@@ -95,19 +147,30 @@ def _aggregate_tax_units(person: pd.DataFrame, tax_unit: pd.DataFrame) -> pd.Dat
     base = pd.DataFrame(index=g.size().index)
     base["tax_unit_id"] = base.index
     base["household_id"] = g["household_id"].first()
-    base["n_people"] = g.size()
-    base["age_head"] = g.apply(
-        lambda f: f.loc[f["tax_unit_role_input"] == "HEAD", "A_AGE"].max()
-        if (f["tax_unit_role_input"] == "HEAD").any()
-        else f["A_AGE"].max(),
-        include_groups=False,
+    base["n_people"] = g.size().astype(float)
+    is_head = person["tax_unit_role_input"] == "HEAD"
+    head_age = (
+        person.loc[is_head]
+        .groupby("person_tax_unit_id")["A_AGE"]
+        .max()
+        .astype(float)
     )
-    base["n_children"] = g.apply(
-        lambda f: int((f["A_AGE"] < 18).sum()), include_groups=False
+    base["age"] = head_age.reindex(base.index).fillna(
+        g["A_AGE"].max().astype(float)
     )
-    base["is_joint"] = g.apply(
-        lambda f: bool((f["tax_unit_role_input"] == "SPOUSE").any()),
-        include_groups=False,
+    base["n_children"] = (
+        person.assign(_child=(person["A_AGE"] < 18).astype(float))
+        .groupby("person_tax_unit_id")["_child"]
+        .sum()
+        .reindex(base.index)
+        .fillna(0.0)
+    )
+    base["is_joint"] = (
+        person.assign(_sp=(person["tax_unit_role_input"] == "SPOUSE").astype(float))
+        .groupby("person_tax_unit_id")["_sp"]
+        .max()
+        .reindex(base.index)
+        .fillna(0.0)
     )
     for col in PERSON_INCOME_COLUMNS:
         if col in person.columns:
@@ -255,7 +318,7 @@ def main() -> int:
 
     # ---- Stage D: run_spec --------------------------------------------------
     log("stage D: run_spec (support spine + PUF imputation)")
-    steps = _load_spec_imputation_steps()
+    steps = _build_imputation_steps()
     imputed_vars = sorted({v for s in steps for v in s.get("vars", [])})
     registry = create_us_asec_puf_source_registry(
         asec_year=args.asec_year,
@@ -271,7 +334,6 @@ def main() -> int:
         "state_fips",
         "filing_status_input",
     ]
-    demo = ["age_head", "n_people", "n_children", "is_joint"]
     spec = load_spec_dict(
         {
             "meta": {"country": "us", "model_year": args.calendar_year},
@@ -290,7 +352,10 @@ def main() -> int:
                 "support": {"seed": args.seed},
                 "halves": [
                     {"name": "cps_keep", "keep": "all"},
-                    {"name": "synthetic_puf", "strip_to": ["demographics"]},
+                    {
+                        "name": "synthetic_puf",
+                        "strip_to": ["demographics", *id_keep],
+                    },
                 ],
             },
             "imputation": steps,
@@ -299,12 +364,24 @@ def main() -> int:
     puf = registry.resolve_source(spec, "puf")
     if max_puf is not None:
         puf = puf.head(max_puf).copy()
+    # Harmonize donor names + derive the shared predictor surface.
+    puf = puf.rename(columns={"gross_social_security": "social_security"})
+    puf["is_joint"] = (puf["filing_status"] == "JOINT").astype(float)
+    puf["n_people"] = puf["exemptions_count"].clip(lower=1).astype(float)
+    puf["n_children"] = puf["ctc_children"].fillna(0).astype(float)
+    puf["age"] = puf["age"].astype(float)
     log(f"  puf donor rows: {len(puf):,}")
     result = run_spec(
         spec,
         {"cps_asec": base, "puf": puf},
-        demographic_columns=tuple(dict.fromkeys(demo + id_keep)),
-        spine_keywords=(),
+        demographic_columns=SHARED_PREDICTORS,
+        spine_keywords=(
+            "employment_income",
+            "self_employment_income",
+            "social_security",
+            "taxable_pension_income",
+            "taxable_interest_income",
+        ),
     )
     spine = result.frame
     half_col = [c for c in spine.columns if c.startswith("_spine")][0]
@@ -324,6 +401,21 @@ def main() -> int:
     # ---- Stage F: entity assembly ------------------------------------------
     log("stage F: person re-attach + entity tables")
     person = _allocate_to_persons(person, spine, imputed_vars, half_col)
+    # Donor/common names -> PolicyEngine contract names; derived splits.
+    person = person.rename(columns=DONOR_TO_PE)
+    if {"total_pension_income", "taxable_pension_income"} <= set(person.columns):
+        person["tax_exempt_pension_income"] = (
+            person["total_pension_income"] - person["taxable_pension_income"]
+        ).clip(lower=0.0)
+        person = person.drop(columns=["total_pension_income"])
+    if {
+        "non_qualified_dividend_income",
+        "qualified_dividend_income",
+    } <= set(person.columns):
+        person["non_qualified_dividend_income"] = (
+            person["non_qualified_dividend_income"]
+            - person["qualified_dividend_income"]
+        ).clip(lower=0.0)
     person["person_household_id"] = person["household_id"]
     person["person_id"] = np.arange(1, len(person) + 1, dtype=np.int64)
     person["age"] = person["A_AGE"].astype(float)
