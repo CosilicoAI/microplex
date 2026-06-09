@@ -341,10 +341,10 @@ def _assign_blocks(
     xw = pd.read_parquet(crosswalk_path)
     rng = np.random.default_rng(seed)
     households = households.copy()
-    households["block_geoid"] = ""
-    households["county_fips"] = ""
-    households["congressional_district_geoid"] = ""
     xw["state_fips"] = xw["state_fips"].astype(int)
+    block = pd.Series("", index=households.index, dtype=object)
+    county = pd.Series("", index=households.index, dtype=object)
+    cd = pd.Series(0, index=households.index, dtype="int64")
     for state, idx in households.groupby(
         households["state_fips"].astype(int)
     ).groups.items():
@@ -355,23 +355,21 @@ def _assign_blocks(
         p = p / p.sum()
         draw = rng.choice(len(pool), size=len(idx), p=p)
         chosen = pool.iloc[draw]
-        households.loc[idx, "block_geoid"] = chosen["geoid"].astype(str).to_numpy()
-        households.loc[idx, "county_fips"] = (
-            chosen["geoid"].astype(str).str[:5].to_numpy()
-        )
+        geoid = chosen["geoid"].astype(str).to_numpy()
+        block.loc[idx] = geoid
+        county.loc[idx] = [g[:5] for g in geoid]
         district = (
             chosen["cd_id"]
             .astype(str)
             .str.extract(r"(\d+)$")[0]
             .fillna("0")
             .astype(int)
+            .to_numpy()
         )
-        households.loc[idx, "congressional_district_geoid"] = (
-            int(state) * 100 + district
-        ).to_numpy()
-    households["congressional_district_geoid"] = pd.to_numeric(
-        households["congressional_district_geoid"], errors="coerce"
-    ).fillna(0).astype(np.int32)
+        cd.loc[idx] = int(state) * 100 + district
+    households["block_geoid"] = block.astype(str)
+    households["county_fips"] = county.astype(str)
+    households["congressional_district_geoid"] = cd.astype(np.int32)
     return households
 
 
@@ -424,7 +422,12 @@ def main() -> int:
     ap.add_argument(
         "--baseline-h5",
         type=Path,
-        default=US_DATA_STORAGE / "enhanced_cps_2024.h5",
+        default=OLD_WORKTREE / "artifacts/baselines/enhanced_cps_2024_hf_main.h5",
+    )
+    ap.add_argument(
+        "--usdata-repo",
+        type=Path,
+        default=Path("~/.claude-worktrees/usdata-f7458313").expanduser(),
     )
     args = ap.parse_args()
 
@@ -727,6 +730,11 @@ def main() -> int:
             str(out / "sound_comparison"),
             "--period",
             str(args.calendar_year),
+            "--force",
+            "--policyengine-us-data-repo",
+            str(args.usdata_repo),
+            "--policyengine-us-data-python",
+            str(args.usdata_repo / ".venv/bin/python"),
         ]
         log("  " + " ".join(cmd))
         proc = subprocess.run(cmd, cwd=OLD_WORKTREE, capture_output=True, text=True)

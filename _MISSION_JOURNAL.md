@@ -130,3 +130,20 @@ PUF source: registry puf_path=…/storage/puf_2024.h5 (verify format; HF fallbac
   to uv (tool.uv.sources honored). Trunk has working CI; no microimpute release needed.
 - Driver: scripts/build_us_candidate.py (smoke: 4k tax units / 8k PUF; full: --mode full --score).
   Iterating smoke: fix1 CPSDataset polars accessors; fix2 resolve PUF via main spec.
+
+## Smoke COMPLETE (2026-06-10 ~01:30): full pipeline + scoring path validated
+- Export gate: 252/252 required, 188 defaulted, 0 forbidden. Time-period sibling export
+  (candidate_timeperiod.h5) for the harness.
+- SCORING ENV (the hard-won recipe): harness = ~/CosilicoAI/microplex-us/.venv python -m
+  microplex_us.pipelines.ecps_replacement_comparison; baseline MUST be
+  ~/CosilicoAI/microplex-us/artifacts/baselines/enhanced_cps_2024_hf_main.h5 (storage
+  copy lacks congressional_district_geoid); delegation MUST pin
+  --policyengine-us-data-repo ~/.claude-worktrees/usdata-f7458313 (worktree @ f7458313,
+  venv PE 1.715.3 == June-7 certificate env) AND --policyengine-us-data-python
+  <that venv> — otherwise `uv run --project` RESYNCS the moving us-data repo (local main
+  ahead-198) whose current code breaks (get_soi uprating KeyError) and whose PE 1.570.7
+  breaks reform branches (de_tanf ParameterNotFoundError under tax-expenditure targets;
+  --skip-tax-expenditure-targets is REFUSED by the sound comparison).
+- Smoke's only failure mode left: "target names differ" because head(4000) cap = ME/MA
+  only → state targets missing. Cap artifact; full national build resolves.
+- Driver defaults updated (hf_main baseline + pinned repo/python flags).

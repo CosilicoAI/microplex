@@ -1,0 +1,19 @@
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/Users/maxghenis/CosilicoAI/microplex-us/src/microplex_us/pipelines/ecps_replacement_comparison.py", line 1170, in <module>
+    raise SystemExit(main())
+                     ~~~~^^
+  File "/Users/maxghenis/CosilicoAI/microplex-us/src/microplex_us/pipelines/ecps_replacement_comparison.py", line 1142, in main
+    written = write_sound_ecps_replacement_comparison(
+        output_path,
+    ...<19 lines>...
+        force=args.force,
+    )
+  File "/Users/maxghenis/CosilicoAI/microplex-us/src/microplex_us/pipelines/ecps_replacement_comparison.py", line 345, in write_sound_ecps_replacement_comparison
+    payload = build_sound_ecps_replacement_comparison(**kwargs)
+  File "/Users/maxghenis/CosilicoAI/microplex-us/src/microplex_us/pipelines/ecps_replacement_comparison.py", line 134, in build_sound_ecps_replacement_comparison
+    target_names = _validate_common_targets(candidate_inputs, baseline_inputs)
+  File "/Users/maxghenis/CosilicoAI/microplex-us/src/microplex_us/pipelines/ecps_replacement_comparison.py", line 632, in _validate_common_targets
+    raise ValueError("candidate and baseline PE-native target names differ")
+ValueError: candidate and baseline PE-native target names differ

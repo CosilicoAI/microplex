@@ -1,0 +1,51 @@
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/Users/maxghenis/CosilicoAI/microplex-us/src/microplex_us/pipelines/ecps_replacement_comparison.py", line 1170, in <module>
+    raise SystemExit(main())
+                     ~~~~^^
+  File "/Users/maxghenis/CosilicoAI/microplex-us/src/microplex_us/pipelines/ecps_replacement_comparison.py", line 1142, in main
+    written = write_sound_ecps_replacement_comparison(
+        output_path,
+    ...<19 lines>...
+        force=args.force,
+    )
+  File "/Users/maxghenis/CosilicoAI/microplex-us/src/microplex_us/pipelines/ecps_replacement_comparison.py", line 345, in write_sound_ecps_replacement_comparison
+    payload = build_sound_ecps_replacement_comparison(**kwargs)
+  File "/Users/maxghenis/CosilicoAI/microplex-us/src/microplex_us/pipelines/ecps_replacement_comparison.py", line 120, in build_sound_ecps_replacement_comparison
+    candidate_inputs = _extract_pe_native_loss_inputs(
+        input_dataset_path=matched_candidate_path,
+    ...<3 lines>...
+        skip_tax_expenditure_targets=skip_tax_expenditure_targets,
+    )
+  File "/Users/maxghenis/CosilicoAI/microplex-us/src/microplex_us/pipelines/ecps_replacement_comparison.py", line 608, in _extract_pe_native_loss_inputs
+    raise RuntimeError(f"PE-native loss-matrix extraction failed: {detail}")
+RuntimeError: PE-native loss-matrix extraction failed: Traceback (most recent call last):
+  File "/Users/maxghenis/PolicyEngine/policyengine-us-data/.venv/lib/python3.13/site-packages/pandas/core/indexes/base.py", line 3812, in get_loc
+    return self._engine.get_loc(casted_key)
+           ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^
+  File "pandas/_libs/index.pyx", line 167, in pandas._libs.index.IndexEngine.get_loc
+  File "pandas/_libs/index.pyx", line 196, in pandas._libs.index.IndexEngine.get_loc
+  File "pandas/_libs/hashtable_class_helper.pxi", line 7088, in pandas._libs.hashtable.PyObjectHashTable.get_item
+  File "pandas/_libs/hashtable_class_helper.pxi", line 7096, in pandas._libs.hashtable.PyObjectHashTable.get_item
+KeyError: 'employment_income'
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "<string>", line 36, in <module>
+    loss_matrix, targets_array = build_loss_matrix(dataset_cls, PERIOD)
+                                 ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/maxghenis/PolicyEngine/policyengine-us-data/policyengine_us_data/utils/loss.py", line 125, in build_loss_matrix
+    soi_subset = get_soi(time_period)
+  File "/Users/maxghenis/PolicyEngine/policyengine-us-data/policyengine_us_data/utils/soi.py", line 184, in get_soi
+    uprating.loc["employment_income", year]
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/maxghenis/PolicyEngine/policyengine-us-data/.venv/lib/python3.13/site-packages/pandas/core/indexing.py", line 1184, in __getitem__
+    return self.obj._get_value(*key, takeable=self._takeable)
+           ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/maxghenis/PolicyEngine/policyengine-us-data/.venv/lib/python3.13/site-packages/pandas/core/frame.py", line 4232, in _get_value
+    row = self.index.get_loc(index)
+  File "/Users/maxghenis/PolicyEngine/policyengine-us-data/.venv/lib/python3.13/site-packages/pandas/core/indexes/base.py", line 3819, in get_loc
+    raise KeyError(key) from err
+KeyError: 'employment_income'
