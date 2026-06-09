@@ -45,13 +45,55 @@ def test_amount_record_converts_to_sum_target_with_measure():
     assert spec.metadata["arch_variable"] == "employment_income"
 
 
-def test_count_record_converts_to_count_target_without_measure():
+def test_count_record_converts_to_sum_of_entity_count_measure():
+    # a count is a sum of an entity-count measure (1 per record at that level)
     spec = arch_target_record_to_target_spec(
-        _rec("tax_unit_count", 50.0, target_type="COUNT"), entity="tax_unit"
+        _rec("returns", 50.0, target_type="COUNT"), entity="tax_unit"
     )
-    assert spec.aggregation is TargetAggregation.COUNT
-    assert spec.measure is None
+    assert spec.aggregation is TargetAggregation.SUM
+    assert spec.measure == "tax_unit_count"
     assert spec.entity is EntityType.TAX_UNIT
+
+
+def test_rate_target_type_is_rejected():
+    import pytest
+
+    with pytest.raises(ValueError):
+        arch_target_record_to_target_spec(
+            _rec("poverty_rate", 0.1, target_type="RATE"), entity="person"
+        )
+
+
+def test_subnational_record_gets_geography_filter():
+    spec = arch_target_record_to_target_spec(
+        _rec("agi", 1.0, geographic_level="STATE", geography_id="06"),
+        entity="tax_unit",
+    )
+    geo = [f for f in spec.filters if f.feature == "state_fips"]
+    assert len(geo) == 1
+    assert geo[0].value == "06"
+
+
+def test_national_record_gets_no_geography_filter():
+    spec = arch_target_record_to_target_spec(
+        _rec("agi", 1.0, geographic_level="NATIONAL", geography_id=None),
+        entity="tax_unit",
+    )
+    assert spec.filters == ()
+
+
+def test_existing_geo_constraint_not_duplicated():
+    spec = arch_target_record_to_target_spec(
+        _rec(
+            "agi",
+            1.0,
+            geographic_level="STATE",
+            geography_id="06",
+            constraints=(("state_fips", "==", "06"),),
+        ),
+        entity="tax_unit",
+    )
+    assert len([f for f in spec.filters if f.feature == "state_fips"]) == 1
 
 
 def test_constraints_become_target_filters():

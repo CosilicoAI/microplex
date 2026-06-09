@@ -8,10 +8,15 @@ the calibration-facing :class:`~microplex.targets.spec.TargetSpec` /
 ``TargetSet`` (codex's iter280 decision).
 
 This module is that boundary adapter: ``ArchTargetRecord`` -> ``TargetSpec``.
-The PE entity for each variable is injected (``entity_of``); aggregation follows
-the target type (``COUNT`` -> count with no measure, otherwise sum over the
-variable); constraints become target filters; and Arch lineage is preserved in
-``TargetSpec.metadata`` so the calibration surface stays auditable.
+The PE entity for each variable is injected (``entity_of``). Every target is a
+**SUM over a measure with filters** — there is no separate count aggregation: an
+``AMOUNT`` record sums its variable, and a ``COUNT`` record sums an entity-count
+measure (e.g. ``tax_unit_count``, 1 per record at that level), so a count is a
+sum of ones. Record constraints become target filters, and geography is added as
+an explicit filter (``state_fips == ...``) so subnational targets are scoped
+rather than left national. Other target types (e.g. ``RATE``) are out of scope
+and raise. Arch lineage is preserved in ``TargetSpec.metadata`` so the
+calibration surface stays auditable.
 """
 
 from __future__ import annotations
@@ -42,6 +47,8 @@ from microplex.targets.spec import (
 
 __all__ = [
     "default_arch_target_name",
+    "default_geo_feature",
+    "default_count_measure",
     "arch_target_record_to_target_spec",
     "arch_records_to_target_set",
     "arch_record_composition_key",
@@ -55,10 +62,41 @@ EntityOfFn = Callable[[str], EntityType | str]
 NameOfFn = Callable[[ArchTargetRecord], str]
 MeasureOfFn = Callable[[str], str | None]
 SkipFn = Callable[[ArchTargetRecord], bool]
+GeoFeatureFn = Callable[[str | None], str | None]
+CountMeasureFn = Callable[[EntityType], str]
+
+#: geography level -> the microdata feature that identifies it.
+DEFAULT_GEO_FEATURES = {
+    "state": "state_fips",
+    "county": "county_fips",
+    "district": "congressional_district",
+    "congressional_district": "congressional_district",
+    "tract": "tract_geoid",
+    "block": "block_geoid",
+}
 
 
 def _normalized_geo_level(record: ArchTargetRecord) -> str:
     return (record.geographic_level or "").lower()
+
+
+def default_geo_feature(geo_level: str | None) -> str | None:
+    """The microdata feature identifying a geography level (``None`` = national).
+
+    e.g. ``state`` -> ``state_fips``. Packs can inject their own mapping.
+    """
+    if geo_level is None:
+        return None
+    return DEFAULT_GEO_FEATURES.get(geo_level.lower())
+
+
+def default_count_measure(entity: EntityType) -> str:
+    """The entity-count measure that is 1 per record at the entity level.
+
+    A count target is a **sum** of this (e.g. ``tax_unit_count``), so counts and
+    sums share one aggregation path. Packs can inject their own mapping.
+    """
+    return f"{entity.value}_count"
 
 
 def default_arch_target_name(record: ArchTargetRecord) -> str:
@@ -84,24 +122,50 @@ def arch_target_record_to_target_spec(
     measure: str | None = None,
     name: str | None = None,
     name_of: NameOfFn = default_arch_target_name,
+    geo_feature: GeoFeatureFn = default_geo_feature,
+    count_measure: CountMeasureFn = default_count_measure,
 ) -> TargetSpec:
     """Convert one derived ``ArchTargetRecord`` into a canonical ``TargetSpec``.
 
-    - ``COUNT`` records become count targets (no measure); all others sum over
-      ``measure`` (defaulting to the record's variable).
-    - Record constraints become :class:`TargetFilter`s.
-    - Arch lineage (ids, concept, source table/url, geography) is kept in
-      ``metadata`` so the calibration surface remains auditable.
+    Every target is a **SUM over a measure with filters** — there is no separate
+    count aggregation. An ``AMOUNT`` record sums its variable; a ``COUNT`` record
+    sums an **entity-count measure** (``count_measure(entity)``, 1 per record at
+    that level), so a count is a sum of ones and conditional counts fall out of
+    the filters. Any other target type (e.g. ``RATE``) is out of scope and raises.
+
+    Record constraints become :class:`TargetFilter`s, and the record's geography
+    is added as an explicit filter (``geo_feature(level) == geography_id``) so a
+    state/county/district target is scoped rather than left national — unless
+    that feature is already constrained. Arch lineage is kept in ``metadata``.
     """
-    is_count = record.target_type == "COUNT"
-    aggregation = TargetAggregation.COUNT if is_count else TargetAggregation.SUM
-    resolved_measure = (
-        None if is_count else (measure if measure is not None else record.variable)
-    )
-    filters = tuple(
+    entity_type = entity if isinstance(entity, EntityType) else EntityType(entity)
+    if record.target_type == "AMOUNT":
+        resolved_measure = measure if measure is not None else record.variable
+    elif record.target_type == "COUNT":
+        resolved_measure = (
+            measure if measure is not None else count_measure(entity_type)
+        )
+    else:
+        raise ValueError(
+            f"unsupported Arch target_type {record.target_type!r} for "
+            f"{record.variable!r}: only AMOUNT and COUNT are supported "
+            "(counts are summed entity-count measures; RATE is out of scope)"
+        )
+
+    filters = [
         TargetFilter(feature=variable, operator=operator, value=value)
         for variable, operator, value in record.constraints
-    )
+    ]
+    constrained_features = {variable for variable, _, _ in record.constraints}
+    feature = geo_feature(record.geographic_level)
+    if (
+        feature is not None
+        and record.geography_id is not None
+        and feature not in constrained_features
+    ):
+        filters.append(
+            TargetFilter(feature=feature, operator="==", value=str(record.geography_id))
+        )
     lineage = {
         "arch_variable": record.variable,
         "target_type": record.target_type,
@@ -124,12 +188,12 @@ def arch_target_record_to_target_spec(
     metadata = {key: value for key, value in lineage.items() if value is not None}
     return TargetSpec(
         name=name if name is not None else name_of(record),
-        entity=entity,
+        entity=entity_type,
         value=float(record.value),
         period=record.period,
         measure=resolved_measure,
-        aggregation=aggregation,
-        filters=filters,
+        aggregation=TargetAggregation.SUM,
+        filters=tuple(filters),
         source=record.source or None,
         units=record.unit,
         description=record.notes,
@@ -144,6 +208,8 @@ def arch_records_to_target_set(
     skip: SkipFn | None = None,
     measure_of: MeasureOfFn | None = None,
     name_of: NameOfFn = default_arch_target_name,
+    geo_feature: GeoFeatureFn = default_geo_feature,
+    count_measure: CountMeasureFn = default_count_measure,
 ) -> TargetSet:
     """Convert derived Arch records into a ``TargetSet`` (the calibration surface).
 
@@ -163,6 +229,8 @@ def arch_records_to_target_set(
                 entity=entity_of(record.variable),
                 measure=measure,
                 name_of=name_of,
+                geo_feature=geo_feature,
+                count_measure=count_measure,
             )
         )
     return TargetSet(specs)
