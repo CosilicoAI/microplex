@@ -97,12 +97,13 @@ preserved (passthrough), that a split sums back, and that the target provider
 receives the declared Arch country/model-year/profile query.
 
 `run_spec` can now run the generic national/entity-table calibration path when
-the caller supplies `calibration_entity` and `calibration_id_column`: it builds a
-one-table `EntityTableBundle`, compiles the loaded `TargetSet` into the
-certified sparse target matrix path, fits through `microcalibrate`, and returns
-the calibrated frame plus stable diagnostics. It still refuses to calibrate
-without a spec-declared loaded target surface, a stable non-null unique record
-id, and an explicit `calibrate` section.
+the caller supplies either `calibration_entity` plus `calibration_id_column` or a
+prepared `calibration_entity_bundle`: it builds or accepts an `EntityTableBundle`,
+compiles the loaded `TargetSet` into the certified sparse target matrix path,
+fits through `microcalibrate`, and returns the calibrated frame plus stable
+diagnostics. It still refuses to calibrate without a spec-declared loaded target
+surface, a stable non-null unique record id for one-table calibration, and an
+explicit `calibrate` section.
 
 ### 5a. `microplex.source_registry` — provider-backed source resolution
 `SourceRegistry` bridges spec content to real provider loaders: it resolves each
@@ -178,14 +179,16 @@ design.
 stage is no longer pending: the runner builds a `TargetQuery` from
 `targets.arch` (`country`, `model_year`, `target_profile`,
 `calibration_target_profile`) and attaches the loaded `TargetSet` to the
-result. If `calibration_entity` and `calibration_id_column` are supplied,
-`calibrate` runs through the generic `EntityTableBundleMicrocalibrator`; if not,
-it remains pending. No weights or calibrated datasets are fabricated. Remaining
-TODOs:
+result. If `calibration_entity` and `calibration_id_column` are supplied, or if
+a prepared `calibration_entity_bundle` is supplied, `calibrate` runs through the
+generic `EntityTableBundleMicrocalibrator`; if not, it remains pending. No
+weights or calibrated datasets are fabricated. Remaining TODOs:
 
-- **`calibrate` (multi-entity/clone-local variants):** the national/entity-table
-  path is wired. More complex multi-entity and local-area clone surfaces should
-  be added only as real data demands them.
+- **`calibrate` (concrete US wiring/clone-local variants):** the
+  national/entity-table path and prepared multi-entity bundle path are wired.
+  Real-data builders still need to pass the resolved US entity tables and
+  runtime simulation compiler explicitly; more complex local-area clone
+  surfaces should be added only as real data demands them.
 - **`export` (Exporter):** write the PolicyEngine dataset.
 
 ## Stretch goal (Arch provider move) — assessed and deferred, not attempted

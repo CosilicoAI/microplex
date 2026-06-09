@@ -364,6 +364,7 @@ def run_spec(
     arch_target_manifest_base: str | Path | None = None,
     calibrator: SpecCalibrator | None = None,
     calibration_entity: EntityType | str | None = None,
+    calibration_entity_bundle: EntityTableBundle | None = None,
     calibration_id_column: str | None = None,
     simulation_compiler: Any | None = None,
     calibration_certificate: Mapping[str, Any] | None = None,
@@ -412,7 +413,15 @@ def run_spec(
         calibration_entity: Optional entity label for generic entity-table
             calibration of the post-transform frame. When set, ``run_spec``
             builds a one-table :class:`EntityTableBundle` from ``frame`` and
-            calibrates it through ``EntityTableBundleMicrocalibrator``.
+            calibrates it through ``EntityTableBundleMicrocalibrator``. When
+            ``calibration_entity_bundle`` is supplied, this selects the
+            calibrated table returned as ``RunResult.frame`` and defaults to the
+            bundle's weight entity.
+        calibration_entity_bundle: Optional prepared multi-entity bundle for
+            generic calibration. This lets real-data builders pass linked
+            person/household/tax-unit frames to simulator-aware target
+            compilation instead of calibrating only the flat post-transform
+            frame.
         calibration_id_column: Record id column for the post-transform frame
             when ``calibration_entity`` is set.
         simulation_compiler: Optional simulator-aware target compiler for
@@ -584,13 +593,62 @@ def run_spec(
     # Stage 6: calibration. This seam is intentionally strict: calibrating
     # without a loaded TargetSet would recreate the stale eCPS-surface failure
     # mode that the release gates now forbid.
-    if calibrator is not None and calibration_entity is not None:
+    if calibrator is not None and (
+        calibration_entity is not None or calibration_entity_bundle is not None
+    ):
         raise ValueError(
-            "pass either a legacy calibrator or calibration_entity, not both"
+            "pass either a legacy calibrator or generic entity-table "
+            "calibration inputs, not both"
         )
 
     entity_table_bundle: EntityTableBundle | None = None
-    if calibration_entity is not None:
+    if calibration_entity_bundle is not None:
+        if calibration_id_column is not None:
+            raise ValueError(
+                "calibration_entity_bundle does not use calibration_id_column; "
+                "omit calibration_id_column or use calibration_entity without a "
+                "prepared bundle"
+            )
+        if spec.calibrate is None:
+            raise ValueError(
+                "calibration_entity_bundle was supplied but the spec has no "
+                "'calibrate' section"
+            )
+        if target_set is None:
+            raise ValueError(
+                "calibration_entity_bundle requires a loaded target_set; supply "
+                "target_provider for the spec-declared target surface"
+            )
+        output_entity = _calibration_output_entity(
+            calibration_entity_bundle,
+            calibration_entity,
+        )
+        bundle_result = _calibrate_entity_bundle(
+            calibration_entity_bundle,
+            target_set=target_set,
+            calibrate=spec.calibrate,
+            simulation_compiler=simulation_compiler,
+            certificate=calibration_certificate,
+            min_records_per_target=calibration_min_records_per_target,
+            allow_skipped_targets=allow_skipped_calibration_targets,
+        )
+        entity_table_bundle = bundle_result.bundle
+        final_frame = bundle_result.bundle.table_for(output_entity)
+        calibration_result = SpecCalibrationResult(
+            frame=final_frame,
+            diagnostics=bundle_result.diagnostics(),
+            entity_table_bundle=bundle_result.bundle,
+        )
+        pending_stages.remove("calibrate")
+        logger.info(
+            "run_spec: calibrated prepared entity bundle '%s' with %d targets "
+            "using '%s'/%s",
+            output_entity.value,
+            len(target_set.targets),
+            spec.calibrate.loss,
+            spec.calibrate.method.value,
+        )
+    elif calibration_entity is not None:
         if spec.calibrate is None:
             raise ValueError(
                 "calibration_entity was supplied but the spec has no "
@@ -708,15 +766,6 @@ def _calibrate_entity_frame(
     if weight_column not in frame.columns:
         raise ValueError(f"weight_column {weight_column!r} is not present in the frame")
 
-    try:
-        from microplex.calibration.microcalibrate_adapter import (
-            EntityTableBundleMicrocalibrator,
-        )
-    except ImportError as exc:  # pragma: no cover - depends on optional extra
-        raise ImportError(
-            "generic entity-table calibration requires the microcalibrate extra"
-        ) from exc
-
     entity_type = entity if isinstance(entity, EntityType) else EntityType(entity)
     bundle = EntityTableBundle(
         weight_entity=entity_type,
@@ -728,6 +777,37 @@ def _calibrate_entity_frame(
             )
         },
     )
+    return _calibrate_entity_bundle(
+        bundle,
+        target_set=target_set,
+        calibrate=calibrate,
+        simulation_compiler=simulation_compiler,
+        certificate=certificate,
+        min_records_per_target=min_records_per_target,
+        allow_skipped_targets=allow_skipped_targets,
+    )
+
+
+def _calibrate_entity_bundle(
+    bundle: EntityTableBundle,
+    *,
+    target_set: TargetSet,
+    calibrate: CalibrateSpec,
+    simulation_compiler: Any | None,
+    certificate: Mapping[str, Any] | None,
+    min_records_per_target: float | None,
+    allow_skipped_targets: bool,
+):
+    """Calibrate a prepared entity bundle through the generic sparse path."""
+    try:
+        from microplex.calibration.microcalibrate_adapter import (
+            EntityTableBundleMicrocalibrator,
+        )
+    except ImportError as exc:  # pragma: no cover - depends on optional extra
+        raise ImportError(
+            "generic entity-table calibration requires the microcalibrate extra"
+        ) from exc
+
     bundle_calibrator = EntityTableBundleMicrocalibrator(
         simulation_compiler=simulation_compiler,
         min_records_per_target=min_records_per_target,
@@ -739,6 +819,21 @@ def _calibrate_entity_frame(
         calibrate=calibrate,
         certificate=certificate,
     )
+
+
+def _calibration_output_entity(
+    bundle: EntityTableBundle,
+    entity: EntityType | str | None,
+) -> EntityType:
+    """Resolve which calibrated entity table should be returned as frame."""
+    output_entity = bundle.weight_entity if entity is None else EntityType(entity)
+    if output_entity not in bundle.bindings:
+        available = ", ".join(item.value for item in bundle.available_entities())
+        raise ValueError(
+            f"calibration_entity {output_entity.value!r} is not present in "
+            f"calibration_entity_bundle. Available entities: {available}."
+        )
+    return output_entity
 
 
 def _run_base_imputation_steps(
