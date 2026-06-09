@@ -68,6 +68,49 @@ Artifact: ~/CosilicoAI/microplex-us/artifacts/ecps_shaped_cps_puf_support_clone_
 - microimpute pinned via [tool.uv.sources] git@90be828 (concrete Imputer). pip ignores
   tool.uv.sources → that was the CI failure; PR #75 switched CI to uv.
 
+## Agent deliverables (committed 7a060dc, 61 tests green)
+- microplex.units.assign_us_unit_structure(person, year, tax_unit_mode) → UnitAssignmentResult
+  (.person + person_{tax_unit,spm_unit,family,marital_unit}_id dense int64 + tax_unit_role_input;
+  .tax_unit has filing_status_input). microunit REQUIRES raw: PH_SEQ, A_LINENO, A_AGE,
+  A_MARITL, A_SPOUSE, PEPAR1, PEPAR2, A_EXPRRP (+ *_VAL incomes optional; harmonized
+  fallback mapping built in). SPM: SPM_ID→household fallback. family: (household,PF_SEQ).
+  marital: spouse-pointer pairs.
+- microplex.export.export_policyengine_us_dataset(entity_frames, period, output_path,
+  contract, defaults, allow_incomplete) → ExportGateResult. USSingleYearDataset contract:
+  person_id + person_{group}_id ×5; {group}_id per table; household_weight on household;
+  EMPTY TABLES VANISH on save (must have ≥1 row); column names globally unique across
+  entities; EntityType has NO MARITAL_UNIT — pass key with .value=='marital_unit'.
+  Verified Microsimulation round-trip.
+- CPSAsecSourceProvider extra_person_columns/extra_household_columns (raw ASEC passthrough,
+  cache-key digest __x<sha12>). packs/us/manifests/export_defaults.json (168 defaults,
+  verbatim f3af332). Coverage: 252 required − defaults ⇒ 100 pipeline-owned columns.
+
+## v1 candidate architecture (DECIDED 2026-06-10)
+Spine PARTITIONS (50/50), does not clone ⇒ both halves keep real ASEC weights ⇒ no
+zero-weight problem; the harness's matched-N symmetric refit does weight optimization.
+v1 needs NO own calibration pass for scoring (pool quality is the contest).
+Driver flow (scripts/build_us_candidate.py):
+1. persons = CPSAsecSourceProvider(persons + extra raw cols incl. A_AGE).
+2. units = assign_us_unit_structure(persons) (microunit-first, eCPS-identical construction;
+   #113: report as entity-convergence, fine for the gate).
+3. tax_units spine base = aggregate persons by person_tax_unit_id (demographics aggregates,
+   harmonized income sums, filing_status_input, household_id, weight, state_fips).
+4. sources = {"cps_asec": tax_units, "puf": registry puf_2024}; run_spec(spec built like
+   build_asec_puf_support_spine_spec + PUF imputation steps lifted from packs yaml
+   [puf_support_clone block onto synthetic_puf; puf-only block onto cps_keep]).
+5. Person re-attach by tax-unit id (each unit in exactly one half); person-level values:
+   cps_keep = ASEC person passthrough + head-allocated PUF-only vars; synthetic_puf =
+   head-allocated imputed vars (v1 crudeness — iterate person allocation later).
+6. household table from ASEC households (HSUP_WGT→household_weight) + block geography
+   (data/block_probabilities*.parquet via smoke's _assign_block_geography pattern)
+   → block_geoid/county_fips/congressional_district_geoid.
+7. export(..., defaults manifest, allow_incomplete only in --smoke).
+8. score: subprocess ~/CosilicoAI/microplex-us/.venv python -m
+   microplex_us.pipelines.ecps_replacement_comparison --candidate-dataset OUT.h5
+   --baseline-dataset ~/PolicyEngine/policyengine-us-data/policyengine_us_data/storage/enhanced_cps_2024.h5
+   --output-dir <dir> (defaults: holdout 0.2 seed 20260529).
+PUF source: registry puf_path=…/storage/puf_2024.h5 (verify format; HF fallback).
+
 ## Implementation plan (in flight)
 - Agent A: src/microplex/units.py + tests — assign_us_unit_structure(person, year, ...)
   → person + person_*_id cols + per-unit tables (microunit tax; SPM/family native;
@@ -81,3 +124,9 @@ Artifact: ~/CosilicoAI/microplex-us/artifacts/ecps_shaped_cps_puf_support_clone_
 - Me: run_spec wiring + scripts/build_us_candidate.py driver → capped smoke → full
   build → harness score → iterate. Spine column_groups must keep id/pointer cols on
   the synthetic half (strip_to demographics + ids).
+
+## Milestones
+- 2026-06-10: PR microplex#75 GREEN (3.12/3.13/3.14) + MERGEABLE after switching CI
+  to uv (tool.uv.sources honored). Trunk has working CI; no microimpute release needed.
+- Driver: scripts/build_us_candidate.py (smoke: 4k tax units / 8k PUF; full: --mode full --score).
+  Iterating smoke: fix1 CPSDataset polars accessors; fix2 resolve PUF via main spec.
