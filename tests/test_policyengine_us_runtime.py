@@ -9,6 +9,7 @@ import pytest
 from microplex.core import EntityType
 from microplex.policyengine_us import (
     POLICYENGINE_US_TAKEUP_HANDLER,
+    PolicyEngineUSDataTakeupRateSource,
     PolicyEngineUSMicrosimulationMaterializer,
     PolicyEngineUSRuntimeAdapter,
     SeededPolicyEngineUSTakeupRerandomizer,
@@ -195,6 +196,99 @@ def test_simulation_materializer_runs_takeup_before_policyengine() -> None:
     ]
     assert frames[EntityType.SPM_UNIT]["snap"].tolist() == [10.0, 10.0]
     assert materializer.calls[0]["has_snap_takeup"] is True
+
+
+def test_policyengine_us_data_takeup_source_applies_legacy_keyed_rates() -> None:
+    def loader(parameter, year):
+        assert year == 2024
+        return {
+            "eitc": {0: 0.0, 1: 1.0, 3: 1.0},
+            "medicaid": {"UT": 0.0, "CO": 1.0},
+            "wic_takeup": {"INFANT": 1.0, "NONE": 0.0},
+            "snap": 1.0,
+        }[parameter]
+
+    rerandomizer = SeededPolicyEngineUSTakeupRerandomizer(
+        PolicyEngineUSDataTakeupRateSource(loader=loader)
+    )
+
+    frames = rerandomizer.rerandomize_takeup(
+        {
+            EntityType.TAX_UNIT: pd.DataFrame({"eitc_child_count": [0, 1, 5]}),
+            EntityType.PERSON: pd.DataFrame(
+                {
+                    "state_code_str": ["UT", "CO"],
+                    "wic_category_str": ["INFANT", "NONE"],
+                }
+            ),
+            EntityType.SPM_UNIT: pd.DataFrame({"spm_unit_id": [1, 2]}),
+        },
+        variables_by_entity={
+            EntityType.TAX_UNIT: ("takes_up_eitc",),
+            EntityType.PERSON: (
+                "takes_up_medicaid_if_eligible",
+                "would_claim_wic",
+            ),
+            EntityType.SPM_UNIT: ("takes_up_snap_if_eligible",),
+        },
+        period="2024",
+        modifiers=(),
+    )
+
+    assert frames[EntityType.TAX_UNIT]["takes_up_eitc"].tolist() == [
+        False,
+        True,
+        True,
+    ]
+    assert frames[EntityType.PERSON]["takes_up_medicaid_if_eligible"].tolist() == [
+        False,
+        True,
+    ]
+    assert frames[EntityType.PERSON]["would_claim_wic"].tolist() == [
+        True,
+        False,
+    ]
+    assert frames[EntityType.SPM_UNIT]["takes_up_snap_if_eligible"].tolist() == [
+        True,
+        True,
+    ]
+
+
+def test_policyengine_us_data_takeup_source_masks_voluntary_filing_by_eitc() -> None:
+    def loader(parameter, year):
+        assert (parameter, year) == ("voluntary_filing", 2024)
+        return 1.0
+
+    rerandomizer = SeededPolicyEngineUSTakeupRerandomizer(
+        PolicyEngineUSDataTakeupRateSource(loader=loader)
+    )
+
+    frames = rerandomizer.rerandomize_takeup(
+        {EntityType.TAX_UNIT: pd.DataFrame({"takes_up_eitc": [True, False, False]})},
+        variables_by_entity={EntityType.TAX_UNIT: ("would_file_taxes_voluntarily",)},
+        period=2024,
+        modifiers=(),
+    )
+
+    assert frames[EntityType.TAX_UNIT]["would_file_taxes_voluntarily"].tolist() == [
+        False,
+        True,
+        True,
+    ]
+
+
+def test_policyengine_us_data_takeup_source_requires_key_columns() -> None:
+    rerandomizer = SeededPolicyEngineUSTakeupRerandomizer(
+        PolicyEngineUSDataTakeupRateSource(loader=lambda parameter, year: {"UT": 0.0})
+    )
+
+    with pytest.raises(ValueError, match="require column 'state_code_str'"):
+        rerandomizer.rerandomize_takeup(
+            {EntityType.PERSON: pd.DataFrame({"person_id": [1]})},
+            variables_by_entity={EntityType.PERSON: ("takes_up_medicaid_if_eligible",)},
+            period=2024,
+            modifiers=(),
+        )
 
 
 def test_simulation_materializer_rejects_non_us_model_modifier() -> None:
