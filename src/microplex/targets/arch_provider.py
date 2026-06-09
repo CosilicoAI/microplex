@@ -476,6 +476,8 @@ class ArchTargetProvider:
     entity_of: EntityOfFn
     reference_records: Sequence[ArchTargetRecord] | None = None
     convert_skip: SkipFn | None = None
+    count_measure: CountMeasureFn = default_count_measure
+    geo_feature: GeoFeatureFn = default_geo_feature
     measure_of: MeasureOfFn | None = None
     name_of: NameOfFn = default_arch_target_name
     used_target_types: frozenset[str] = DEFAULT_USED_TARGET_TYPES
@@ -490,8 +492,10 @@ class ArchTargetProvider:
             derived,
             entity_of=self.entity_of,
             skip=self.convert_skip,
+            count_measure=self.count_measure,
             measure_of=self.measure_of,
             name_of=self.name_of,
+            geo_feature=self.geo_feature,
             used_target_types=self.used_target_types,
         )
         return apply_target_query(target_set, query)
