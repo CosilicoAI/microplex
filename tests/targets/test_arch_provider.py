@@ -75,7 +75,9 @@ def test_records_to_target_set_does_not_apply_measure_override_to_count():
     assert target_set.targets[0].measure == "tax_unit_count"
 
 
-def test_rate_target_type_is_rejected():
+def test_converter_backstop_raises_on_unused_target_type():
+    # Defensive backstop: the boundary (arch_records_to_target_set) skips unused
+    # types, but the converter itself raises if one reaches it directly.
     import pytest
 
     with pytest.raises(ValueError):
@@ -235,6 +237,34 @@ def test_records_to_target_set_measure_override():
         entity_of=lambda v: "person",
         measure_of=lambda v: "employment_income",  # measure differs from variable
     )
+    assert target_set.targets[0].measure == "employment_income"
+
+
+def test_unused_target_type_is_skipped_not_errored():
+    # Arch may hold RATE/MEAN/etc.; Microplex just doesn't use them, so they are
+    # skipped at the conversion boundary rather than raising.
+    records = [
+        _rec("employment_income", 1000.0),  # AMOUNT - used
+        _rec("poverty_rate", 0.1, target_type="RATE"),  # not used -> skipped
+        _rec("avg_agi", 5.0, target_type="MEAN"),  # not used -> skipped
+    ]
+    target_set = arch_records_to_target_set(records, entity_of=lambda v: "person")
+    assert len(target_set.targets) == 1
+    assert target_set.targets[0].measure == "employment_income"
+
+
+def test_used_target_types_is_injectable():
+    # A pack can narrow (or widen) which Arch target types Microplex consumes.
+    records = [
+        _rec("employment_income", 1000.0),  # AMOUNT
+        _rec("returns", 50.0, target_type="COUNT"),  # COUNT
+    ]
+    target_set = arch_records_to_target_set(
+        records,
+        entity_of=lambda v: "tax_unit",
+        used_target_types=frozenset({"AMOUNT"}),  # exclude COUNT
+    )
+    assert len(target_set.targets) == 1
     assert target_set.targets[0].measure == "employment_income"
 
 

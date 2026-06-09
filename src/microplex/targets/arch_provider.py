@@ -14,9 +14,11 @@ The PE entity for each variable is injected (``entity_of``). Every target is a
 measure (e.g. ``tax_unit_count``, 1 per record at that level), so a count is a
 sum of ones. Record constraints become target filters, and geography is added as
 an explicit filter (``state_fips == ...``) so subnational targets are scoped
-rather than left national. Other target types (e.g. ``RATE``) are out of scope
-and raise. Arch lineage is preserved in ``TargetSpec.metadata`` so the
-calibration surface stays auditable.
+rather than left national. Microplex uses only count/sum targets; Arch may hold
+other target types (``RATE``, ``MEAN``, …), and those records are **skipped**
+before conversion — Arch can carry them, we just do not use them (the converter
+raises on an unsupported type only as a defensive backstop). Arch lineage is
+preserved in ``TargetSpec.metadata`` so the calibration surface stays auditable.
 """
 
 from __future__ import annotations
@@ -56,6 +58,7 @@ __all__ = [
     "ArchPipelineConfig",
     "run_arch_derivation_pipeline",
     "ArchTargetProvider",
+    "DEFAULT_USED_TARGET_TYPES",
 ]
 
 EntityOfFn = Callable[[str], EntityType | str]
@@ -75,6 +78,11 @@ DEFAULT_GEO_FEATURES = {
     "block": "block_geoid",
 }
 NATIONAL_GEO_LEVELS = {"", "national", "nation"}
+
+#: target types Microplex uses. Arch may hold other types (RATE, MEAN, …);
+#: records with a target_type outside this set are skipped before conversion —
+#: not an error, we simply do not use them. Packs can inject a different set.
+DEFAULT_USED_TARGET_TYPES = frozenset({"AMOUNT", "COUNT"})
 
 
 def _normalized_geo_level(record: ArchTargetRecord) -> str:
@@ -140,7 +148,9 @@ def arch_target_record_to_target_spec(
     count aggregation. An ``AMOUNT`` record sums its variable; a ``COUNT`` record
     sums an **entity-count measure** (``count_measure(entity)``, 1 per record at
     that level), so a count is a sum of ones and conditional counts fall out of
-    the filters. Any other target type (e.g. ``RATE``) is out of scope and raises.
+    the filters. Microplex uses only count/sum; any other target type (``RATE``,
+    ``MEAN``, …) is skipped upstream in :func:`arch_records_to_target_set`, and
+    raises here only as a defensive backstop if it reaches the converter directly.
 
     Record constraints become :class:`TargetFilter`s, and the record's geography
     is added as an explicit filter (``geo_feature(level) == geography_id``) so a
@@ -161,8 +171,9 @@ def arch_target_record_to_target_spec(
     else:
         raise ValueError(
             f"unsupported Arch target_type {record.target_type!r} for "
-            f"{record.variable!r}: only AMOUNT and COUNT are supported "
-            "(counts are summed entity-count measures; RATE is out of scope)"
+            f"{record.variable!r}: Microplex converts only AMOUNT and COUNT "
+            "(counts are summed entity-count measures). Other Arch target types "
+            "should be skipped upstream via used_target_types, not converted."
         )
 
     filters = [
@@ -257,6 +268,7 @@ def arch_records_to_target_set(
     name_of: NameOfFn = default_arch_target_name,
     geo_feature: GeoFeatureFn = default_geo_feature,
     count_measure: CountMeasureFn = default_count_measure,
+    used_target_types: frozenset[str] = DEFAULT_USED_TARGET_TYPES,
 ) -> TargetSet:
     """Convert derived Arch records into a ``TargetSet`` (the calibration surface).
 
@@ -264,9 +276,17 @@ def arch_records_to_target_set(
     :func:`~microplex.targets.arch_derivations.should_skip_target_record`) drops
     records before conversion. ``measure_of`` overrides the measure column per
     variable when it differs from the variable name.
+
+    Records whose ``target_type`` is not in ``used_target_types`` (default
+    ``AMOUNT``/``COUNT``) are skipped, not errored: Arch may legitimately hold
+    other target types (``RATE``, ``MEAN``, …) and Microplex simply does not use
+    them. The converter still raises on an unsupported type as a defensive
+    backstop, but in normal operation those records never reach it.
     """
     specs: list[TargetSpec] = []
     for record in records:
+        if record.target_type not in used_target_types:
+            continue
         if skip is not None and skip(record):
             continue
         measure = (
@@ -458,6 +478,7 @@ class ArchTargetProvider:
     convert_skip: SkipFn | None = None
     measure_of: MeasureOfFn | None = None
     name_of: NameOfFn = default_arch_target_name
+    used_target_types: frozenset[str] = DEFAULT_USED_TARGET_TYPES
 
     def load_target_set(self, query: TargetQuery | None = None) -> TargetSet:
         derived = run_arch_derivation_pipeline(
@@ -471,5 +492,6 @@ class ArchTargetProvider:
             skip=self.convert_skip,
             measure_of=self.measure_of,
             name_of=self.name_of,
+            used_target_types=self.used_target_types,
         )
         return apply_target_query(target_set, query)
