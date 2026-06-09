@@ -112,7 +112,9 @@ from microplex.targets.rollups import (
     target_name_fragment,
 )
 from microplex.targets.simulation import (
+    MaterializedSimulationTargetCompiler,
     MaterializingSimulationTargetCompiler,
+    SimulationFeatureMaterializer,
     SimulationModifierHandler,
 )
 from microplex.targets.spec import (
@@ -199,6 +201,8 @@ __all__ = [
     "compile_sparse_target_matrix",
     "target_constraints_to_sparse_matrix",
     "EntityTableBundleReweightingResult",
+    "MaterializedSimulationTargetCompiler",
+    "SimulationFeatureMaterializer",
     "SimulationTargetCompiler",
     "SparseTargetConstraint",
     "SparseTargetCalibrationDiagnostics",

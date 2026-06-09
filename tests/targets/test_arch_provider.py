@@ -45,6 +45,17 @@ def test_amount_record_converts_to_sum_target_with_measure():
     assert spec.metadata["arch_variable"] == "employment_income"
 
 
+def test_amount_record_converts_with_simulation_modifiers():
+    spec = arch_target_record_to_target_spec(
+        _rec("income_tax_liability", 1000.0),
+        entity="tax_unit",
+        measure="income_tax",
+        sim_modifiers=({"name": "materialize_policyengine"},),
+    )
+    assert spec.requires_simulation is True
+    assert spec.sim_modifier_names == ("materialize_policyengine",)
+
+
 def test_count_record_converts_to_sum_of_entity_count_measure():
     # a count is a sum of an entity-count measure (1 per record at that level)
     spec = arch_target_record_to_target_spec(
@@ -73,6 +84,19 @@ def test_records_to_target_set_does_not_apply_measure_override_to_count():
         measure_of=lambda v: v,
     )
     assert target_set.targets[0].measure == "tax_unit_count"
+
+
+def test_records_to_target_set_applies_simulation_modifier_hook():
+    target_set = arch_records_to_target_set(
+        [_rec("income_tax_liability", 50.0)],
+        entity_of=lambda v: "tax_unit",
+        measure_of=lambda v: "income_tax",
+        sim_modifiers_of=lambda target: ({"name": f"simulate_{target.measure}"},),
+    )
+
+    target = target_set.targets[0]
+    assert target.measure == "income_tax"
+    assert target.sim_modifier_names == ("simulate_income_tax",)
 
 
 def test_converter_backstop_raises_on_unused_target_type():

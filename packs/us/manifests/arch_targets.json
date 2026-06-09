@@ -1302,6 +1302,150 @@
       "program"
     ]
   },
+  "simulation": {
+    "features": {
+      "aca_ptc": [
+        {
+          "name": "rerandomize_takeup",
+          "parameters": {
+            "program": "aca"
+          }
+        },
+        {
+          "name": "materialize_policyengine",
+          "parameters": {
+            "model": "policyengine-us"
+          }
+        }
+      ],
+      "ctc": [
+        {
+          "name": "materialize_policyengine",
+          "parameters": {
+            "model": "policyengine-us"
+          }
+        }
+      ],
+      "eitc": [
+        {
+          "name": "materialize_policyengine",
+          "parameters": {
+            "model": "policyengine-us"
+          }
+        }
+      ],
+      "income_tax": [
+        {
+          "name": "materialize_policyengine",
+          "parameters": {
+            "model": "policyengine-us"
+          }
+        }
+      ],
+      "income_tax_before_credits": [
+        {
+          "name": "materialize_policyengine",
+          "parameters": {
+            "model": "policyengine-us"
+          }
+        }
+      ],
+      "medicaid": [
+        {
+          "name": "rerandomize_takeup",
+          "parameters": {
+            "program": "medicaid"
+          }
+        },
+        {
+          "name": "materialize_policyengine",
+          "parameters": {
+            "model": "policyengine-us"
+          }
+        }
+      ],
+      "medicaid_enrolled": [
+        {
+          "name": "rerandomize_takeup",
+          "parameters": {
+            "program": "medicaid"
+          }
+        },
+        {
+          "name": "materialize_policyengine",
+          "parameters": {
+            "model": "policyengine-us"
+          }
+        }
+      ],
+      "non_refundable_ctc": [
+        {
+          "name": "materialize_policyengine",
+          "parameters": {
+            "model": "policyengine-us"
+          }
+        }
+      ],
+      "refundable_ctc": [
+        {
+          "name": "materialize_policyengine",
+          "parameters": {
+            "model": "policyengine-us"
+          }
+        }
+      ],
+      "snap": [
+        {
+          "name": "rerandomize_takeup",
+          "parameters": {
+            "program": "snap"
+          }
+        },
+        {
+          "name": "materialize_policyengine",
+          "parameters": {
+            "model": "policyengine-us"
+          }
+        }
+      ],
+      "ssi": [
+        {
+          "name": "rerandomize_takeup",
+          "parameters": {
+            "program": "ssi"
+          }
+        },
+        {
+          "name": "materialize_policyengine",
+          "parameters": {
+            "model": "policyengine-us"
+          }
+        }
+      ],
+      "state_income_tax": [
+        {
+          "name": "materialize_policyengine",
+          "parameters": {
+            "model": "policyengine-us"
+          }
+        }
+      ],
+      "tanf": [
+        {
+          "name": "rerandomize_takeup",
+          "parameters": {
+            "program": "tanf"
+          }
+        },
+        {
+          "name": "materialize_policyengine",
+          "parameters": {
+            "model": "policyengine-us"
+          }
+        }
+      ]
+    }
+  },
   "derivations": {
     "age_soi": true,
     "soi_source": "IRS_SOI",

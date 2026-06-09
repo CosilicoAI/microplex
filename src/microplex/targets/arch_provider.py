@@ -44,6 +44,7 @@ from microplex.targets.spec import (
     TargetAggregation,
     TargetFilter,
     TargetSet,
+    TargetSimulationModifier,
     TargetSpec,
 )
 
@@ -67,6 +68,9 @@ MeasureOfFn = Callable[[str], str | None]
 SkipFn = Callable[[ArchTargetRecord], bool]
 GeoFeatureFn = Callable[[str | None], str | None]
 CountMeasureFn = Callable[[EntityType], str]
+SimModifiersOfFn = Callable[
+    [TargetSpec], Sequence[TargetSimulationModifier | Mapping[str, Any]]
+]
 
 #: geography level -> the microdata feature that identifies it.
 DEFAULT_GEO_FEATURES = {
@@ -141,6 +145,7 @@ def arch_target_record_to_target_spec(
     name_of: NameOfFn = default_arch_target_name,
     geo_feature: GeoFeatureFn = default_geo_feature,
     count_measure: CountMeasureFn = default_count_measure,
+    sim_modifiers: Sequence[TargetSimulationModifier | Mapping[str, Any]] = (),
 ) -> TargetSpec:
     """Convert one derived ``ArchTargetRecord`` into a canonical ``TargetSpec``.
 
@@ -256,6 +261,7 @@ def arch_target_record_to_target_spec(
         units=record.unit,
         description=record.notes,
         metadata=metadata,
+        sim_modifiers=tuple(sim_modifiers),
     )
 
 
@@ -268,6 +274,7 @@ def arch_records_to_target_set(
     name_of: NameOfFn = default_arch_target_name,
     geo_feature: GeoFeatureFn = default_geo_feature,
     count_measure: CountMeasureFn = default_count_measure,
+    sim_modifiers_of: SimModifiersOfFn | None = None,
     used_target_types: frozenset[str] = DEFAULT_USED_TARGET_TYPES,
 ) -> TargetSet:
     """Convert derived Arch records into a ``TargetSet`` (the calibration surface).
@@ -294,16 +301,17 @@ def arch_records_to_target_set(
             if measure_of is not None and record.target_type != "COUNT"
             else None
         )
-        specs.append(
-            arch_target_record_to_target_spec(
-                record,
-                entity=entity_of(record.variable),
-                measure=measure,
-                name_of=name_of,
-                geo_feature=geo_feature,
-                count_measure=count_measure,
-            )
+        target = arch_target_record_to_target_spec(
+            record,
+            entity=entity_of(record.variable),
+            measure=measure,
+            name_of=name_of,
+            geo_feature=geo_feature,
+            count_measure=count_measure,
         )
+        if sim_modifiers_of is not None:
+            target = replace(target, sim_modifiers=tuple(sim_modifiers_of(target)))
+        specs.append(target)
     return TargetSet(specs)
 
 
@@ -480,6 +488,7 @@ class ArchTargetProvider:
     geo_feature: GeoFeatureFn = default_geo_feature
     measure_of: MeasureOfFn | None = None
     name_of: NameOfFn = default_arch_target_name
+    sim_modifiers_of: SimModifiersOfFn | None = None
     used_target_types: frozenset[str] = DEFAULT_USED_TARGET_TYPES
 
     def load_target_set(self, query: TargetQuery | None = None) -> TargetSet:
@@ -496,6 +505,7 @@ class ArchTargetProvider:
             measure_of=self.measure_of,
             name_of=self.name_of,
             geo_feature=self.geo_feature,
+            sim_modifiers_of=self.sim_modifiers_of,
             used_target_types=self.used_target_types,
         )
         return apply_target_query(target_set, query)
