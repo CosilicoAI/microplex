@@ -83,7 +83,7 @@ class ArchTargetRecord:
     source_url: str | None = None
     notes: str | None = None
     jurisdiction: str | None = None
-    constraints: tuple[tuple[str, str, str], ...] = ()
+    constraints: tuple[tuple[str, str, Any], ...] = ()
     source_period: int | None = None
     aging_factors: Any | None = None
     unit: str | None = None
