@@ -37,10 +37,14 @@ from microplex.run import (
 from microplex.source_registry import SourceRegistry
 from microplex.spec import load_spec_dict
 from microplex.targets import (
+    EntityTableBinding,
+    EntityTableBundle,
+    MaterializedSimulationTargetCompiler,
     TargetAggregation,
     TargetProvider,
     TargetQuery,
     TargetSet,
+    TargetSimulationModifier,
     TargetSpec,
     apply_target_query,
 )
@@ -512,6 +516,87 @@ def _target_set_with_missing_feature() -> TargetSet:
     return target_set
 
 
+def _person_income_target_set() -> TargetSet:
+    return TargetSet(
+        [
+            TargetSpec(
+                name="person_employment_income_total",
+                entity=EntityType.PERSON,
+                value=20.0,
+                period=2024,
+                measure="employment_income",
+                aggregation=TargetAggregation.SUM,
+            )
+        ]
+    )
+
+
+def _simulated_person_income_target_set() -> TargetSet:
+    return TargetSet(
+        [
+            TargetSpec(
+                name="simulated_person_income_total",
+                entity=EntityType.PERSON,
+                value=25.0,
+                period=2024,
+                measure="simulated_income",
+                aggregation=TargetAggregation.SUM,
+                sim_modifiers=(
+                    TargetSimulationModifier(
+                        name="materialize_policyengine",
+                        parameters={"model": "policyengine-us"},
+                    ),
+                ),
+            )
+        ]
+    )
+
+
+def _multi_entity_bundle() -> EntityTableBundle:
+    households = pd.DataFrame(
+        {
+            "household_id": [10, 20],
+            "household_weight": [1.0, 2.0],
+        }
+    )
+    persons = pd.DataFrame(
+        {
+            "person_id": [1, 2, 3],
+            "household_id": [10, 10, 20],
+            "employment_income": [2.0, 3.0, 4.0],
+        }
+    )
+    tax_units = pd.DataFrame(
+        {
+            "tax_unit_id": [100, 200],
+            "household_id": [10, 20],
+            "employment_income": [5.0, 4.0],
+        }
+    )
+    return EntityTableBundle(
+        weight_entity=EntityType.HOUSEHOLD,
+        weight_column="household_weight",
+        bindings={
+            EntityType.HOUSEHOLD: EntityTableBinding(
+                frame=households,
+                id_column="household_id",
+            ),
+            EntityType.PERSON: EntityTableBinding(
+                frame=persons,
+                id_column="person_id",
+                weight_link_column="household_id",
+                synced_weight_column="person_weight",
+            ),
+            EntityType.TAX_UNIT: EntityTableBinding(
+                frame=tax_units,
+                id_column="tax_unit_id",
+                weight_link_column="household_id",
+                synced_weight_column="tax_unit_weight",
+            ),
+        },
+    )
+
+
 def _arch_consumer_fact_row(
     concept: str,
     *,
@@ -861,6 +946,144 @@ class TestRunSpec:
             uncalibrated.frame["household_weight"] + 1.0,
             check_names=False,
         )
+
+    def test_prepared_entity_table_bundle_calibration_defaults_to_weight_entity(
+        self,
+        monkeypatch,
+    ) -> None:
+        captured: dict = {}
+        _install_fake_microcalibrate(monkeypatch, captured)
+        spec = load_spec_dict(_spec_dict())
+        provider = RecordingTargetProvider(_person_income_target_set())
+
+        result = _run_spec(
+            spec,
+            _sources(),
+            demographic_columns=DEMOGRAPHIC_COLS,
+            target_provider=provider,
+            calibration_entity_bundle=_multi_entity_bundle(),
+        )
+
+        assert result.pending_stages == ("export",)
+        assert result.entity_table_bundle is not None
+        assert result.calibration_result is not None
+        assert (
+            result.calibration_result.entity_table_bundle is result.entity_table_bundle
+        )
+        assert result.calibration_result.diagnostics["weight_entity"] == "household"
+        assert result.frame["household_weight"].tolist() == [2.0, 3.0]
+        assert captured["kwargs"]["target_names"].tolist() == [
+            "person_employment_income_total"
+        ]
+
+    def test_prepared_entity_table_bundle_calibration_can_return_linked_entity(
+        self,
+        monkeypatch,
+    ) -> None:
+        captured: dict = {}
+        _install_fake_microcalibrate(monkeypatch, captured)
+        spec = load_spec_dict(_spec_dict())
+        provider = RecordingTargetProvider(_person_income_target_set())
+
+        result = _run_spec(
+            spec,
+            _sources(),
+            demographic_columns=DEMOGRAPHIC_COLS,
+            target_provider=provider,
+            calibration_entity_bundle=_multi_entity_bundle(),
+            calibration_entity=EntityType.PERSON,
+        )
+
+        assert result.frame["person_id"].tolist() == [1, 2, 3]
+        assert result.frame["person_weight"].tolist() == [2.0, 2.0, 3.0]
+        assert result.entity_table_bundle is not None
+        household_weights = result.entity_table_bundle.table_for(EntityType.HOUSEHOLD)[
+            "household_weight"
+        ]
+        assert household_weights.tolist() == [2.0, 3.0]
+        np.testing.assert_array_equal(
+            captured["kwargs"]["estimate_matrix"].to_numpy(),
+            np.array([[5.0], [4.0]]),
+        )
+
+    def test_prepared_entity_table_bundle_routes_simulation_compiler(
+        self,
+        monkeypatch,
+    ) -> None:
+        captured: dict = {}
+        _install_fake_microcalibrate(monkeypatch, captured)
+        spec = load_spec_dict(_spec_dict())
+        provider = RecordingTargetProvider(_simulated_person_income_target_set())
+
+        class RecordingSimulationMaterializer:
+            def __init__(self) -> None:
+                self.calls: list[tuple[str, tuple[EntityType, ...]]] = []
+
+            def materialize_simulation_features(
+                self,
+                *,
+                targets,
+                entity_frames,
+                modifiers,
+            ):
+                assert tuple(modifier.name for modifier in modifiers) == (
+                    "materialize_policyengine",
+                )
+                self.calls.append(
+                    (
+                        targets[0].name,
+                        tuple(sorted(entity_frames, key=lambda entity: entity.value)),
+                    )
+                )
+                person_frame = entity_frames[EntityType.PERSON]
+                return {
+                    EntityType.PERSON: pd.DataFrame(
+                        {
+                            "simulated_income": np.arange(
+                                len(person_frame),
+                                dtype=float,
+                            )
+                            + 10.0
+                        }
+                    )
+                }
+
+        materializer = RecordingSimulationMaterializer()
+
+        result = _run_spec(
+            spec,
+            _sources(),
+            demographic_columns=DEMOGRAPHIC_COLS,
+            target_provider=provider,
+            calibration_entity_bundle=_multi_entity_bundle(),
+            calibration_entity=EntityType.PERSON,
+            simulation_compiler=MaterializedSimulationTargetCompiler(materializer),
+        )
+
+        assert result.pending_stages == ("export",)
+        assert materializer.calls == [
+            (
+                "simulated_person_income_total",
+                (EntityType.HOUSEHOLD, EntityType.PERSON, EntityType.TAX_UNIT),
+            )
+        ]
+        assert captured["kwargs"]["target_names"].tolist() == [
+            "simulated_person_income_total"
+        ]
+
+    def test_prepared_entity_table_bundle_rejects_unused_id_column(self) -> None:
+        spec = load_spec_dict(_spec_dict())
+        provider = RecordingTargetProvider(_person_income_target_set())
+
+        with pytest.raises(ValueError, match="does not use calibration_id_column"):
+            _run_spec(
+                spec,
+                _sources(),
+                demographic_columns=DEMOGRAPHIC_COLS,
+                target_provider=provider,
+                calibration_entity_bundle=_multi_entity_bundle(),
+                calibration_id_column="tax_unit_id",
+            )
 
     def test_generic_entity_table_calibration_requires_stable_id_column(
         self,
