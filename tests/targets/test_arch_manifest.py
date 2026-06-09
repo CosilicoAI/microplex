@@ -138,6 +138,62 @@ def test_manifest_maps_soi_state_agi_count_row_through_jsonl(tmp_path: Path):
     assert sum(filter_.feature == "state_fips" for filter_ in target.filters) == 1
 
 
+def test__given_us_arch_manifest_income_tax_target__then_target_requires_pe_materialization():
+    manifest = _manifest()
+    fact = ArchConsumerFact(
+        _fact_row(
+            "irs_soi.total_income_tax",
+            aggregation="sum",
+            value=1000.0,
+        )
+    )
+    records = load_arch_target_records_from_facts(manifest, [fact])
+
+    provider = ArchTargetProvider(
+        records=records,
+        config=manifest.pipeline_config(target_year=2024),
+        entity_of=manifest.entity_of,
+        measure_of=manifest.measure_of,
+        geo_feature=manifest.geo_feature,
+        count_measure=manifest.count_measure,
+        sim_modifiers_of=manifest.sim_modifiers_of,
+    )
+    target = provider.load_target_set().targets[0]
+
+    assert target.measure == "income_tax"
+    assert target.sim_modifier_names == ("materialize_policyengine",)
+
+
+def test__given_us_arch_manifest_snap_count_filter__then_target_requires_takeup_and_pe():
+    manifest = _manifest()
+    fact = ArchConsumerFact(
+        _fact_row(
+            "usda_snap.average_monthly_households",
+            aggregation="count",
+            value=1000.0,
+        )
+    )
+    records = load_arch_target_records_from_facts(manifest, [fact])
+
+    provider = ArchTargetProvider(
+        records=records,
+        config=manifest.pipeline_config(target_year=2024),
+        entity_of=manifest.entity_of,
+        measure_of=manifest.measure_of,
+        geo_feature=manifest.geo_feature,
+        count_measure=manifest.count_measure,
+        sim_modifiers_of=manifest.sim_modifiers_of,
+    )
+    target = provider.load_target_set().targets[0]
+
+    assert target.measure == "household_count"
+    assert any(filter_.feature == "snap" for filter_ in target.filters)
+    assert target.sim_modifier_names == (
+        "rerandomize_takeup",
+        "materialize_policyengine",
+    )
+
+
 def test__given_arch_source_suite_directory__then_manifest_loads_target_records(
     tmp_path: Path,
 ) -> None:

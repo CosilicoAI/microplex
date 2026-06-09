@@ -25,6 +25,7 @@ from microplex.targets.arch import (
 )
 from microplex.targets.arch_derivations import ArchTargetRecord
 from microplex.targets.arch_provider import ArchPipelineConfig, ArchTargetProvider
+from microplex.targets.spec import TargetSimulationModifier, TargetSpec
 
 ARCH_TARGET_MANIFEST_SCHEMA_VERSION = "microplex.arch_targets.v1"
 
@@ -126,6 +127,17 @@ class ArchTargetManifest:
         return _optional_string(count_measures.get(entity.value)) or (
             f"{entity.value}_count"
         )
+
+    def sim_modifiers_of(
+        self, target: TargetSpec
+    ) -> tuple[TargetSimulationModifier, ...]:
+        """Return simulator modifiers required to evaluate a target's features."""
+        feature_modifiers = mapping_value(self._simulation().get("features"))
+        modifiers: list[TargetSimulationModifier] = []
+        for feature in target.required_features:
+            for modifier_payload in _modifier_payloads(feature_modifiers.get(feature)):
+                modifiers.append(_target_simulation_modifier(modifier_payload))
+        return _dedupe_modifiers(modifiers)
 
     def geo_feature(self, geo_level: str | None) -> str | None:
         """Return the support feature that scopes a geography level."""
@@ -316,6 +328,9 @@ class ArchTargetManifest:
     def _geo_features(self) -> Mapping[str, Any]:
         return mapping_value(self._geography().get("features"))
 
+    def _simulation(self) -> Mapping[str, Any]:
+        return mapping_value(self.payload.get("simulation"))
+
     def _fact_matches_skip(self, fact: ArchConsumerFact) -> bool:
         skip_concepts = _string_set(self.payload.get("skip_concepts"))
         return any(concept in skip_concepts for concept in _concept_candidates(fact))
@@ -373,6 +388,7 @@ def arch_target_provider_from_consumer_facts(
         measure_of=manifest.measure_of,
         geo_feature=manifest.geo_feature,
         count_measure=manifest.count_measure,
+        sim_modifiers_of=manifest.sim_modifiers_of,
     )
 
 
@@ -498,6 +514,45 @@ def _falsey_constraint_value(value: Any) -> bool:
             "not_receiving_food_stamps_snap",
         }
     return not bool(value)
+
+
+def _modifier_payloads(value: Any) -> tuple[Mapping[str, Any] | str, ...]:
+    if value is None:
+        return ()
+    if isinstance(value, str):
+        return (value,)
+    if isinstance(value, Mapping):
+        return (value,)
+    if isinstance(value, Sequence):
+        return tuple(value)
+    return ()
+
+
+def _target_simulation_modifier(
+    payload: Mapping[str, Any] | str,
+) -> TargetSimulationModifier:
+    if isinstance(payload, str):
+        return TargetSimulationModifier(payload)
+    return TargetSimulationModifier(
+        name=str(payload["name"]),
+        parameters=dict(mapping_value(payload.get("parameters"))),
+    )
+
+
+def _dedupe_modifiers(
+    modifiers: Sequence[TargetSimulationModifier],
+) -> tuple[TargetSimulationModifier, ...]:
+    by_name: dict[str, TargetSimulationModifier] = {}
+    for modifier in modifiers:
+        existing = by_name.get(modifier.name)
+        if existing is not None:
+            if existing.parameters != modifier.parameters:
+                raise ValueError(
+                    f"Conflicting simulation modifier parameters for {modifier.name!r}."
+                )
+            continue
+        by_name[modifier.name] = modifier
+    return tuple(by_name.values())
 
 
 def _bool(value: Any, *, default: bool) -> bool:
