@@ -165,6 +165,7 @@ class TestLoadValid:
         assert spec.targets is not None
         assert spec.targets.arch.country == "us"
         assert spec.targets.arch.model_year == 2024
+        assert spec.targets.arch.manifest == "manifests/arch_targets.json"
         assert spec.targets.arch.target_profile == "pe_native_broad"
         assert (
             spec.targets.arch.resolved_calibration_target_profile
@@ -381,9 +382,7 @@ class TestRejectMalformed:
     def test_unknown_variable_provenance_field_rejected(self) -> None:
         data = _valid_spec_dict()
         data["variables"] = {
-            "employment_income": {
-                "ecps": {"method": "PUF QRF", "typo": "not allowed"}
-            }
+            "employment_income": {"ecps": {"method": "PUF QRF", "typo": "not allowed"}}
         }
         with pytest.raises(SpecError, match="typo"):
             load_spec_dict(data)

@@ -12,6 +12,7 @@ US_SPEC = US_PACK_ROOT / "specs" / "us-2024.yaml"
 US_CONTRACT = US_PACK_ROOT / "manifests" / "ecps_export_contract.json"
 EXPECTED_US_PACK_FILES = {
     "README.md",
+    "manifests/arch_targets.json",
     "manifests/ecps_export_contract.json",
     "manifests/frozen_production_ecps_2024_benchmark_manifest.json",
     "manifests/pe_source_impute_blocks.json",

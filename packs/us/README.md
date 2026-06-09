@@ -12,6 +12,8 @@ imputation, and microcalibrate owns calibration.
   production-eCPS benchmark certificate metadata.
 - `manifests/pe_source_impute_blocks.json`: source-imputation block
   declarations.
+- `manifests/arch_targets.json`: declarative Arch target mapping and provider
+  configuration hooks.
 - `manifests/puf.json`: PUF source manifest.
 
 ## Construction Order
@@ -29,4 +31,3 @@ imputation, and microcalibrate owns calibration.
 The generic Microplex content-package check validates that the spec loads, the
 variable manifest covers the frozen eCPS contract plus declared imputation
 surface, and the pack contains no runtime Python files.
-

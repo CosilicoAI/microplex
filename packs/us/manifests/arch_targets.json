@@ -1,0 +1,122 @@
+{
+  "schema_version": "microplex.arch_targets.v1",
+  "country": "us",
+  "model_year": 2024,
+  "require_target_mapping": false,
+  "default_entity": "tax_unit",
+  "geography": {
+    "features": {
+      "state": "state_fips",
+      "county": "county_fips",
+      "district": "congressional_district",
+      "congressional_district": "congressional_district"
+    },
+    "state_geoid_prefixes": ["0400000US"]
+  },
+  "target_mappings": {
+    "irs_soi.individual_income_tax_returns": {
+      "variable": "tax_unit_count",
+      "target_type": "COUNT",
+      "entity": "tax_unit"
+    },
+    "irs_soi.adjusted_gross_income": {
+      "variable": "adjusted_gross_income",
+      "target_type": "AMOUNT",
+      "entity": "tax_unit"
+    },
+    "us:statutes/26/62#adjusted_gross_income": {
+      "variable": "adjusted_gross_income",
+      "target_type": "AMOUNT",
+      "entity": "tax_unit"
+    },
+    "irs_soi.returns_with_total_wages": {
+      "variable": "wages_salaries_returns",
+      "target_type": "COUNT",
+      "entity": "tax_unit"
+    },
+    "irs_soi.total_wages": {
+      "variable": "wages_salaries_amount",
+      "target_type": "AMOUNT",
+      "entity": "person"
+    },
+    "us:statutes/26/62#input.wages": {
+      "variable": "wages_salaries_amount",
+      "target_type": "AMOUNT",
+      "entity": "person"
+    },
+    "cms_aca.marketplace_plan_selections": {
+      "variable": "aca_marketplace_plan_selections",
+      "target_type": "COUNT",
+      "entity": "person"
+    },
+    "cms_aca.aptc_consumers": {
+      "variable": "aca_aptc_consumers",
+      "target_type": "COUNT",
+      "entity": "person"
+    },
+    "cms_aca.average_monthly_aptc": {
+      "variable": "aca_average_monthly_aptc",
+      "target_type": "RATE",
+      "entity": "person"
+    }
+  },
+  "entities": {
+    "adjusted_gross_income": "tax_unit",
+    "tax_unit_count": "tax_unit",
+    "wages_salaries_amount": "person",
+    "wages_salaries_returns": "tax_unit",
+    "aca_marketplace_plan_selections": "person",
+    "aca_aptc_consumers": "person",
+    "aca_average_monthly_aptc": "person"
+  },
+  "amount_measures": {
+    "adjusted_gross_income": "adjusted_gross_income",
+    "wages_salaries_amount": "employment_income"
+  },
+  "count_aliases": {
+    "tax_unit_count": {
+      "count_measure": "tax_unit_count",
+      "entity": "tax_unit"
+    },
+    "wages_salaries_returns": {
+      "count_measure": "tax_unit_count",
+      "entity": "tax_unit",
+      "positive_filter_measure": "employment_income"
+    },
+    "aca_marketplace_plan_selections": {
+      "count_measure": "person_count",
+      "entity": "person"
+    },
+    "aca_aptc_consumers": {
+      "count_measure": "person_count",
+      "entity": "person",
+      "positive_filter_measure": "aca_ptc"
+    }
+  },
+  "count_measures": {
+    "household": "household_count",
+    "person": "person_count",
+    "spm_unit": "spm_unit_count",
+    "tax_unit": "tax_unit_count"
+  },
+  "positive_count_suffixes": [
+    {
+      "suffix": "_returns",
+      "amount_suffix": "_amount"
+    },
+    {
+      "suffix": "_claims",
+      "amount_suffix": "_amount"
+    }
+  ],
+  "constraints": {
+    "aliases": {
+      "us:statutes/26/62#adjusted_gross_income": "adjusted_gross_income"
+    },
+    "positive_aliases": {}
+  },
+  "derivations": {
+    "age_soi": true,
+    "soi_source": "IRS_SOI"
+  }
+}

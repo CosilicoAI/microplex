@@ -47,6 +47,7 @@ targets:
   arch:
     country: us
     model_year: 2024
+    manifest: manifests/arch_targets.json
     target_profile: pe_native_broad
     calibration_target_profile: pe_native_broad_source_backed
 

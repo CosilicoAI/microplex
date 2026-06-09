@@ -18,6 +18,11 @@ from microplex.targets.arch import (
     load_arch_target_records,
     mapping_value,
 )
+from microplex.targets.arch_manifest import (
+    ARCH_TARGET_MANIFEST_SCHEMA_VERSION,
+    ArchTargetManifest,
+    load_arch_target_manifest,
+)
 from microplex.targets.artifacts import (
     BenchmarkArtifactValidationResult,
     assert_valid_benchmark_artifact_manifest,
@@ -125,7 +130,9 @@ __all__ = [
     "validate_benchmark_artifact_manifest",
     "assert_valid_benchmark_artifact_manifest",
     "ARCH_CONSUMER_FACT_SCHEMA_VERSION",
+    "ARCH_TARGET_MANIFEST_SCHEMA_VERSION",
     "ArchConsumerFact",
+    "ArchTargetManifest",
     "arch_consumer_fact_constraints",
     "arch_consumer_fact_concept",
     "arch_consumer_fact_geography_id",
@@ -139,6 +146,7 @@ __all__ = [
     "load_arch_consumer_fact_jsonl_rows",
     "load_arch_consumer_facts",
     "load_arch_target_records",
+    "load_arch_target_manifest",
     "mapping_value",
     "TargetProvider",
     "TargetQuery",

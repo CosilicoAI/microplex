@@ -691,6 +691,14 @@ class ArchTargetSpec(_StrictModel):
 
     country: str = Field(..., min_length=1)
     model_year: int
+    manifest: str | None = Field(
+        default=None,
+        min_length=1,
+        description=(
+            "Optional content-pack resource path for declarative Arch target "
+            "mapping/configuration."
+        ),
+    )
     target_profile: str | None = Field(
         default=None,
         min_length=1,
