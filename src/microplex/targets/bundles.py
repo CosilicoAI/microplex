@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 
 from microplex.core import EntityType
+from microplex.core.sources import EntityRelationship, ObservationFrame
 
 
 @dataclass(frozen=True)
@@ -22,7 +23,10 @@ class EntityTableBinding:
     def __post_init__(self) -> None:
         if self.id_column not in self.frame.columns:
             raise ValueError(f"Entity table is missing id column '{self.id_column}'")
-        if self.weight_link_column is not None and self.weight_link_column not in self.frame.columns:
+        if (
+            self.weight_link_column is not None
+            and self.weight_link_column not in self.frame.columns
+        ):
             raise ValueError(
                 f"Entity table is missing weight linkage column '{self.weight_link_column}'"
             )
@@ -61,10 +65,7 @@ class EntityTableBundle:
         return binding.frame
 
     def entity_frames(self) -> dict[EntityType, pd.DataFrame]:
-        return {
-            entity: binding.frame
-            for entity, binding in self.bindings.items()
-        }
+        return {entity: binding.frame for entity, binding in self.bindings.items()}
 
     def initial_weights(self) -> pd.Series:
         return self.bindings[self.weight_entity].frame[self.weight_column]
@@ -90,7 +91,9 @@ class EntityTableBundle:
             )
         return mappings
 
-    def with_updated_weights(self, weights: pd.Series | np.ndarray) -> EntityTableBundle:
+    def with_updated_weights(
+        self, weights: pd.Series | np.ndarray
+    ) -> EntityTableBundle:
         weight_binding = self.bindings[self.weight_entity]
         updated_weights = np.asarray(weights, dtype=float)
         if len(updated_weights) != len(weight_binding.frame):
@@ -103,7 +106,9 @@ class EntityTableBundle:
             weight_binding,
             frame=updated_weight_frame,
         )
-        weight_by_id = updated_weight_frame.set_index(weight_binding.id_column)[self.weight_column]
+        weight_by_id = updated_weight_frame.set_index(weight_binding.id_column)[
+            self.weight_column
+        ]
 
         for entity, binding in self.bindings.items():
             if entity is self.weight_entity or binding.synced_weight_column is None:
@@ -123,3 +128,90 @@ class EntityTableBundle:
             weight_column=self.weight_column,
             bindings=updated_bindings,
         )
+
+
+def entity_table_bundle_from_observation_frame(
+    frame: ObservationFrame,
+    *,
+    weight_entity: EntityType | str,
+    weight_column: str | None = None,
+    sync_child_weight_columns: bool = True,
+) -> EntityTableBundle:
+    """Build a calibration bundle from a related observation frame.
+
+    Non-weight entity tables must have a direct relationship to the weight
+    entity so their rows can map onto the shared reweighting vector.
+    """
+    frame.validate()
+    resolved_weight_entity = (
+        weight_entity
+        if isinstance(weight_entity, EntityType)
+        else EntityType(weight_entity)
+    )
+    weight_observation = frame.source.observation_for(resolved_weight_entity)
+    resolved_weight_column = weight_column or weight_observation.weight_column
+    if resolved_weight_column is None:
+        raise ValueError(
+            f"weight entity {resolved_weight_entity.value!r} has no weight column; "
+            "supply weight_column explicitly"
+        )
+
+    direct_relationships = _relationships_from_weight_entity(
+        frame.relationships,
+        resolved_weight_entity,
+    )
+    bindings: dict[EntityType, EntityTableBinding] = {}
+    for observation in frame.source.observations:
+        entity = observation.entity
+        table = frame.tables[entity].copy()
+        if entity is resolved_weight_entity:
+            bindings[entity] = EntityTableBinding(
+                frame=table,
+                id_column=observation.key_column,
+            )
+            continue
+
+        relationship = direct_relationships.get(entity)
+        if relationship is None:
+            raise ValueError(
+                f"Entity {entity.value!r} is not directly linked to weight "
+                f"entity {resolved_weight_entity.value!r}"
+            )
+        if relationship.parent_key != weight_observation.key_column:
+            raise ValueError(
+                f"Entity {entity.value!r} links to weight entity "
+                f"{resolved_weight_entity.value!r} through parent key "
+                f"{relationship.parent_key!r}, but calibration bundles require "
+                f"the weight entity id column {weight_observation.key_column!r}"
+            )
+        bindings[entity] = EntityTableBinding(
+            frame=table,
+            id_column=observation.key_column,
+            weight_link_column=relationship.child_key,
+            synced_weight_column=observation.weight_column
+            if sync_child_weight_columns
+            else None,
+        )
+
+    return EntityTableBundle(
+        weight_entity=resolved_weight_entity,
+        weight_column=resolved_weight_column,
+        bindings=bindings,
+    )
+
+
+def _relationships_from_weight_entity(
+    relationships: tuple[EntityRelationship, ...],
+    weight_entity: EntityType,
+) -> dict[EntityType, EntityRelationship]:
+    direct: dict[EntityType, EntityRelationship] = {}
+    for relationship in relationships:
+        if relationship.parent_entity is not weight_entity:
+            continue
+        if relationship.child_entity in direct:
+            raise ValueError(
+                "Observation frame has multiple direct relationships from "
+                f"{weight_entity.value!r} to {relationship.child_entity.value!r}"
+            )
+        direct[relationship.child_entity] = relationship
+    return direct

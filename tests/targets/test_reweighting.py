@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from microplex.core import EntityType
 from microplex.targets import (
@@ -16,6 +17,7 @@ from microplex.targets import (
     apply_filter,
     compile_target_reweighting_constraints,
     constraint_abs_relative_error,
+    entity_table_bundle_from_observation_frame,
     reweight_entity_table_bundle_targets,
     reweight_to_target_constraints,
 )
@@ -64,7 +66,9 @@ def test_compile_target_reweighting_constraints_groups_to_shared_weight_vector()
         }
     )
     household = pd.DataFrame({"household_id": [10, 20]})
-    household_index = pd.Series(np.arange(len(household)), index=household["household_id"])
+    household_index = pd.Series(
+        np.arange(len(household)), index=household["household_id"]
+    )
 
     targets = [
         TargetSpec(
@@ -98,7 +102,9 @@ def test_compile_target_reweighting_constraints_groups_to_shared_weight_vector()
         },
         entity_weight_indexes={
             EntityType.PERSON: person["person_household_id"].map(household_index),
-            EntityType.HOUSEHOLD: household_index.reindex(household["household_id"]).to_numpy(),
+            EntityType.HOUSEHOLD: household_index.reindex(
+                household["household_id"]
+            ).to_numpy(),
         },
     )
 
@@ -120,7 +126,9 @@ def test_reweight_to_target_constraints_hits_simple_targets():
         }
     )
     household = pd.DataFrame({"household_id": [10, 20]})
-    household_index = pd.Series(np.arange(len(household)), index=household["household_id"])
+    household_index = pd.Series(
+        np.arange(len(household)), index=household["household_id"]
+    )
     targets = [
         TargetSpec(
             name="age_band_count",
@@ -294,7 +302,9 @@ def test_simulation_compiler_routes_modifier_targets_in_input_order():
 
     compilation = compile_target_reweighting_constraints(
         targets=targets,
-        entity_frames={EntityType.PERSON: pd.DataFrame({"income": [2.0], "snap": [0.0]})},
+        entity_frames={
+            EntityType.PERSON: pd.DataFrame({"income": [2.0], "snap": [0.0]})
+        },
         entity_weight_indexes={EntityType.PERSON: np.array([0])},
         simulation_compiler=compiler,
     )
@@ -376,8 +386,150 @@ def test_entity_table_bundle_maps_weight_indexes_and_syncs_dependent_weights():
 
     updated = bundle.with_updated_weights(np.array([2.0, 1.0]))
 
-    assert updated.table_for(EntityType.HOUSEHOLD)["household_weight"].tolist() == [2.0, 1.0]
+    assert updated.table_for(EntityType.HOUSEHOLD)["household_weight"].tolist() == [
+        2.0,
+        1.0,
+    ]
     assert updated.table_for(EntityType.PERSON)["weight"].tolist() == [2.0, 2.0, 1.0]
+
+
+def test_entity_table_bundle_from_observation_frame_maps_relationships():
+    from microplex.core.sources import (
+        EntityObservation,
+        EntityRelationship,
+        ObservationFrame,
+        RelationshipCardinality,
+        Shareability,
+        SourceDescriptor,
+        TimeStructure,
+    )
+
+    frame = ObservationFrame(
+        source=SourceDescriptor(
+            name="fixture",
+            shareability=Shareability.PUBLIC,
+            time_structure=TimeStructure.CROSS_SECTION,
+            observations=(
+                EntityObservation(
+                    entity=EntityType.HOUSEHOLD,
+                    key_column="household_id",
+                    variable_names=("state_fips",),
+                    weight_column="household_weight",
+                ),
+                EntityObservation(
+                    entity=EntityType.PERSON,
+                    key_column="person_id",
+                    variable_names=("age",),
+                    weight_column="person_weight",
+                ),
+            ),
+        ),
+        tables={
+            EntityType.HOUSEHOLD: pd.DataFrame(
+                {
+                    "household_id": [10, 20],
+                    "state_fips": ["06", "36"],
+                    "household_weight": [1.0, 2.0],
+                }
+            ),
+            EntityType.PERSON: pd.DataFrame(
+                {
+                    "person_id": [1, 2, 3],
+                    "household_id": [10, 10, 20],
+                    "age": [5, 30, 70],
+                    "person_weight": [0.0, 0.0, 0.0],
+                }
+            ),
+        },
+        relationships=(
+            EntityRelationship(
+                parent_entity=EntityType.HOUSEHOLD,
+                child_entity=EntityType.PERSON,
+                parent_key="household_id",
+                child_key="household_id",
+                cardinality=RelationshipCardinality.ONE_TO_MANY,
+            ),
+        ),
+    )
+
+    bundle = entity_table_bundle_from_observation_frame(
+        frame,
+        weight_entity=EntityType.HOUSEHOLD,
+    )
+
+    assert bundle.weight_entity is EntityType.HOUSEHOLD
+    assert bundle.weight_column == "household_weight"
+    assert bundle.entity_weight_indexes()[EntityType.PERSON].tolist() == [0, 0, 1]
+    updated = bundle.with_updated_weights(np.array([5.0, 7.0]))
+    assert updated.table_for(EntityType.PERSON)["person_weight"].tolist() == [
+        5.0,
+        5.0,
+        7.0,
+    ]
+
+
+def test_entity_table_bundle_from_observation_frame_rejects_parent_key_mismatch():
+    from microplex.core.sources import (
+        EntityObservation,
+        EntityRelationship,
+        ObservationFrame,
+        RelationshipCardinality,
+        Shareability,
+        SourceDescriptor,
+        TimeStructure,
+    )
+
+    frame = ObservationFrame(
+        source=SourceDescriptor(
+            name="fixture",
+            shareability=Shareability.PUBLIC,
+            time_structure=TimeStructure.CROSS_SECTION,
+            observations=(
+                EntityObservation(
+                    entity=EntityType.HOUSEHOLD,
+                    key_column="household_id",
+                    variable_names=("state_fips",),
+                    weight_column="household_weight",
+                ),
+                EntityObservation(
+                    entity=EntityType.PERSON,
+                    key_column="person_id",
+                    variable_names=("age",),
+                ),
+            ),
+        ),
+        tables={
+            EntityType.HOUSEHOLD: pd.DataFrame(
+                {
+                    "household_id": [10],
+                    "state_fips": ["06"],
+                    "household_weight": [1.0],
+                }
+            ),
+            EntityType.PERSON: pd.DataFrame(
+                {
+                    "person_id": [1],
+                    "state_fips": ["06"],
+                    "age": [30],
+                }
+            ),
+        },
+        relationships=(
+            EntityRelationship(
+                parent_entity=EntityType.HOUSEHOLD,
+                child_entity=EntityType.PERSON,
+                parent_key="state_fips",
+                child_key="state_fips",
+                cardinality=RelationshipCardinality.ONE_TO_MANY,
+            ),
+        ),
+    )
+
+    with pytest.raises(ValueError, match="parent key 'state_fips'"):
+        entity_table_bundle_from_observation_frame(
+            frame,
+            weight_entity=EntityType.HOUSEHOLD,
+        )
 
 
 def test_reweight_entity_table_bundle_targets_updates_bundle_in_one_step():
@@ -429,6 +581,12 @@ def test_reweight_entity_table_bundle_targets_updates_bundle_in_one_step():
         ],
     )
 
-    assert result.bundle.table_for(EntityType.HOUSEHOLD)["household_weight"].tolist() == [2.0, 1.0]
-    assert result.bundle.table_for(EntityType.PERSON)["weight"].tolist() == [2.0, 2.0, 1.0]
+    assert result.bundle.table_for(EntityType.HOUSEHOLD)[
+        "household_weight"
+    ].tolist() == [2.0, 1.0]
+    assert result.bundle.table_for(EntityType.PERSON)["weight"].tolist() == [
+        2.0,
+        2.0,
+        1.0,
+    ]
     assert result.compilation.skipped_targets == ()

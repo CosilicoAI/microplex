@@ -63,6 +63,7 @@ from microplex.targets.benchmarking import (
 from microplex.targets.bundles import (
     EntityTableBinding,
     EntityTableBundle,
+    entity_table_bundle_from_observation_frame,
 )
 from microplex.targets.database import Target, TargetCategory, TargetsDatabase
 from microplex.targets.matrix import (
@@ -192,6 +193,7 @@ __all__ = [
     "build_grouped_summaries",
     "EntityTableBinding",
     "EntityTableBundle",
+    "entity_table_bundle_from_observation_frame",
     "SPARSE_TARGET_MATRIX_CERTIFICATE_SCHEMA",
     "SparseTargetMatrix",
     "SparseTargetMatrixCertificate",

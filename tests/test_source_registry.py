@@ -93,6 +93,36 @@ def test_source_registry_resolves_declared_entity_table() -> None:
     ]
 
 
+def test_source_registry_resolves_full_observation_frame() -> None:
+    registry = SourceRegistry().register(
+        "cps_asec_2025_calendar_2024",
+        StaticSourceProvider(_frame()),
+    )
+    spec = load_spec_dict(_spec(entity="person"))
+
+    frame = registry.resolve_observation_frame(spec, "cps_asec")
+
+    assert set(frame.tables) == {EntityType.HOUSEHOLD, EntityType.PERSON}
+    assert frame.tables[EntityType.HOUSEHOLD]["household_id"].tolist() == [1, 2]
+    assert frame.tables[EntityType.PERSON]["person_id"].tolist() == [11, 12]
+
+
+def test_source_registry_resolves_all_observation_frames() -> None:
+    registry = SourceRegistry().register(
+        "cps_asec_2025_calendar_2024",
+        StaticSourceProvider(_frame()),
+    )
+    spec = load_spec_dict(_spec(entity="person"))
+
+    frames = registry.resolve_observation_frames(spec)
+
+    assert list(frames) == ["cps_asec"]
+    assert set(frames["cps_asec"].tables) == {
+        EntityType.HOUSEHOLD,
+        EntityType.PERSON,
+    }
+
+
 def test_source_registry_uses_registered_default_entity() -> None:
     registry = SourceRegistry().register(
         "cps_asec_2025_calendar_2024",
@@ -119,6 +149,7 @@ def test_source_registry_requires_entity_for_multi_table_provider() -> None:
 
     with pytest.raises(ValueError, match="materialized multiple entity tables"):
         registry.resolve_sources(spec)
+
 
 def test_source_registry_rejects_missing_dataset_provider() -> None:
     spec = load_spec_dict(_spec(entity="person"))
