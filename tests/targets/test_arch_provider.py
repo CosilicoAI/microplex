@@ -55,6 +55,26 @@ def test_count_record_converts_to_sum_of_entity_count_measure():
     assert spec.entity is EntityType.TAX_UNIT
 
 
+def test_count_record_rejects_measure_override():
+    import pytest
+
+    with pytest.raises(ValueError):
+        arch_target_record_to_target_spec(
+            _rec("returns", 50.0, target_type="COUNT"),
+            entity="tax_unit",
+            measure="returns",
+        )
+
+
+def test_records_to_target_set_does_not_apply_measure_override_to_count():
+    target_set = arch_records_to_target_set(
+        [_rec("returns", 50.0, target_type="COUNT")],
+        entity_of=lambda v: "tax_unit",
+        measure_of=lambda v: v,
+    )
+    assert target_set.targets[0].measure == "tax_unit_count"
+
+
 def test_rate_target_type_is_rejected():
     import pytest
 
@@ -94,6 +114,42 @@ def test_existing_geo_constraint_not_duplicated():
         entity="tax_unit",
     )
     assert len([f for f in spec.filters if f.feature == "state_fips"]) == 1
+
+
+def test_conflicting_geo_constraint_rejected():
+    import pytest
+
+    with pytest.raises(ValueError):
+        arch_target_record_to_target_spec(
+            _rec(
+                "agi",
+                1.0,
+                geographic_level="STATE",
+                geography_id="06",
+                constraints=(("state_fips", "==", "12"),),
+            ),
+            entity="tax_unit",
+        )
+
+
+def test_unknown_geo_level_with_id_rejected():
+    import pytest
+
+    with pytest.raises(ValueError):
+        arch_target_record_to_target_spec(
+            _rec("agi", 1.0, geographic_level="ZIP", geography_id="12345"),
+            entity="tax_unit",
+        )
+
+
+def test_subnational_geo_level_requires_geo_id():
+    import pytest
+
+    with pytest.raises(ValueError):
+        arch_target_record_to_target_spec(
+            _rec("agi", 1.0, geographic_level="STATE", geography_id=None),
+            entity="tax_unit",
+        )
 
 
 def test_constraints_become_target_filters():

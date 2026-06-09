@@ -74,6 +74,7 @@ DEFAULT_GEO_FEATURES = {
     "tract": "tract_geoid",
     "block": "block_geoid",
 }
+NATIONAL_GEO_LEVELS = {"", "national", "nation"}
 
 
 def _normalized_geo_level(record: ArchTargetRecord) -> str:
@@ -97,6 +98,14 @@ def default_count_measure(entity: EntityType) -> str:
     sums share one aggregation path. Packs can inject their own mapping.
     """
     return f"{entity.value}_count"
+
+
+def _is_national_geo_level(geo_level: str | None) -> bool:
+    return (geo_level or "").lower() in NATIONAL_GEO_LEVELS
+
+
+def _geo_filter_matches(filter_: TargetFilter, geography_id: str) -> bool:
+    return str(filter_.operator) == "==" and str(filter_.value) == geography_id
 
 
 def default_arch_target_name(record: ArchTargetRecord) -> str:
@@ -142,9 +151,13 @@ def arch_target_record_to_target_spec(
     if record.target_type == "AMOUNT":
         resolved_measure = measure if measure is not None else record.variable
     elif record.target_type == "COUNT":
-        resolved_measure = (
-            measure if measure is not None else count_measure(entity_type)
-        )
+        if measure is not None:
+            raise ValueError(
+                "COUNT Arch targets must use count_measure(entity), not a "
+                "measure override. Use the count_measure hook to override "
+                "entity-count measure names."
+            )
+        resolved_measure = count_measure(entity_type)
     else:
         raise ValueError(
             f"unsupported Arch target_type {record.target_type!r} for "
@@ -158,14 +171,36 @@ def arch_target_record_to_target_spec(
     ]
     constrained_features = {variable for variable, _, _ in record.constraints}
     feature = geo_feature(record.geographic_level)
-    if (
-        feature is not None
-        and record.geography_id is not None
-        and feature not in constrained_features
-    ):
-        filters.append(
-            TargetFilter(feature=feature, operator="==", value=str(record.geography_id))
-        )
+    if not _is_national_geo_level(record.geographic_level):
+        if feature is None:
+            raise ValueError(
+                f"unsupported Arch geography level {record.geographic_level!r} "
+                f"for {record.variable!r}; inject a geo_feature mapping before "
+                "converting subnational targets"
+            )
+        if record.geography_id is None:
+            raise ValueError(
+                f"Arch geography level {record.geographic_level!r} for "
+                f"{record.variable!r} requires geography_id"
+            )
+        geography_id = str(record.geography_id)
+        if feature in constrained_features:
+            existing_geo_filters = [
+                filter_ for filter_ in filters if filter_.feature == feature
+            ]
+            if not any(
+                _geo_filter_matches(filter_, geography_id)
+                for filter_ in existing_geo_filters
+            ):
+                raise ValueError(
+                    f"conflicting Arch geography for {record.variable!r}: "
+                    f"metadata {feature} == {geography_id!r} but constraints "
+                    f"include {existing_geo_filters!r}"
+                )
+        else:
+            filters.append(
+                TargetFilter(feature=feature, operator="==", value=geography_id)
+            )
     lineage = {
         "arch_variable": record.variable,
         "target_type": record.target_type,
@@ -222,7 +257,11 @@ def arch_records_to_target_set(
     for record in records:
         if skip is not None and skip(record):
             continue
-        measure = measure_of(record.variable) if measure_of is not None else None
+        measure = (
+            measure_of(record.variable)
+            if measure_of is not None and record.target_type != "COUNT"
+            else None
+        )
         specs.append(
             arch_target_record_to_target_spec(
                 record,
