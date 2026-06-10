@@ -183,3 +183,18 @@ Old imperative pipeline best (a3a1934, 06-07): cand 0.0606 vs eCPS 0.0559 full /
   (harmless under the old pin which ignores it). After bumping the microplex pin
   to 676a5ab: REMOVE the driver resample (else double-correction) and rely on the
   step weights param alone.
+
+## 🎯 v5 BEATS eCPS (2026-06-10 ~06:00) — first spec-built candidate to pass headline gates
+| metric | candidate v5 | eCPS baseline |
+|---|---|---|
+| full loss | **1.260** | 1.405 |
+| holdout loss | **0.215** | 0.317 |
+| unweighted MSRE | **1.04** | 1.32 |
+Config: both halves, donor population-resampled by design weight, 22 PUF vars, microunit
+entities, 135M weight scale. Biggest wins: state_agi_distribution (0.19 vs 0.55),
+state_age. Remaining: national_irs_other slightly worse (0.93 vs 0.75); protected
+families clause FAILS on capital_gains (2.3e-5 vs 6.4e-6) + dividends (1.2e-5 vs 2.2e-6)
+— the tail-concentrated families; v6 tail-verbatim stratum is the designed fix.
+HONESTY (per #113): candidate uses microunit (eCPS's entity engine) — entity dimension
+is convergence, not independent improvement; protocol was the sound one (matched-N
+41,314, symmetric refit, 20% holdout, same surface, certificate-matched).
