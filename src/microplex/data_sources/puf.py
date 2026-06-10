@@ -83,6 +83,24 @@ PUF_VARIABLE_MAP = {
     "E03150": "ira_deduction",
     "E03210": "student_loan_interest",
 
+    # v2 parity fields (PE-named donors; rules mirror usdata puf.py:637-706)
+    "E03500": "alimony_expense",
+    "E20500": "casualty_loss",
+    "E03240": "domestic_production_ald",
+    "E03220": "educator_expense",
+    "E26390": "_estate_income_gross",
+    "E26400": "_estate_income_loss",
+    "E03290": "health_savings_account_ald",
+    "E24518": "long_term_capital_gains_on_collectibles",
+    "E20400": "unreimbursed_business_employee_expenses",
+    "E03230": "qualified_tuition_expenses",
+    "E27200": "farm_rent_income",
+    "E03300": "self_employed_pension_contribution_ald",
+    "E24515": "unrecaptured_section_1250_gain",
+    "E01200": "puf_miscellaneous_income",
+    "E00700": "salt_refund_income",
+    "E58990": "investment_income_elected_form_4952",
+
     # Weights
     "S006": "weight",  # In hundredths (divide by 100)
 }
@@ -91,6 +109,22 @@ PUF_VARIABLE_MAP = {
 # Based on IRS SOI aggregate growth rates
 # These should be updated with actual SOI data
 UPRATING_FACTORS = {
+    # v2 parity fields — mirror nearest category factors above.
+    "alimony_expense": 0.50,
+    "casualty_loss": 1.35,
+    "domestic_production_ald": 1.35,
+    "educator_expense": 1.35,
+    "estate_income": 1.50,
+    "health_savings_account_ald": 1.50,
+    "long_term_capital_gains_on_collectibles": 2.20,
+    "unreimbursed_business_employee_expenses": 1.35,
+    "qualified_tuition_expenses": 1.35,
+    "farm_rent_income": 1.20,
+    "self_employed_pension_contribution_ald": 1.35,
+    "unrecaptured_section_1250_gain": 2.20,
+    "puf_miscellaneous_income": 1.35,
+    "salt_refund_income": 1.35,
+    "investment_income_elected_form_4952": 1.80,
     "employment_income": 1.45,  # ~4.5% annual wage growth
     "self_employment_income": 1.35,
     "farm_income": 1.20,
@@ -213,6 +247,13 @@ def map_puf_variables(puf: pd.DataFrame) -> pd.DataFrame:
         result.get("rental_income_positive", 0).fillna(0) +
         result.get("rental_income_negative", 0).fillna(0)
     )
+    if "_estate_income_gross" in result.columns:
+        result["estate_income"] = (
+            result["_estate_income_gross"].fillna(0)
+            - result["_estate_income_loss"].fillna(0)
+        )
+        result = result.drop(columns=["_estate_income_gross", "_estate_income_loss"])
+
 
     # Map filing status code to string
     filing_status_map = {
