@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 
 import numpy as np
@@ -136,11 +137,14 @@ def entity_table_bundle_from_observation_frame(
     weight_entity: EntityType | str,
     weight_column: str | None = None,
     sync_child_weight_columns: bool = True,
+    table_overrides: Mapping[EntityType | str, pd.DataFrame] | None = None,
 ) -> EntityTableBundle:
     """Build a calibration bundle from a related observation frame.
 
     Non-weight entity tables must have a direct relationship to the weight
-    entity so their rows can map onto the shared reweighting vector.
+    entity so their rows can map onto the shared reweighting vector. Optional
+    table overrides let callers replace a source table with a post-run support
+    table while preserving the source's entity relationships.
     """
     frame.validate()
     resolved_weight_entity = (
@@ -148,6 +152,21 @@ def entity_table_bundle_from_observation_frame(
         if isinstance(weight_entity, EntityType)
         else EntityType(weight_entity)
     )
+    resolved_table_overrides: dict[EntityType, pd.DataFrame] = {}
+    for entity, table in (table_overrides or {}).items():
+        resolved_entity = (
+            entity if isinstance(entity, EntityType) else EntityType(entity)
+        )
+        resolved_table_overrides[resolved_entity] = table
+    unknown_overrides = set(resolved_table_overrides) - set(
+        frame.source.observed_entities
+    )
+    if unknown_overrides:
+        unknown = ", ".join(sorted(entity.value for entity in unknown_overrides))
+        raise ValueError(
+            "table_overrides contains entities not observed by source "
+            f"{frame.source.name!r}: {unknown}"
+        )
     weight_observation = frame.source.observation_for(resolved_weight_entity)
     resolved_weight_column = weight_column or weight_observation.weight_column
     if resolved_weight_column is None:
@@ -163,7 +182,7 @@ def entity_table_bundle_from_observation_frame(
     bindings: dict[EntityType, EntityTableBinding] = {}
     for observation in frame.source.observations:
         entity = observation.entity
-        table = frame.tables[entity].copy()
+        table = resolved_table_overrides.get(entity, frame.tables[entity]).copy()
         if entity is resolved_weight_entity:
             bindings[entity] = EntityTableBinding(
                 frame=table,

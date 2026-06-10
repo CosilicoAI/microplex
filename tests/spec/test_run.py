@@ -1071,6 +1071,115 @@ class TestRunSpec:
             "simulated_person_income_total"
         ]
 
+    def test_prepared_entity_table_bundle_factory_receives_final_frame(
+        self,
+        monkeypatch,
+    ) -> None:
+        captured: dict = {}
+        _install_fake_microcalibrate(monkeypatch, captured)
+        spec = load_spec_dict(_spec_dict())
+        provider = RecordingTargetProvider(_person_income_target_set())
+        factory_calls: list[pd.DataFrame] = []
+
+        def bundle_factory(frame: pd.DataFrame) -> EntityTableBundle:
+            factory_calls.append(frame)
+            return _multi_entity_bundle()
+
+        result = _run_spec(
+            spec,
+            _sources(),
+            demographic_columns=DEMOGRAPHIC_COLS,
+            target_provider=provider,
+            calibration_entity_bundle_factory=bundle_factory,
+            calibration_entity=EntityType.PERSON,
+        )
+
+        assert len(factory_calls) == 1
+        assert "total_market_income" in factory_calls[0]
+        assert result.frame["person_weight"].tolist() == [2.0, 2.0, 3.0]
+        assert result.entity_table_bundle is not None
+        assert captured["kwargs"]["target_names"].tolist() == [
+            "person_employment_income_total"
+        ]
+
+    def test_prepared_entity_table_bundle_factory_routes_simulation_compiler(
+        self,
+        monkeypatch,
+    ) -> None:
+        captured: dict = {}
+        _install_fake_microcalibrate(monkeypatch, captured)
+        spec = load_spec_dict(_spec_dict())
+        provider = RecordingTargetProvider(_simulated_person_income_target_set())
+
+        class RecordingSimulationMaterializer:
+            def __init__(self) -> None:
+                self.calls: list[tuple[str, tuple[EntityType, ...]]] = []
+
+            def materialize_simulation_features(
+                self,
+                *,
+                targets,
+                entity_frames,
+                modifiers,
+            ):
+                self.calls.append(
+                    (
+                        targets[0].name,
+                        tuple(sorted(entity_frames, key=lambda entity: entity.value)),
+                    )
+                )
+                person_frame = entity_frames[EntityType.PERSON]
+                return {
+                    EntityType.PERSON: pd.DataFrame(
+                        {
+                            "simulated_income": np.arange(
+                                len(person_frame),
+                                dtype=float,
+                            )
+                            + 10.0
+                        }
+                    )
+                }
+
+        materializer = RecordingSimulationMaterializer()
+
+        result = _run_spec(
+            spec,
+            _sources(),
+            demographic_columns=DEMOGRAPHIC_COLS,
+            target_provider=provider,
+            calibration_entity_bundle_factory=lambda frame: _multi_entity_bundle(),
+            calibration_entity=EntityType.PERSON,
+            simulation_compiler=MaterializedSimulationTargetCompiler(materializer),
+        )
+
+        assert result.pending_stages == ("export",)
+        assert materializer.calls == [
+            (
+                "simulated_person_income_total",
+                (EntityType.HOUSEHOLD, EntityType.PERSON, EntityType.TAX_UNIT),
+            )
+        ]
+        assert captured["kwargs"]["target_names"].tolist() == [
+            "simulated_person_income_total"
+        ]
+
+    def test_prepared_entity_table_bundle_factory_rejects_prebuilt_bundle(
+        self,
+    ) -> None:
+        spec = load_spec_dict(_spec_dict())
+        provider = RecordingTargetProvider(_person_income_target_set())
+
+        with pytest.raises(ValueError, match="not both"):
+            _run_spec(
+                spec,
+                _sources(),
+                demographic_columns=DEMOGRAPHIC_COLS,
+                target_provider=provider,
+                calibration_entity_bundle=_multi_entity_bundle(),
+                calibration_entity_bundle_factory=lambda frame: _multi_entity_bundle(),
+            )
+
     def test_prepared_entity_table_bundle_rejects_unused_id_column(self) -> None:
         spec = load_spec_dict(_spec_dict())
         provider = RecordingTargetProvider(_person_income_target_set())
