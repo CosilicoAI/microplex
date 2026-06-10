@@ -85,7 +85,8 @@ HOUSEHOLD_PREDICTORS = [
     "hh_self_employment_income",
     "hh_social_security",
     "head_age",
-    "tenure_type",
+    "tenure_owned",
+    "tenure_rented",
 ]
 
 
@@ -304,15 +305,16 @@ def run(
     ).fillna({c: 0 for c in r_aggr.columns})
     if "tenure_type" not in recv_h.columns:
         raise ValueError("pool household frame missing tenure_type")
-    recv_h["tenure_type"] = recv_h["tenure_type"].fillna("NONE").astype(str)
-    d_hh["tenure_type"] = d_hh["tenure_type"].astype(str)
+    for frame in (recv_h, d_hh):
+        tt = frame["tenure_type"].fillna("NONE").astype(str)
+        frame["tenure_owned"] = tt.str.startswith("OWNED").astype(float)
+        frame["tenure_rented"] = (tt == "RENTED").astype(float)
 
     fitted_h = Imputer(seed=seed + 1, log_level="WARNING").fit(
         d_hh,
         HOUSEHOLD_PREDICTORS,
         household_targets,
         weight_col="household_weight",
-        not_numeric_categorical=["tenure_type"],
     )
     draws_h = fitted_h.predict(recv_h[HOUSEHOLD_PREDICTORS].copy())
     for t in household_targets:
