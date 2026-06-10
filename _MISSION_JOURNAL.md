@@ -160,3 +160,13 @@ PUF source: registry puf_path=…/storage/puf_2024.h5 (verify format; HF fallbac
   decision vs the engine's zero-weight default; harness refit preserves input totals).
 - Smoke v16: 4,000 units both halves, 7,227 persons, 3,360 household pieces, 0 zero
   weights, gate 257/257.
+
+## Score history (sound comparison, matched 41,314 hh, ~3,704-target surface)
+| build | config | full loss | holdout | notes |
+|---|---|---|---|---|
+| eCPS baseline | (refit) | 1.41 | 0.32 | the bar |
+| v2 2026-06-10 | INVALID (cps_keep only exported) | 8.00 | 2.31 | half-attachment bug |
+| v3 2026-06-10 | both halves, UNWEIGHTED donor fits | 130.1 | 33.6 | landmines at scale: LTCG $200.9T vs $257B, qual div $18.5T vs $154B — microplex#76 A-arm measured |
+| v4 (running) | weighted PUF fits (B arm) | ? | ? | |
+Old imperative pipeline best (a3a1934, 06-07): cand 0.0606 vs eCPS 0.0559 full / 0.0278 vs 0.0127 holdout
+(different matched-N=15,875 + surface scale — not directly comparable to the 41,314-hh refits above).
