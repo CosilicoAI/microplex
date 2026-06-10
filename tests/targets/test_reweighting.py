@@ -468,6 +468,127 @@ def test_entity_table_bundle_from_observation_frame_maps_relationships():
     ]
 
 
+def test_entity_table_bundle_from_observation_frame_accepts_table_overrides():
+    from microplex.core.sources import (
+        EntityObservation,
+        EntityRelationship,
+        ObservationFrame,
+        RelationshipCardinality,
+        Shareability,
+        SourceDescriptor,
+        TimeStructure,
+    )
+
+    frame = ObservationFrame(
+        source=SourceDescriptor(
+            name="fixture",
+            shareability=Shareability.PUBLIC,
+            time_structure=TimeStructure.CROSS_SECTION,
+            observations=(
+                EntityObservation(
+                    entity=EntityType.HOUSEHOLD,
+                    key_column="household_id",
+                    variable_names=("state_fips",),
+                    weight_column="household_weight",
+                ),
+                EntityObservation(
+                    entity=EntityType.PERSON,
+                    key_column="person_id",
+                    variable_names=("age",),
+                    weight_column="person_weight",
+                ),
+            ),
+        ),
+        tables={
+            EntityType.HOUSEHOLD: pd.DataFrame(
+                {
+                    "household_id": [10, 20],
+                    "state_fips": ["06", "36"],
+                    "household_weight": [1.0, 2.0],
+                }
+            ),
+            EntityType.PERSON: pd.DataFrame(
+                {
+                    "person_id": [1, 2],
+                    "household_id": [10, 20],
+                    "age": [30, 70],
+                    "person_weight": [0.0, 0.0],
+                }
+            ),
+        },
+        relationships=(
+            EntityRelationship(
+                parent_entity=EntityType.HOUSEHOLD,
+                child_entity=EntityType.PERSON,
+                parent_key="household_id",
+                child_key="household_id",
+                cardinality=RelationshipCardinality.ONE_TO_MANY,
+            ),
+        ),
+    )
+    override_person = pd.DataFrame(
+        {
+            "person_id": [9, 10],
+            "household_id": [20, 10],
+            "age": [44, 55],
+            "person_weight": [0.0, 0.0],
+            "post_run_value": [1.5, 2.5],
+        }
+    )
+
+    bundle = entity_table_bundle_from_observation_frame(
+        frame,
+        weight_entity=EntityType.HOUSEHOLD,
+        table_overrides={EntityType.PERSON: override_person},
+    )
+
+    assert bundle.table_for(EntityType.PERSON)["person_id"].tolist() == [9, 10]
+    assert bundle.table_for(EntityType.PERSON)["post_run_value"].tolist() == [1.5, 2.5]
+    assert bundle.entity_weight_indexes()[EntityType.PERSON].tolist() == [1, 0]
+
+
+def test_entity_table_bundle_from_observation_frame_rejects_unknown_override():
+    from microplex.core.sources import (
+        EntityObservation,
+        ObservationFrame,
+        Shareability,
+        SourceDescriptor,
+        TimeStructure,
+    )
+
+    frame = ObservationFrame(
+        source=SourceDescriptor(
+            name="fixture",
+            shareability=Shareability.PUBLIC,
+            time_structure=TimeStructure.CROSS_SECTION,
+            observations=(
+                EntityObservation(
+                    entity=EntityType.HOUSEHOLD,
+                    key_column="household_id",
+                    variable_names=("state_fips",),
+                    weight_column="household_weight",
+                ),
+            ),
+        ),
+        tables={
+            EntityType.HOUSEHOLD: pd.DataFrame(
+                {
+                    "household_id": [10],
+                    "state_fips": ["06"],
+                    "household_weight": [1.0],
+                }
+            ),
+        },
+    )
+
+    with pytest.raises(ValueError, match="not observed"):
+        entity_table_bundle_from_observation_frame(
+            frame,
+            weight_entity=EntityType.HOUSEHOLD,
+            table_overrides={EntityType.PERSON: pd.DataFrame({"person_id": [1]})},
+        )
+
+
 def test_entity_table_bundle_from_observation_frame_rejects_parent_key_mismatch():
     from microplex.core.sources import (
         EntityObservation,
