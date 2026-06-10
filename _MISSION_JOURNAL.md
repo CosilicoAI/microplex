@@ -198,3 +198,12 @@ families clause FAILS on capital_gains (2.3e-5 vs 6.4e-6) + dividends (1.2e-5 vs
 HONESTY (per #113): candidate uses microunit (eCPS's entity engine) — entity dimension
 is convergence, not independent improvement; protocol was the sound one (matched-N
 41,314, symmetric refit, 20% holdout, same surface, certificate-matched).
+
+## v6 verdict (tail 10,384): trade, not win
+full 1.407 vs 1.405 (LOST by 0.002; v5 was 1.260) | holdout 0.191 vs 0.317 (best yet)
+| msre 1.17 vs 1.32 | dividends CLEARED (9.0e-6) | capital_gains still flagged (1.9e-5,
+−16% vs v5). DIAGNOSIS: matched-N sampling dilution — 10,384 tiny-weight tail rows ≈14%
+of the 41,314 sample crowd out real-mass households; eCPS pool == N so its 31,971
+zero-weight support rows never get sampled out (structural asymmetry of the harness for
+pools > N — candidates pay a tax for extra support). v7 = tail 4,000 (top-concentrated).
+Remaining cap-gains lever beyond tail: conditional draw quality (chain order, predictors).
