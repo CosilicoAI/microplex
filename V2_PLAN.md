@@ -149,3 +149,29 @@ ties 54 (disclose). v1 loss gates PASS; parity gate (82 gaps) is the v2 work.
   verify: if so, adding *_desired closes those gaps automatically).
 - hourly_wage / is_paid_hourly / union: usdata imputes from CPS ORG (stage ~line 2948)
   — family-3 (eCPS-donor impute) or defer with documented note.
+
+## Step A progress (committed to worktree git, syntax-checked):
+DONE: raw person cols (ED/FIN/SRVS/VET/WC/OI_VAL/OI_OFF/A_HRS1/WKSWORK/POCCU2/
+RETCB/WSAL/SEMP) + H_TENURE via extra_household_columns; tenure_type mapped at
+Stage A households (flows to spine + export hh); _derive_person_columns v2 block
+(benefits, strike/misc income, hours/weeks, occupation, RETCB split with yaml
+shares 0.046/0.908/0.15/0.392 — only *_desired set; PE computes limited values).
+NEXT in step A: (1) tipped occupation: sys.path usdata-populace +
+`from policyengine_us_data.datasets.cps.tipped_occupation import derive_treasury_tipped_occupation_code, derive_is_tipped_occupation`
+applied on POCCU2 in _derive_person_columns equivalent (needs occupation arg
+form — read that module first); (2) PUF family-2: read src/microplex/data_sources/puf.py
+for carried fields, extend PUF_IMPUTE_VARS+DONOR_TO_PE (estate_income e26390?,
+misc, e01100 non_sch_d, e03220 educator, e03300 se_pension, e03290 hsa, e58990
+form4952, alimony_expense e03500, casualty, 1250 gain, collectibles, qbi/sstb);
+(3) prune V1_ZERO_DEFAULTS entries now derived (educator_expense? no — PUF; the
+CPS ones: survivor_benefits, educational_assistance, financial_assistance,
+tip_income stays, roth/trad 401k/ira *_desired, self_employed_pension_*_desired,
+miscellaneous_income, estate_income stays til PUF done); (4) family-3 eCPS-donor
+stage (populace-fit QRF, donor=eCPS hf_main flat: scf block+net_worth+assets,
+mortgage block, auto/vehicles, premiums, tips fallback, hourly_wage block) —
+insert after PUF imputation stage, person/household level as appropriate;
+(5) smoke-mode test: `.venv/bin/python scripts/build_us_candidate.py --mode smoke`
+must pass end-to-end before full rebuild; (6) parity script refinement: gate on
+PE-KNOWN variables only (is_puf_clone flags etc. are bookkeeping, not outputs)
+and at SIMULATION level for formula vars (e.g. traditional_401k_contributions
+computes from *_desired).
