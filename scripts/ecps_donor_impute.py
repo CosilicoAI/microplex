@@ -155,8 +155,37 @@ def _donor_frames(baseline_h5: str) -> tuple[pd.DataFrame, pd.DataFrame]:
             set(HOUSEHOLD_TARGETS) - set(hh_targets)
             - {"spm_unit_pre_subsidy_childcare_expenses"}
         )
+        # Some donor variables live at tax-unit grain (e.g. the mortgage
+        # block). Aggregate those to household via the person mapping; the
+        # receiver side head-carries them back onto persons so the export
+        # surgery lands them at tax-unit entity.
+        n_hh = len(hh)
+        p_tu = col("person_tax_unit_id")
+        tu_to_hh = (
+            pd.DataFrame(
+                {"tu": p_tu, "hh": person["person_household_id"]}
+            )
+            .drop_duplicates("tu")
+            .set_index("tu")["hh"]
+        )
+        tax_unit_grain: list[str] = []
         for t in hh_targets:
-            hh[t] = col(t)
+            v = col(t)
+            if len(v) == n_hh:
+                hh[t] = v
+                continue
+            tu_ids = col("tax_unit_id")
+            if len(v) != len(tu_ids):
+                raise ValueError(
+                    f"donor {t!r} has unrecognized grain {len(v)}"
+                )
+            agg = (
+                pd.DataFrame({"hh": pd.Series(tu_ids).map(tu_to_hh), "v": v})
+                .groupby("hh")["v"]
+                .sum()
+            )
+            hh[t] = hh["household_id"].map(agg).fillna(0.0)
+            tax_unit_grain.append(t)
         # SPM childcare -> household grain (first SPM unit per household).
         spm_cc = col("spm_unit_pre_subsidy_childcare_expenses")
         spm_id = col("spm_unit_id")
@@ -181,9 +210,13 @@ def _donor_frames(baseline_h5: str) -> tuple[pd.DataFrame, pd.DataFrame]:
             f"{skipped_p + skipped_h}"
         )
     person.attrs = {}  # silence pandas attrs propagation warnings
-    return person, hh, person_targets, hh_targets + [
-        "spm_unit_pre_subsidy_childcare_expenses"
-    ]
+    return (
+        person,
+        hh,
+        person_targets,
+        hh_targets + ["spm_unit_pre_subsidy_childcare_expenses"],
+        tax_unit_grain,
+    )
 
 
 def _household_aggregates(person: pd.DataFrame, hh_id_col: str) -> pd.DataFrame:
@@ -217,7 +250,9 @@ def run(
     """Impute the donor blocks onto the pool person/household frames."""
     from microimpute import Imputer
 
-    d_person, d_hh, person_targets, household_targets = _donor_frames(baseline_h5)
+    d_person, d_hh, person_targets, household_targets, tax_unit_grain = (
+        _donor_frames(baseline_h5)
+    )
     log(f"  donor: {len(d_person):,} persons, {len(d_hh):,} households")
 
     # Person weights = household weight of the person's household.
@@ -278,5 +313,19 @@ def run(
         hh["first_home_mortgage_origination_year"].clip(1960, 2024).round(),
         0,
     )
+    # Tax-unit-entity variables: head-carry onto persons (the export's
+    # tax-unit surgery group-sums person values to the unit, like
+    # interest_deduction), and drop from the household frame.
+    if tax_unit_grain:
+        head = person["is_household_head"].astype(bool)
+        hmap = dict(zip(hh["household_id"].tolist(), range(len(hh))))
+        idx = person["person_household_id"].map(hmap)
+        for t in tax_unit_grain:
+            vals = hh[t].to_numpy()
+            person[t] = np.where(
+                head & idx.notna(), vals[idx.fillna(0).astype(int)], 0.0
+            )
+            hh.drop(columns=[t], inplace=True)
+        log(f"  head-carried to persons (tax-unit entity): {tax_unit_grain}")
     log(f"  household block imputed: {len(household_targets)} variables")
     return person, hh
