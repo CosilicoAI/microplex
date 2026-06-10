@@ -481,6 +481,13 @@ def main() -> int:
         type=Path,
         default=Path("~/.claude-worktrees/usdata-f7458313").expanduser(),
     )
+    ap.add_argument(
+        "--tail-units",
+        type=int,
+        default=15000,
+        help="Top-income PUF returns carried verbatim as a tail-support "
+        "stratum at design weights (0 disables).",
+    )
     args = ap.parse_args()
 
     smoke = args.mode == "smoke"
@@ -577,6 +584,31 @@ def main() -> int:
     puf = registry.resolve_source(spec, "puf")
     if max_puf is not None:
         puf = puf.head(max_puf).copy()
+    # Tail-support stratum: the top returns by income proxy, kept verbatim at
+    # design weights BEFORE the population resample discards them. Free
+    # support for top-bracket targets; calibration owns how much to use.
+    income_proxy = sum(
+        puf[c].clip(lower=0)
+        for c in (
+            "employment_income",
+            "self_employment_income",
+            "partnership_s_corp_income",
+            "taxable_interest_income",
+            "qualified_dividend_income",
+            "ordinary_dividend_income",
+            "long_term_capital_gains",
+            "short_term_capital_gains",
+            "taxable_pension_income",
+        )
+        if c in puf.columns
+    )
+    tail = (
+        puf.loc[income_proxy.nlargest(min(args.tail_units, len(puf) // 20)).index].copy()
+        if args.tail_units
+        else puf.head(0).copy()
+    )
+    log(f"  tail stratum: {len(tail):,} units, weight {tail['weight'].sum()/1e6 if len(tail) else 0:.2f}M")
+
     # Population-resample the donor by its design weight: the PUF oversamples
     # high incomes, and microimpute's canonical Imputer silently ignores
     # weight_col (verified 2026-06-10), so importance-resampling is the
@@ -683,19 +715,114 @@ def main() -> int:
         bool
     )
 
-    def _group_clone_flag(id_col: str) -> pd.Series:
-        share = person.groupby(person[id_col])["person_is_puf_clone"].mean()
-        return share > 0.5
-
-    clone_flags = {
-        c: _group_clone_flag(f"person_{c.split('_is_')[0]}_id")
-        for c in (
-            "household_is_puf_clone",
-            "tax_unit_is_puf_clone",
-            "spm_unit_is_puf_clone",
-            "family_is_puf_clone",
+    # ---- Tail-support stratum persons ------------------------------------
+    if len(tail):
+        t = tail.reset_index(drop=True).copy()
+        t = t.rename(columns={"gross_social_security": "social_security"})
+        t = t.rename(columns=DONOR_TO_PE)
+        if {"total_pension_income", "taxable_pension_income"} <= set(t.columns):
+            t["tax_exempt_pension_income"] = (
+                t["total_pension_income"] - t["taxable_pension_income"]
+            ).clip(lower=0.0)
+        if {
+            "non_qualified_dividend_income",
+            "qualified_dividend_income",
+        } <= set(t.columns):
+            t["non_qualified_dividend_income"] = (
+                t["non_qualified_dividend_income"]
+                - t["qualified_dividend_income"]
+            ).clip(lower=0.0)
+        n = len(t)
+        joint = (t["filing_status"] == "JOINT").to_numpy()
+        base_ids = {
+            "tax": int(person["person_tax_unit_id"].max()),
+            "hh": int(person["person_household_id"].max()),
+            "spm": int(person["person_spm_unit_id"].max()),
+            "fam": int(person["person_family_id"].max()),
+            "mar": int(person["person_marital_unit_id"].max()),
+            "pid": int(person["person_id"].max()),
+        }
+        head = pd.DataFrame(index=range(n))
+        head["person_tax_unit_id"] = base_ids["tax"] + 1 + np.arange(n)
+        head["person_household_id"] = base_ids["hh"] + 1 + np.arange(n)
+        head["person_spm_unit_id"] = base_ids["spm"] + 1 + np.arange(n)
+        head["person_family_id"] = base_ids["fam"] + 1 + np.arange(n)
+        head["person_marital_unit_id"] = base_ids["mar"] + 1 + np.arange(n)
+        head["age"] = (
+            pd.to_numeric(t["age"], errors="coerce").fillna(50).clip(18, 85)
         )
-    }
+        head["A_AGE"] = head["age"]
+        head["tax_unit_role_input"] = "HEAD"
+        head["_half"] = "tail_puf"
+        value_cols = [
+            c
+            for c in t.columns
+            if c in set(person.columns)
+            and c
+            not in ("age", "weight", "tax_unit_id", "filing_status", "_survey")
+            and pd.api.types.is_numeric_dtype(t[c])
+        ]
+        for c in value_cols:
+            head[c] = pd.to_numeric(t[c], errors="coerce").fillna(0.0)
+        head["own_children_in_household"] = (
+            pd.to_numeric(t.get("ctc_children", 0), errors="coerce")
+            .fillna(0)
+            .to_numpy()
+        )
+        head["count_under_18"] = head["own_children_in_household"]
+        spouse = head[joint].copy()
+        for c in value_cols:
+            spouse[c] = 0.0
+        spouse["tax_unit_role_input"] = "SPOUSE"
+        spouse["own_children_in_household"] = 0.0
+        tail_person = pd.concat([head, spouse], ignore_index=True)
+        tail_person["person_id"] = (
+            base_ids["pid"] + 1 + np.arange(len(tail_person))
+        )
+        tail_person["person_is_puf_clone"] = True
+        for col in (
+            "employment_income_before_lsr",
+            "self_employment_income_before_lsr",
+        ):
+            src = col.replace("_before_lsr", "")
+            if src in tail_person.columns:
+                tail_person[col] = tail_person[src]
+        if "long_term_capital_gains" in tail_person.columns:
+            tail_person["long_term_capital_gains_before_response"] = (
+                tail_person["long_term_capital_gains"]
+            )
+        if "unemployment_compensation" in tail_person.columns:
+            tail_person["taxable_unemployment_compensation"] = tail_person[
+                "unemployment_compensation"
+            ]
+        if "taxable_pension_income" in tail_person.columns:
+            tail_person["taxable_private_pension_income"] = tail_person[
+                "taxable_pension_income"
+            ]
+        if "tax_exempt_pension_income" in tail_person.columns:
+            tail_person["tax_exempt_private_pension_income"] = tail_person[
+                "tax_exempt_pension_income"
+            ]
+        if "farm_income" in tail_person.columns:
+            tail_person["farm_operations_income"] = tail_person["farm_income"]
+        tail_person = tail_person.reindex(columns=person.columns)
+        for c in person.columns:
+            if tail_person[c].isna().all():
+                dt = person[c].dtype
+                if pd.api.types.is_bool_dtype(dt):
+                    tail_person[c] = False
+                elif pd.api.types.is_numeric_dtype(dt):
+                    tail_person[c] = 0
+                else:
+                    tail_person[c] = ""
+        tail_person["_orig_household_id"] = np.nan
+        log(
+            f"  tail persons: {len(tail_person):,} "
+            f"({int(joint.sum()):,} spouses added)"
+        )
+    else:
+        tail_person = person.head(0)
+
 
     # Export households = (original household, half) pieces. Attributes come
     # from the original household; weight is prorated by the piece's person
@@ -722,6 +849,40 @@ def main() -> int:
     hh["tract_geoid"] = hh["block_geoid"].astype(str).str[:11]
     hh["household_is_puf_clone"] = (hh["_half"] == "synthetic_puf").astype(bool)
     hh = hh.drop(columns=["_orig", "_half", "_n", "_orig_weight"])
+
+    # Tail-stratum households: design weights, geography sampled from the
+    # main household distribution (the PUF has no state).
+    if len(tail):
+        rng_t = np.random.default_rng(args.seed + 1)
+        donor_geo = hh.sample(
+            n=len(tail),
+            replace=True,
+            weights=hh["household_weight"].clip(lower=1e-9),
+            random_state=int(rng_t.integers(0, 2**31)),
+        ).reset_index(drop=True)
+        tail_hh = donor_geo.copy()
+        tail_hh["household_id"] = (
+            tail_person["person_household_id"].unique()
+        )
+        tail_hh["household_weight"] = tail["weight"].to_numpy(dtype=float)
+        tail_hh["household_is_puf_clone"] = True
+        hh = pd.concat([hh, tail_hh], ignore_index=True)
+        person = pd.concat([person, tail_person], ignore_index=True)
+        log(f"  households incl. tail: {len(hh):,}")
+
+    def _group_clone_flag(id_col: str) -> pd.Series:
+        share = person.groupby(person[id_col])["person_is_puf_clone"].mean()
+        return share > 0.5
+
+    clone_flags = {
+        c: _group_clone_flag(f"person_{c.split('_is_')[0]}_id")
+        for c in (
+            "household_is_puf_clone",
+            "tax_unit_is_puf_clone",
+            "spm_unit_is_puf_clone",
+            "family_is_puf_clone",
+        )
+    }
 
     def unit_table(id_col: str, source: pd.DataFrame | None = None) -> pd.DataFrame:
         ids = np.sort(person[f"person_{id_col}"].unique())
@@ -766,6 +927,7 @@ def main() -> int:
             if c in person.columns
         ]
     )
+
     units_tu_new = (
         unit_map.rename(columns={"orig_tax_unit_id": "tax_unit_id"})
         .merge(units_tu, on="tax_unit_id", how="left")
