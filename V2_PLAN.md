@@ -137,3 +137,15 @@ ties 54 (disclose). v1 loss gates PASS; parity gate (82 gaps) is the v2 work.
   first/second_home_mortgage_*, auto_loan_*, vehicles, other/employer health premiums,
   tip_income($54B; eCPS imputes via tipped occ — could derive share*earnings instead),
   weekly_hours_worked_before_lsr, fsla_overtime_premium, sstb_*/qbi/unadjusted_basis (check PUF first).
+- RETCB split (verified, cps.py 1505-1552): shares from
+  policyengine_us_data/datasets/cps/imputation_parameters.yaml
+  (se_pension_share_of_retirement_contributions, dc_share_of_retirement_contributions,
+  roth_share_of_dc_contributions, traditional_share_of_ira_contributions).
+  se_pension_desired = RETCB*se_share if SEMP_VAL>0; remaining→dc_pool (if WSAL_VAL>0)
+  *dc_share, ira_pool=remaining-dc_pool (if earned income); 401k trad/roth and IRA
+  trad/roth via the yaml fractions. Need raw RETCB_VAL WSAL_VAL SEMP_VAL.
+  NOTE: only *_desired variables are set by eCPS (the non-desired
+  traditional_401k_contributions etc. parity gaps may be PE-computed FROM desired —
+  verify: if so, adding *_desired closes those gaps automatically).
+- hourly_wage / is_paid_hourly / union: usdata imputes from CPS ORG (stage ~line 2948)
+  — family-3 (eCPS-donor impute) or defer with documented note.
