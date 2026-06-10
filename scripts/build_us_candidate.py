@@ -1008,6 +1008,43 @@ def main() -> int:
         .drop(columns=["tax_unit_id", "_half"])
         .rename(columns={"new_tax_unit_id": "TAX_ID"})
     )
+    # ---- v2: place variables at their PolicyEngine entity ------------------
+    # The PUF and donor stages leave tax-unit and SPM-entity amounts on the
+    # person/household frames (head-carried); PE rejects inputs stored at the
+    # wrong entity length, so move each to its owning table.
+    from policyengine_us.system import system as _pe_system
+
+    def _pe_entity(col: str) -> str | None:
+        var = _pe_system.variables.get(col)
+        return var.entity.key if var is not None else None
+
+    tu_moves = [
+        c for c in person.columns
+        if not c.startswith("person_") and _pe_entity(c) == "tax_unit"
+    ]
+    for c in tu_moves:
+        agg = (
+            pd.to_numeric(person[c], errors="coerce")
+            .fillna(0.0)
+            .groupby(person["person_tax_unit_id"])
+            .sum()
+        )
+        units_tu_new[c] = (
+            units_tu_new["TAX_ID"].map(agg).fillna(0.0).astype(float)
+        )
+        person = person.drop(columns=[c])
+    if tu_moves:
+        log(f"  moved to tax_unit entity: {tu_moves}")
+    spm_moves = [c for c in hh.columns if _pe_entity(c) == "spm_unit"]
+    for c in spm_moves:
+        val = dict(zip(hh["household_id"], hh[c]))
+        per_person = person["person_household_id"].map(val)
+        agg = per_person.groupby(person["person_spm_unit_id"]).first()
+        spm[c] = spm["spm_unit_id"].map(agg).fillna(0.0).astype(float)
+        hh = hh.drop(columns=[c])
+    if spm_moves:
+        log(f"  moved to spm_unit entity: {spm_moves}")
+
     entity_frames = {
         _Key("person"): person,
         _Key("household"): hh,
