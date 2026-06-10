@@ -92,3 +92,23 @@ G. INTEGRATE: policyengine-bundles — new bundle manifest pointing at the HF
 - Commit WIP often (worktree git). Memory-pressure kills: keep ≤1 heavy child;
   the scoring driver pattern (~/populace-score-work/run_comparison.py) works.
 - hf_main eCPS baseline stays FROZEN for the comparison.
+
+## H. populace.dev observatory v2 (Max, 2026-06-10 23:47: "if waiting, make
+## populace.dev more detailed - show full lineage of each variable, stage gates, etc (versioned)")
+- Generator emits VERSIONED documents: populace.dev/data/releases/<release>.json
+  (e.g. "us-2024-v1"), with a version switcher on /dashboard. Keep data/calibration.json
+  as alias of latest.
+- **Variable lineage table**: every stored variable in the artifact → entity,
+  source family (cps-carried | cps-derived | puf-imputed | ecps-donor-imputed |
+  zero-default-v1 | structural | calibration), fill (nonzero %), weighted total,
+  eCPS weighted total alongside, status chip (live | degenerate | scheduled-v2).
+  Classification must be PARSED from scripts/build_us_candidate.py constants
+  (V1_ZERO_DEFAULTS, PUF_IMPUTE_VARS, _derive_person_columns assignments,
+  PERSON_INCOME_COLUMNS) + V2_PARITY_GAPS.txt — never hand-typed.
+- **Stage gates**: each pipeline stage gets criterion + measured value +
+  verdict (pass/fail/running): pool (record counts), calibrate (loss, within-10%,
+  weight bound), parity (gap count vs eCPS — gate 0), smoke (loads + people/HNI/snap),
+  score (train AND holdout < baseline), publish (HF revision + bundle id).
+- Implementation: extend ~/PolicyEngine/populace.dev/scripts/build_dashboard_data.py
+  + dashboard.html/js (vanilla, observatory aesthetic, db-* classes); deploy
+  vercel --prod; verify live via curl + screenshot.
