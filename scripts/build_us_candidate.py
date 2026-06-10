@@ -377,13 +377,6 @@ def _aggregate_tax_units(person: pd.DataFrame, tax_unit: pd.DataFrame) -> pd.Dat
 def _attach_household_columns(
     base: pd.DataFrame, households: pd.DataFrame
 ) -> pd.DataFrame:
-    households = households.copy()
-    if "H_TENURE" in households.columns:
-        households["tenure_type"] = (
-            pd.to_numeric(households["H_TENURE"], errors="coerce")
-            .fillna(0)
-            .map({0: "NONE", 1: "OWNED_WITH_MORTGAGE", 2: "RENTED", 3: "NONE"})
-        )
     keep = ["household_id", "state_fips", "household_weight", "tenure_type"]
     have = [c for c in keep if c in households.columns]
     return base.merge(
@@ -562,6 +555,13 @@ def main() -> int:
     )
     persons = ds.persons.to_pandas()
     households = ds.households.to_pandas()
+    if "H_TENURE" in households.columns:
+        # Same base map as the eCPS loader (usdata cps.py:418).
+        households["tenure_type"] = (
+            pd.to_numeric(households["H_TENURE"], errors="coerce")
+            .fillna(0)
+            .map({0: "NONE", 1: "OWNED_WITH_MORTGAGE", 2: "RENTED", 3: "NONE"})
+        )
     log(f"  persons={len(persons):,} households={len(households):,}")
 
     # ---- Stage B: unit structure ------------------------------------------
