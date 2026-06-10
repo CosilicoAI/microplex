@@ -202,6 +202,12 @@ def _derive_person_columns(person: pd.DataFrame) -> pd.DataFrame:
     p["social_security_disability"] = (ss * disabled).astype(float)
     p["social_security_survivors"] = (ss * survivor).astype(float)
     p["social_security_dependents"] = (ss * dependent).astype(float)
+    p["meets_ssi_disability_criteria"] = (
+        p["is_disabled"]
+        | (num("ssi") > 0)
+        | (p["disability_benefits"] > 0)
+        | (p["social_security_disability"] > 0)
+    ).astype(bool)
     return p
 
 

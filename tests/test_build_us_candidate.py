@@ -20,6 +20,56 @@ def _load_build_driver():
     return module
 
 
+def test_derive_person_columns_sets_ssi_disability_criteria() -> None:
+    driver = _load_build_driver()
+    person = pd.DataFrame(
+        {
+            "CSP_VAL": [0, 0, 0, 0, 0],
+            "CHSP_VAL": [0, 0, 0, 0, 0],
+            "DIS_VAL1": [0, 0, 500, 0, 0],
+            "DIS_VAL2": [0, 0, 0, 0, 0],
+            "DIS_SC1": [1, 1, 2, 1, 1],
+            "DIS_SC2": [1, 1, 1, 1, 1],
+            "NOW_GRP": [0, 0, 0, 0, 0],
+            "NOW_MRK": [0, 0, 0, 0, 0],
+            "WICYN": [0, 0, 0, 0, 0],
+            "PHIP_VAL": [0, 0, 0, 0, 0],
+            "POTC_VAL": [0, 0, 0, 0, 0],
+            "PMED_VAL": [0, 0, 0, 0, 0],
+            "PEDISDRS": [1, 2, 2, 2, 2],
+            "PEDISEAR": [2, 2, 2, 2, 2],
+            "PEDISEYE": [2, 2, 2, 2, 2],
+            "PEDISOUT": [2, 2, 2, 2, 2],
+            "PEDISPHY": [2, 2, 2, 2, 2],
+            "PEDISREM": [2, 2, 2, 2, 2],
+            "race": [1, 1, 1, 1, 1],
+            "sex": [1, 1, 1, 1, 1],
+            "hispanic": [0, 0, 0, 0, 0],
+            "A_EXPRRP": [1, 1, 1, 1, 1],
+            "A_MARITL": [7, 7, 7, 7, 7],
+            "household_id": [1, 1, 1, 1, 1],
+            "A_LINENO": [1, 2, 3, 4, 5],
+            "PEPAR1": [0, 0, 0, 0, 0],
+            "PEPAR2": [0, 0, 0, 0, 0],
+            "A_AGE": [40, 40, 40, 40, 40],
+            "social_security": [0, 0, 0, 700, 0],
+            "ssi": [0, 600, 0, 0, 0],
+            "RESNSS1": [0, 0, 0, 2, 0],
+            "RESNSS2": [0, 0, 0, 0, 0],
+        }
+    )
+
+    result = driver._derive_person_columns(person)
+
+    assert result["meets_ssi_disability_criteria"].tolist() == [
+        True,
+        True,
+        True,
+        True,
+        False,
+    ]
+
+
 def test_attach_filing_status_inputs_sets_policyengine_status_controls() -> None:
     driver = _load_build_driver()
     person = pd.DataFrame(
