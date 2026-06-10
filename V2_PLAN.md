@@ -204,3 +204,16 @@ PUF vars land person-stored like interest_deduction did) → E gates → F/G pub
 ## flags etc. — many legit; compare against eCPS-stored when gating).
 ## FULL REBUILD RUNNING: /tmp/v2_full_build.log (watcher bh4h2ktk6), ~1-2h.
 ## All 19+ worktree commits pushed to origin/claude/spec-build-20260610.
+
+## @ 01:33 chain state: rebuild 3 GREEN (entity placement: 8 tax_unit moves incl
+## interest_deduction at source, spm childcare; tail-unit NaN fix via built-table
+## application). Extraction GREEN: v2_target_surface_raw.npz (3704 targets, b
+## median 7e5, est/b 0.921, raw initial loss 10.28 — v2 pool starts further out
+## than v1's 1.22, the bigger tail stratum at design weights; calibration pulls
+## it in). CALIBRATION RUNNING: /tmp/v2_calib.log → populace_us_2024_v2.h5 +
+## _timeperiod + npz (script /tmp/build_populace_us_v2.py verifies byte-identical
+## weights + no dup columns). NEXT: parity gate (PE-known non-formula vars,
+## exclude *_is_puf_clone + weeks_worked) → smoke (Microsimulation, people/HNI/
+## snap) → sound comparison (update ~/populace-score-work/run_comparison.py
+## candidate to populace_us_2024_v2_timeperiod.h5; train AND holdout beat
+## baseline 1.0888/0.3167) → publish chain F/G.
