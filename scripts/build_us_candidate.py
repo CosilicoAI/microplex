@@ -270,15 +270,22 @@ DONOR_TO_PE = {
 SHARED_PREDICTORS = ("age", "is_joint", "n_people", "n_children")
 
 
-def _build_imputation_steps() -> list[dict]:
-    """v1 ASEC+PUF imputation graph over donor-available variables."""
+def _build_imputation_steps(*, weighted: bool = True) -> list[dict]:
+    """ASEC+PUF imputation graph over donor-available variables.
+
+    weighted=True fits donors with the PUF design weight — the verified
+    landmine fix (microplex#76): the PUF oversamples high incomes, so
+    unweighted fits draw from the sample distribution (measured here:
+    full-loss 130.1 vs eCPS 1.41, candidate LTCG $200T vs $257B).
+    """
     puf_vars = list(dict.fromkeys(PUF_IMPUTE_VARS))
     puf_only = [v for v in puf_vars if v not in CPS_MEASURED]
+    w = {"weights": "weight"} if weighted else {}
     return [
         {"onto": "synthetic_puf", "from": "puf", "vars": puf_vars,
-         "order": "spine_first"},
+         "order": "spine_first", **w},
         {"onto": "cps_keep", "from": "puf", "vars": puf_only,
-         "condition_on": ["demographics", *CPS_MEASURED]},
+         "condition_on": ["demographics", *CPS_MEASURED], **w},
     ]
 
 
