@@ -147,3 +147,16 @@ PUF source: registry puf_path=…/storage/puf_2024.h5 (verify format; HF fallbac
 - Smoke's only failure mode left: "target names differ" because head(4000) cap = ME/MA
   only → state targets missing. Cap artifact; full national build resolves.
 - Driver defaults updated (hf_main baseline + pinned repo/python flags).
+
+## Build v3 fixes (2026-06-10 ~03:30) — the half-attachment bug
+- First full score (v2) was INVALID: only cps_keep exported (32,406 hh, 78.5M weights)
+  → candidate 8.00 vs baseline 1.76. Root cause: SpineBuilder RE-IDENTIFIES synthetic-half
+  id columns (offset = max - min(0,min) + 1, spine.py:266) and ZEROES weight columns;
+  halves frames have RESET indexes (do NOT use them to map to base rows).
+- Driver v3: recover original ids via the offset rule (validated: recovered set must
+  exactly partition base ids); re-key spm/family/marital per (orig,half); export
+  households as (orig household, half) pieces with person-share-prorated original
+  weights (total = full ASEC ~135M; synthetic half carries real mass — our budget
+  decision vs the engine's zero-weight default; harness refit preserves input totals).
+- Smoke v16: 4,000 units both halves, 7,227 persons, 3,360 household pieces, 0 zero
+  weights, gate 257/257.

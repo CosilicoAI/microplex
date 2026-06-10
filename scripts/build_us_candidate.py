@@ -373,29 +373,74 @@ def _assign_blocks(
     return households
 
 
+def _build_unit_map(
+    base: pd.DataFrame, halves: dict[str, pd.DataFrame]
+) -> pd.DataFrame:
+    """Original->engine unit-id mapping recovered via the halves' row index.
+
+    The support spine re-identifies the synthetic half's tax_unit_id (they
+    are new synthetic units) and zeroes its weights; the per-half frames
+    keep the base frame's positional index, which is the join key back to
+    the original ids.
+    """
+    min_id = int(base["tax_unit_id"].min())
+    offset = int(base["tax_unit_id"].max()) - min(0, min_id) + 1
+    pieces = []
+    for half_name, frame in halves.items():
+        new_ids = frame["tax_unit_id"].to_numpy()
+        orig_ids = new_ids - offset if half_name == "synthetic_puf" else new_ids
+        pieces.append(
+            pd.DataFrame(
+                {
+                    "orig_tax_unit_id": orig_ids,
+                    "new_tax_unit_id": new_ids,
+                    "_half": half_name,
+                }
+            )
+        )
+    unit_map = pd.concat(pieces, ignore_index=True)
+    base_ids = set(base["tax_unit_id"].tolist())
+    recovered = set(unit_map["orig_tax_unit_id"].tolist())
+    if unit_map["orig_tax_unit_id"].duplicated().any():
+        raise ValueError("unit map has duplicated original tax unit ids")
+    if recovered != base_ids:
+        raise ValueError(
+            "recovered original ids do not partition the base "
+            f"(missing {len(base_ids - recovered)}, "
+            f"extra {len(recovered - base_ids)})"
+        )
+    return unit_map
+
+
 def _allocate_to_persons(
     person: pd.DataFrame,
     spine: pd.DataFrame,
     imputed_vars: list[str],
-    half_col: str,
+    unit_map: pd.DataFrame,
 ) -> pd.DataFrame:
-    """Re-attach spine tax-unit values to persons.
+    """Re-attach spine tax-unit values to persons via the unit map.
 
     cps_keep persons keep their ASEC person-level values for CPS-measured
     columns; PUF-only imputed amounts go to the unit head. synthetic_puf
     persons get every imputed variable head-allocated (others zero).
     """
-    spine_idx = spine.set_index("tax_unit_id")
     person = person.copy()
-    person["_half"] = person["person_tax_unit_id"].map(spine_idx[half_col])
-    person = person[person["_half"].notna()].copy()
+    m = unit_map.set_index("orig_tax_unit_id")
+    person["_half"] = person["person_tax_unit_id"].map(m["_half"])
+    person["new_tax_unit_id"] = person["person_tax_unit_id"].map(
+        m["new_tax_unit_id"]
+    )
+    unmapped = int(person["_half"].isna().sum())
+    if unmapped:
+        raise ValueError(f"{unmapped} persons failed to map to a spine half")
+    spine_idx = spine.set_index("tax_unit_id")
     is_head = person["tax_unit_role_input"] == "HEAD"
     synthetic = person["_half"] == "synthetic_puf"
 
     for var in imputed_vars:
         if var not in spine_idx.columns:
             continue
-        unit_value = person["person_tax_unit_id"].map(spine_idx[var])
+        unit_value = person["new_tax_unit_id"].map(spine_idx[var])
         head_alloc = np.where(is_head, unit_value.fillna(0.0), 0.0)
         if var in person.columns:
             # CPS-measured: keep person values on cps_keep, head-allocate
@@ -561,7 +606,9 @@ def main() -> int:
 
     # ---- Stage F: entity assembly ------------------------------------------
     log("stage F: person re-attach + entity tables")
-    person = _allocate_to_persons(person, spine, imputed_vars, half_col)
+    unit_map = _build_unit_map(base, dict(result.halves))
+    orig_household_size = person.groupby("household_id").size()
+    person = _allocate_to_persons(person, spine, imputed_vars, unit_map)
     # Donor/common names -> PolicyEngine contract names; derived splits.
     person = person.rename(columns=DONOR_TO_PE)
     if {"total_pension_income", "taxable_pension_income"} <= set(person.columns):
@@ -595,7 +642,22 @@ def main() -> int:
     person["tax_exempt_private_pension_income"] = person[
         "tax_exempt_pension_income"
     ]
-    person["person_household_id"] = person["household_id"]
+    # Re-key every unit system per (original id, half): the synthetic half's
+    # units are new synthetic entities, and a multi-unit household whose
+    # units land in different halves splits into per-half export households.
+    person["person_tax_unit_id"] = person["new_tax_unit_id"].astype(np.int64)
+    for unit in ("spm_unit", "family", "marital_unit"):
+        key = (
+            person[f"person_{unit}_id"].astype(str) + "|" + person["_half"]
+        )
+        person[f"person_{unit}_id"] = (pd.factorize(key)[0] + 1).astype(
+            np.int64
+        )
+    person["_orig_household_id"] = person["household_id"]
+    hh_key = person["household_id"].astype(str) + "|" + person["_half"]
+    person["person_household_id"] = (pd.factorize(hh_key)[0] + 1).astype(
+        np.int64
+    )
     person["person_id"] = np.arange(1, len(person) + 1, dtype=np.int64)
     person["age"] = person["A_AGE"].astype(float)
     # eCPS source flags: synthetic_puf half maps to the PUF-clone marker the
@@ -618,15 +680,31 @@ def main() -> int:
         )
     }
 
-    hh_ids = person["person_household_id"].unique()
-    hh = households[households["household_id"].isin(hh_ids)].copy()
-    hh["tract_geoid"] = hh["block_geoid"].astype(str).str[:11]
-    hh["household_is_puf_clone"] = (
-        hh["household_id"]
-        .map(clone_flags["household_is_puf_clone"])
-        .fillna(False)
-        .astype(bool)
+    # Export households = (original household, half) pieces. Attributes come
+    # from the original household; weight is prorated by the piece's person
+    # share so person-mass totals are preserved exactly (full ASEC scale).
+    piece = (
+        person.groupby("person_household_id")
+        .agg(
+            _orig=("_orig_household_id", "first"),
+            _half=("_half", "first"),
+            _n=("person_id", "size"),
+        )
+        .reset_index()
+        .rename(columns={"person_household_id": "household_id"})
     )
+    hh_attrs = households.drop_duplicates("household_id").rename(
+        columns={"household_id": "_orig", "household_weight": "_orig_weight"}
+    )
+    hh = piece.merge(hh_attrs, on="_orig", how="left")
+    hh["household_weight"] = (
+        hh["_orig_weight"]
+        * hh["_n"]
+        / hh["_orig"].map(orig_household_size).to_numpy()
+    ).astype(float)
+    hh["tract_geoid"] = hh["block_geoid"].astype(str).str[:11]
+    hh["household_is_puf_clone"] = (hh["_half"] == "synthetic_puf").astype(bool)
+    hh = hh.drop(columns=["_orig", "_half", "_n", "_orig_weight"])
 
     def unit_table(id_col: str, source: pd.DataFrame | None = None) -> pd.DataFrame:
         ids = np.sort(person[f"person_{id_col}"].unique())
@@ -671,10 +749,16 @@ def main() -> int:
             if c in person.columns
         ]
     )
+    units_tu_new = (
+        unit_map.rename(columns={"orig_tax_unit_id": "tax_unit_id"})
+        .merge(units_tu, on="tax_unit_id", how="left")
+        .drop(columns=["tax_unit_id", "_half"])
+        .rename(columns={"new_tax_unit_id": "TAX_ID"})
+    )
     entity_frames = {
         _Key("person"): person,
         _Key("household"): hh,
-        _Key("tax_unit"): unit_table("tax_unit_id", units_tu),
+        _Key("tax_unit"): unit_table("tax_unit_id", units_tu_new),
         _Key("spm_unit"): spm,
         _Key("family"): unit_table("family_id"),
         _Key("marital_unit"): unit_table("marital_unit_id"),
