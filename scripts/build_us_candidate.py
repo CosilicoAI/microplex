@@ -1022,17 +1022,20 @@ def main() -> int:
         c for c in person.columns
         if not c.startswith("person_") and _pe_entity(c) == "tax_unit"
     ]
-    for c in tu_moves:
-        agg = (
+    # Aggregate person-stored tax-unit amounts per unit id; applied onto the
+    # BUILT tax-unit table below (whose ids derive from persons, so the
+    # aggregation covers every unit — attaching to units_tu_new would leave
+    # NaNs for tail-stratum units absent from the spine unit map).
+    tu_agg = {
+        c: (
             pd.to_numeric(person[c], errors="coerce")
             .fillna(0.0)
             .groupby(person["person_tax_unit_id"])
             .sum()
         )
-        units_tu_new[c] = (
-            units_tu_new["TAX_ID"].map(agg).fillna(0.0).astype(float)
-        )
-        person = person.drop(columns=[c])
+        for c in tu_moves
+    }
+    person = person.drop(columns=tu_moves)
     if tu_moves:
         log(f"  moved to tax_unit entity: {tu_moves}")
     spm_moves = [c for c in hh.columns if _pe_entity(c) == "spm_unit"]
@@ -1045,10 +1048,15 @@ def main() -> int:
     if spm_moves:
         log(f"  moved to spm_unit entity: {spm_moves}")
 
+    tax_unit_tbl = unit_table("tax_unit_id", units_tu_new)
+    for c, agg in tu_agg.items():
+        tax_unit_tbl[c] = (
+            tax_unit_tbl["tax_unit_id"].map(agg).fillna(0.0).astype(float)
+        )
     entity_frames = {
         _Key("person"): person,
         _Key("household"): hh,
-        _Key("tax_unit"): unit_table("tax_unit_id", units_tu_new),
+        _Key("tax_unit"): tax_unit_tbl,
         _Key("spm_unit"): spm,
         _Key("family"): unit_table("family_id"),
         _Key("marital_unit"): unit_table("marital_unit_id"),
