@@ -931,6 +931,19 @@ def main() -> int:
         person = pd.concat([person, tail_person], ignore_index=True)
         log(f"  households incl. tail: {len(hh):,}")
 
+    # ---- Stage F2: eCPS-donor imputation (v2 parity) -----------------------
+    # SCF/mortgage/auto/premium/tips/prior-year blocks the v1 spec zeroed.
+    log("stage F2: eCPS-donor imputation (v2 parity blocks)")
+    import ecps_donor_impute
+
+    person, hh = ecps_donor_impute.run(
+        person,
+        hh,
+        str(args.baseline_h5),
+        seed=args.seed if hasattr(args, "seed") else 0,
+        log=log,
+    )
+
     def _group_clone_flag(id_col: str) -> pd.Series:
         share = person.groupby(person[id_col])["person_is_puf_clone"].mean()
         return share > 0.5
