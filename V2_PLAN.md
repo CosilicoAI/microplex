@@ -112,3 +112,9 @@ G. INTEGRATE: policyengine-bundles — new bundle manifest pointing at the HF
 - Implementation: extend ~/PolicyEngine/populace.dev/scripts/build_dashboard_data.py
   + dashboard.html/js (vanilla, observatory aesthetic, db-* classes); deploy
   vercel --prod; verify live via curl + screenshot.
+
+## v1 SCORE (2026-06-10 23:47, ~/populace-score-work/score_out, matched 41,314):
+candidate_refit optimized train 0.1274 / holdout 0.0319 / full 0.1593
+baseline_refit  optimized train 1.0888 / holdout 0.3167 / full 1.4055
+→ WIN on all three (8-10x). Per-target: candidate wins 1,192, baseline 2,458,
+ties 54 (disclose). v1 loss gates PASS; parity gate (82 gaps) is the v2 work.
