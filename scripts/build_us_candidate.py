@@ -725,6 +725,16 @@ def main() -> int:
             - person["qualified_dividend_income"]
         ).clip(lower=0.0)
     person = _derive_person_columns(person)
+    # Tipped-occupation codes via the eCPS's own mapping (usdata module).
+    sys.path.insert(0, str(args.usdata_repo))
+    from policyengine_us_data.datasets.cps.tipped_occupation import (
+        derive_is_tipped_occupation,
+        derive_treasury_tipped_occupation_code,
+    )
+
+    ttoc = derive_treasury_tipped_occupation_code(person["POCCU2"])
+    person["treasury_tipped_occupation_code"] = ttoc.astype(float)
+    person["is_tipped_occupation"] = derive_is_tipped_occupation(ttoc)
     # Pre-response copies and aliases the contract requires alongside the
     # base variables.
     person["employment_income_before_lsr"] = person["employment_income"]
