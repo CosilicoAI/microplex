@@ -207,3 +207,20 @@ of the 41,314 sample crowd out real-mass households; eCPS pool == N so its 31,97
 zero-weight support rows never get sampled out (structural asymmetry of the harness for
 pools > N — candidates pay a tax for extra support). v7 = tail 4,000 (top-concentrated).
 Remaining cap-gains lever beyond tail: conditional draw quality (chain order, predictors).
+
+## v7 (tail 4k) + tail-lever conclusion
+full 1.420 (loss) | holdout 0.277 (WIN) | msre 1.22 | capgains 6.2x, dividends 4.9x WORSE.
+Full score table across the tail sweep:
+| build | tail | full vs 1.405 | holdout vs 0.317 | capgains | dividends |
+| v5 | 0 | **1.260 WIN** | **0.215 WIN** | 3.5x | 5.5x |
+| v6 | 10k | 1.407 loss | 0.191 WIN | flagged | CLEARED |
+| v7 | 4k | 1.420 loss | 0.277 WIN | 6.2x | 5.5x |
+CONCLUSION: the tail-verbatim stratum is NOT the right lever — it trades the headline
+full-loss win for marginal, inconsistent protected-family movement (matched-N sampling
+dilutes real-mass households; scaffolded tail persons add full-loss noise). **v5 is the
+best candidate: beats eCPS on ALL headline gates (full, holdout, MSRE).** Remaining gap =
+2 tail-concentrated protected families (capital_gains, dividends) modestly worse in
+absolute-tiny terms (cand ~e-5 vs base ~e-6). That gap is a CONDITIONAL-DRAW-QUALITY
+problem (the synthetic half's capgains/dividends don't track the joint tail structure),
+not a support problem — its real fix is the populace rebuild (proper weighted microfit +
+bigger pool + L0), not another driver knob. Canonical candidate restored to v5.
