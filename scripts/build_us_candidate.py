@@ -598,10 +598,35 @@ def main() -> int:
     person["person_household_id"] = person["household_id"]
     person["person_id"] = np.arange(1, len(person) + 1, dtype=np.int64)
     person["age"] = person["A_AGE"].astype(float)
+    # eCPS source flags: synthetic_puf half maps to the PUF-clone marker the
+    # loss surface's nation/source/* household-count targets read.
+    person["person_is_puf_clone"] = (person["_half"] == "synthetic_puf").astype(
+        bool
+    )
+
+    def _group_clone_flag(id_col: str) -> pd.Series:
+        share = person.groupby(person[id_col])["person_is_puf_clone"].mean()
+        return share > 0.5
+
+    clone_flags = {
+        c: _group_clone_flag(f"person_{c.split('_is_')[0]}_id")
+        for c in (
+            "household_is_puf_clone",
+            "tax_unit_is_puf_clone",
+            "spm_unit_is_puf_clone",
+            "family_is_puf_clone",
+        )
+    }
 
     hh_ids = person["person_household_id"].unique()
     hh = households[households["household_id"].isin(hh_ids)].copy()
     hh["tract_geoid"] = hh["block_geoid"].astype(str).str[:11]
+    hh["household_is_puf_clone"] = (
+        hh["household_id"]
+        .map(clone_flags["household_is_puf_clone"])
+        .fillna(False)
+        .astype(bool)
+    )
 
     def unit_table(id_col: str, source: pd.DataFrame | None = None) -> pd.DataFrame:
         ids = np.sort(person[f"person_{id_col}"].unique())
@@ -609,6 +634,9 @@ def main() -> int:
         if source is not None:
             extra = source.rename(columns={"TAX_ID": id_col})
             t = t.merge(extra, on=id_col, how="left")
+        flag = f"{id_col.rsplit('_id', 1)[0]}_is_puf_clone"
+        if flag in clone_flags:
+            t[flag] = t[id_col].map(clone_flags[flag]).fillna(False).astype(bool)
         return t
 
     spm = unit_table("spm_unit_id")

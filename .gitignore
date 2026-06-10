@@ -61,3 +61,5 @@ data/*.parquet
 data/raw/
 supabase/.temp/
 experiments/.cache/
+artifacts/
+_MISSION_JOURNAL.md.bak
