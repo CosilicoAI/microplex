@@ -577,6 +577,16 @@ def main() -> int:
     puf = registry.resolve_source(spec, "puf")
     if max_puf is not None:
         puf = puf.head(max_puf).copy()
+    # Population-resample the donor by its design weight: the PUF oversamples
+    # high incomes, and microimpute's canonical Imputer silently ignores
+    # weight_col (verified 2026-06-10), so importance-resampling is the
+    # correct way to get population conditionals from the fit.
+    rng = np.random.default_rng(args.seed)
+    pw = puf["weight"].to_numpy(dtype=float)
+    pw = pw / pw.sum()
+    puf = puf.iloc[
+        rng.choice(len(puf), size=len(puf), replace=True, p=pw)
+    ].reset_index(drop=True)
     # Harmonize donor names + derive the shared predictor surface.
     puf = puf.rename(columns={"gross_social_security": "social_security"})
     puf["is_joint"] = (puf["filing_status"] == "JOINT").astype(float)
