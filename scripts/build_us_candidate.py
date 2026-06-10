@@ -47,6 +47,13 @@ US_DATA_STORAGE = Path(
     "~/PolicyEngine/policyengine-us-data/policyengine_us_data/storage"
 ).expanduser()
 OLD_WORKTREE = Path("~/CosilicoAI/microplex-us").expanduser()
+PINNED_PRODUCTION_ECPS_BLOB = Path(
+    "~/.cache/huggingface/hub/models--policyengine--policyengine-us-data/blobs/"
+    "7af7026224f84cb6a91743fd8fa7ac506bad8c78e011fa58b6901894db4b4290"
+).expanduser()
+LOCAL_HF_MAIN_BASELINE = (
+    OLD_WORKTREE / "artifacts/baselines/enhanced_cps_2024_hf_main.h5"
+)
 BLOCK_CROSSWALK = Path(
     "~/CosilicoAI/microplex/data/block_probabilities.parquet"
 ).expanduser()
@@ -263,6 +270,18 @@ DONOR_TO_PE = {
 }
 
 SHARED_PREDICTORS = ("age", "is_joint", "n_people", "n_children")
+
+
+def _validate_score_baseline(path: Path) -> Path:
+    """Reject local non-certified eCPS baselines for promotion scoring."""
+    baseline = path.expanduser()
+    if baseline.name == LOCAL_HF_MAIN_BASELINE.name:
+        raise ValueError(
+            "Refusing to score against local enhanced_cps_2024_hf_main.h5; "
+            "use the certified pinned production eCPS blob at "
+            f"{PINNED_PRODUCTION_ECPS_BLOB}."
+        )
+    return baseline
 
 
 def _build_imputation_steps(*, weighted: bool = True) -> list[dict]:
@@ -519,7 +538,11 @@ def main() -> int:
     ap.add_argument(
         "--baseline-h5",
         type=Path,
-        default=OLD_WORKTREE / "artifacts/baselines/enhanced_cps_2024_hf_main.h5",
+        default=PINNED_PRODUCTION_ECPS_BLOB,
+        help=(
+            "Baseline H5 for scoring. Defaults to the certified pinned "
+            "production eCPS blob; local hf_main baselines are rejected."
+        ),
     )
     ap.add_argument(
         "--usdata-repo",
@@ -527,6 +550,8 @@ def main() -> int:
         default=Path("~/.claude-worktrees/usdata-f7458313").expanduser(),
     )
     args = ap.parse_args()
+    if args.score:
+        args.baseline_h5 = _validate_score_baseline(args.baseline_h5)
 
     smoke = args.mode == "smoke"
     max_units = args.max_tax_units or (4000 if smoke else None)

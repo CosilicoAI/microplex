@@ -60,3 +60,28 @@ def test_attach_filing_status_inputs_requires_status_surface() -> None:
         assert "filing_status_input" in str(exc)
     else:  # pragma: no cover
         raise AssertionError("missing filing_status_input should fail")
+
+
+def test_score_baseline_rejects_local_hf_main_baseline() -> None:
+    driver = _load_build_driver()
+
+    try:
+        driver._validate_score_baseline(driver.LOCAL_HF_MAIN_BASELINE)
+    except ValueError as exc:
+        message = str(exc)
+        assert "enhanced_cps_2024_hf_main.h5" in message
+        assert str(driver.PINNED_PRODUCTION_ECPS_BLOB) in message
+    else:  # pragma: no cover
+        raise AssertionError("local hf_main baseline should be rejected")
+
+
+def test_score_baseline_defaults_to_pinned_production_blob() -> None:
+    driver = _load_build_driver()
+
+    assert driver.PINNED_PRODUCTION_ECPS_BLOB.name == (
+        "7af7026224f84cb6a91743fd8fa7ac506bad8c78e011fa58b6901894db4b4290"
+    )
+    assert (
+        driver._validate_score_baseline(driver.PINNED_PRODUCTION_ECPS_BLOB)
+        == driver.PINNED_PRODUCTION_ECPS_BLOB
+    )
