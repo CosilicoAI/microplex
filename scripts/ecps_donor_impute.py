@@ -34,6 +34,23 @@ PERSON_TARGETS = [
     "bank_account_assets",
     "bond_assets",
     "stock_assets",
+    # v2.1 parity additions (all person-entity in PE; donor stores them at
+    # person grain)
+    "home_mortgage_interest",
+    "pre_subsidy_rent",
+    "weeks_unemployed",
+    "taxable_401k_distributions",
+    "taxable_403b_distributions",
+    "taxable_sep_distributions",
+    "qualified_reit_and_ptp_income",
+    "investment_interest_expense",
+    "unadjusted_basis_qualified_property",
+    "w2_wages_from_qualified_business",
+    "partnership_se_income",
+    "qualified_bdc_income",
+    "sstb_self_employment_income_before_lsr",
+    "sstb_unadjusted_basis_qualified_property",
+    "sstb_w2_wages_from_qualified_business",
 ]
 
 #: Household-grain targets (SPM childcare is aggregated to household on the

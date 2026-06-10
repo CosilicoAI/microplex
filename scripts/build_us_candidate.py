@@ -79,6 +79,7 @@ EXTRA_ASEC_COLUMNS = (
     "A_HRS1",
     "WKSWORK",
     "POCCU2",
+    "PEIOOCC",
     "RETCB_VAL",
     "WSAL_VAL",
     "SEMP_VAL",
@@ -732,7 +733,7 @@ def main() -> int:
         derive_treasury_tipped_occupation_code,
     )
 
-    ttoc = derive_treasury_tipped_occupation_code(person["POCCU2"])
+    ttoc = derive_treasury_tipped_occupation_code(person["PEIOOCC"])
     person["treasury_tipped_occupation_code"] = ttoc.astype(float)
     person["is_tipped_occupation"] = derive_is_tipped_occupation(ttoc)
     # Pre-response copies and aliases the contract requires alongside the
