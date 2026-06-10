@@ -47,6 +47,13 @@ US_DATA_STORAGE = Path(
     "~/PolicyEngine/policyengine-us-data/policyengine_us_data/storage"
 ).expanduser()
 OLD_WORKTREE = Path("~/CosilicoAI/microplex-us").expanduser()
+PINNED_PRODUCTION_ECPS_BLOB = Path(
+    "~/.cache/huggingface/hub/models--policyengine--policyengine-us-data/blobs/"
+    "7af7026224f84cb6a91743fd8fa7ac506bad8c78e011fa58b6901894db4b4290"
+).expanduser()
+LOCAL_HF_MAIN_BASELINE = (
+    OLD_WORKTREE / "artifacts/baselines/enhanced_cps_2024_hf_main.h5"
+)
 BLOCK_CROSSWALK = Path(
     "~/CosilicoAI/microplex/data/block_probabilities.parquet"
 ).expanduser()
@@ -195,6 +202,12 @@ def _derive_person_columns(person: pd.DataFrame) -> pd.DataFrame:
     p["social_security_disability"] = (ss * disabled).astype(float)
     p["social_security_survivors"] = (ss * survivor).astype(float)
     p["social_security_dependents"] = (ss * dependent).astype(float)
+    p["meets_ssi_disability_criteria"] = (
+        p["is_disabled"]
+        | (num("ssi") > 0)
+        | (p["disability_benefits"] > 0)
+        | (p["social_security_disability"] > 0)
+    ).astype(bool)
     return p
 
 
@@ -263,6 +276,18 @@ DONOR_TO_PE = {
 }
 
 SHARED_PREDICTORS = ("age", "is_joint", "n_people", "n_children")
+
+
+def _validate_score_baseline(path: Path) -> Path:
+    """Reject local non-certified eCPS baselines for promotion scoring."""
+    baseline = path.expanduser()
+    if baseline.name == LOCAL_HF_MAIN_BASELINE.name:
+        raise ValueError(
+            "Refusing to score against local enhanced_cps_2024_hf_main.h5; "
+            "use the certified pinned production eCPS blob at "
+            f"{PINNED_PRODUCTION_ECPS_BLOB}."
+        )
+    return baseline
 
 
 def _build_imputation_steps(*, weighted: bool = True) -> list[dict]:
@@ -456,6 +481,55 @@ def _allocate_to_persons(
     return person
 
 
+def _attach_filing_status_inputs(
+    person: pd.DataFrame,
+    spine: pd.DataFrame,
+) -> pd.DataFrame:
+    """Carry microunit filing-status outcomes into PE filing-status inputs."""
+    required_person = {"new_tax_unit_id", "tax_unit_role_input"}
+    missing_person = sorted(required_person - set(person.columns))
+    if missing_person:
+        raise ValueError(
+            "cannot attach filing-status inputs; person frame is missing "
+            f"{missing_person}"
+        )
+    required_spine = {"tax_unit_id", "filing_status_input"}
+    missing_spine = sorted(required_spine - set(spine.columns))
+    if missing_spine:
+        raise ValueError(
+            "cannot attach filing-status inputs; spine frame is missing "
+            f"{missing_spine}"
+        )
+
+    out = person.copy()
+    status_by_unit = (
+        spine[["tax_unit_id", "filing_status_input"]]
+        .drop_duplicates("tax_unit_id")
+        .set_index("tax_unit_id")["filing_status_input"]
+    )
+    status = out["new_tax_unit_id"].map(status_by_unit)
+    status = (
+        status.astype("string")
+        .str.strip()
+        .str.upper()
+        .str.replace(" ", "_", regex=False)
+        .fillna("")
+    )
+    is_head = (
+        out["tax_unit_role_input"].astype("string").str.upper().fillna("").eq("HEAD")
+    )
+    out["is_surviving_spouse"] = (is_head & status.eq("SURVIVING_SPOUSE")).astype(bool)
+    existing_separated = (
+        out["is_separated"].astype(bool)
+        if "is_separated" in out.columns
+        else pd.Series(False, index=out.index)
+    )
+    out["is_separated"] = (
+        existing_separated | (is_head & status.eq("SEPARATE"))
+    ).astype(bool)
+    return out
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--mode", choices=["smoke", "full"], default="smoke")
@@ -470,7 +544,11 @@ def main() -> int:
     ap.add_argument(
         "--baseline-h5",
         type=Path,
-        default=OLD_WORKTREE / "artifacts/baselines/enhanced_cps_2024_hf_main.h5",
+        default=PINNED_PRODUCTION_ECPS_BLOB,
+        help=(
+            "Baseline H5 for scoring. Defaults to the certified pinned "
+            "production eCPS blob; local hf_main baselines are rejected."
+        ),
     )
     ap.add_argument(
         "--usdata-repo",
@@ -478,6 +556,8 @@ def main() -> int:
         default=Path("~/.claude-worktrees/usdata-f7458313").expanduser(),
     )
     args = ap.parse_args()
+    if args.score:
+        args.baseline_h5 = _validate_score_baseline(args.baseline_h5)
 
     smoke = args.mode == "smoke"
     max_units = args.max_tax_units or (4000 if smoke else None)
@@ -637,6 +717,7 @@ def main() -> int:
             - person["qualified_dividend_income"]
         ).clip(lower=0.0)
     person = _derive_person_columns(person)
+    person = _attach_filing_status_inputs(person, spine)
     # Pre-response copies and aliases the contract requires alongside the
     # base variables.
     person["employment_income_before_lsr"] = person["employment_income"]
