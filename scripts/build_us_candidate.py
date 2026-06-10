@@ -456,6 +456,55 @@ def _allocate_to_persons(
     return person
 
 
+def _attach_filing_status_inputs(
+    person: pd.DataFrame,
+    spine: pd.DataFrame,
+) -> pd.DataFrame:
+    """Carry microunit filing-status outcomes into PE filing-status inputs."""
+    required_person = {"new_tax_unit_id", "tax_unit_role_input"}
+    missing_person = sorted(required_person - set(person.columns))
+    if missing_person:
+        raise ValueError(
+            "cannot attach filing-status inputs; person frame is missing "
+            f"{missing_person}"
+        )
+    required_spine = {"tax_unit_id", "filing_status_input"}
+    missing_spine = sorted(required_spine - set(spine.columns))
+    if missing_spine:
+        raise ValueError(
+            "cannot attach filing-status inputs; spine frame is missing "
+            f"{missing_spine}"
+        )
+
+    out = person.copy()
+    status_by_unit = (
+        spine[["tax_unit_id", "filing_status_input"]]
+        .drop_duplicates("tax_unit_id")
+        .set_index("tax_unit_id")["filing_status_input"]
+    )
+    status = out["new_tax_unit_id"].map(status_by_unit)
+    status = (
+        status.astype("string")
+        .str.strip()
+        .str.upper()
+        .str.replace(" ", "_", regex=False)
+        .fillna("")
+    )
+    is_head = (
+        out["tax_unit_role_input"].astype("string").str.upper().fillna("").eq("HEAD")
+    )
+    out["is_surviving_spouse"] = (is_head & status.eq("SURVIVING_SPOUSE")).astype(bool)
+    existing_separated = (
+        out["is_separated"].astype(bool)
+        if "is_separated" in out.columns
+        else pd.Series(False, index=out.index)
+    )
+    out["is_separated"] = (
+        existing_separated | (is_head & status.eq("SEPARATE"))
+    ).astype(bool)
+    return out
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--mode", choices=["smoke", "full"], default="smoke")
@@ -637,6 +686,7 @@ def main() -> int:
             - person["qualified_dividend_income"]
         ).clip(lower=0.0)
     person = _derive_person_columns(person)
+    person = _attach_filing_status_inputs(person, spine)
     # Pre-response copies and aliases the contract requires alongside the
     # base variables.
     person["employment_income_before_lsr"] = person["employment_income"]
