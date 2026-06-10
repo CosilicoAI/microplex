@@ -175,3 +175,21 @@ must pass end-to-end before full rebuild; (6) parity script refinement: gate on
 PE-KNOWN variables only (is_puf_clone flags etc. are bookkeeping, not outputs)
 and at SIMULATION level for formula vars (e.g. traditional_401k_contributions
 computes from *_desired).
+
+## Step A status @ 00:15 (all committed to worktree git):
+DONE substeps 1-3+5(launched): tipped occupation (usdata import, POCCU2);
+PUF family-2 (microplex puf.py field map + estate=E26390-E26400 combine +
+uprating; driver PUF_IMPUTE_VARS + DONOR_TO_PE incl. capital_gains_distributions
+→non_sch_d_capital_gains, puf_miscellaneous_income→miscellaneous_income);
+V1_ZERO_DEFAULTS pruned; family-3 stage F2 = scripts/ecps_donor_impute.py
+(microimpute weighted QRF, donor=frozen eCPS baseline; person block 13 vars,
+household block 28 vars incl. scf_*, mortgage, auto, vehicles, childcare→hh
+grain bcast) wired after tail concat using args.baseline_h5 + args.seed.
+SMOKE RUNNING: /tmp/v2_smoke.log (bg watcher armed). WATCH-ITEM: smoke warned
+form-4952 constant-0 in 8k-row PUF sample — verify nonzero at FULL scale.
+NEXT: smoke passes → parity-check smoke output (PE-known vars, simulation-level
+for formula vars) → step B FULL rebuild (nohup, ~1-2h, usdata-populace) →
+section H observatory lineage while it runs → C recalibrate → D export+surgeries
+(GENERALIZE interest_deduction surgery: group-sum EVERY person-stored
+tax-unit-entity head-carried variable in build_populace_us_dataset.py — the new
+PUF vars land person-stored like interest_deduction did) → E gates → F/G publish.
