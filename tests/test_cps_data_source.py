@@ -165,9 +165,7 @@ def test_default_load_omits_extra_columns_and_uses_unsuffixed_cache(
 
     # Default cache uses the original, unsuffixed filename.
     assert (tmp_path / "cps_asec_2025_processed.parquet").exists()
-    assert (
-        tmp_path / "cps_asec_2025_households_processed.parquet"
-    ).exists()
+    assert (tmp_path / "cps_asec_2025_households_processed.parquet").exists()
     # No suffixed file should have been written for the default request.
     suffixed = list(tmp_path.glob("cps_asec_2025_processed__x*.parquet"))
     assert suffixed == []
@@ -361,9 +359,7 @@ def test_provider_threads_extra_columns_into_frame(tmp_path: Path) -> None:
     # The runtime descriptor should advertise the passed-through columns as
     # observed person variables.
     person_obs = next(
-        obs
-        for obs in frame.source.observations
-        if obs.entity == EntityType.PERSON
+        obs for obs in frame.source.observations if obs.entity == EntityType.PERSON
     )
     assert "A_LINENO" in person_obs.variable_names
     assert "A_MARITL" in person_obs.variable_names

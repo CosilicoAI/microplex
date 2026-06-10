@@ -15,6 +15,7 @@ EXPECTED_US_PACK_FILES = {
     "README.md",
     "manifests/arch_targets.json",
     "manifests/ecps_export_contract.json",
+    "manifests/export_defaults.json",
     "manifests/frozen_production_ecps_2024_benchmark_manifest.json",
     "manifests/pe_source_impute_blocks.json",
     "manifests/puf.json",

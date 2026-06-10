@@ -27,7 +27,6 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-import yaml
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "src"))
@@ -152,9 +151,9 @@ def _derive_person_columns(person: pd.DataFrame) -> pd.DataFrame:
     p["has_esi"] = (num("NOW_GRP") == 1).astype(bool)
     p["has_marketplace_health_coverage"] = (num("NOW_MRK") == 1).astype(bool)
     p["receives_wic"] = (num("WICYN") == 1).astype(bool)
-    p["health_insurance_premiums_without_medicare_part_b"] = num(
-        "PHIP_VAL"
-    ).astype(float)
+    p["health_insurance_premiums_without_medicare_part_b"] = num("PHIP_VAL").astype(
+        float
+    )
     p["over_the_counter_health_expenses"] = num("POTC_VAL").astype(float)
     p["other_medical_expenses"] = num("PMED_VAL").astype(float)
     dis_flags = ["PEDISDRS", "PEDISEAR", "PEDISEYE", "PEDISOUT", "PEDISPHY", "PEDISREM"]
@@ -166,9 +165,7 @@ def _derive_person_columns(person: pd.DataFrame) -> pd.DataFrame:
     p["is_hispanic"] = (num("hispanic") == 1).astype(bool)
     p["is_household_head"] = num("A_EXPRRP").isin([1, 2]).astype(bool)
     p["is_separated"] = (num("A_MARITL") == 6).astype(bool)
-    p["is_unmarried_partner_of_household_head"] = (
-        num("A_EXPRRP") == 13
-    ).astype(bool)
+    p["is_unmarried_partner_of_household_head"] = (num("A_EXPRRP") == 13).astype(bool)
     # own children: count persons naming me as parent within the household.
     key = p["household_id"].astype(str)
     me = key + ":" + num("A_LINENO").astype(int).astype(str)
@@ -188,10 +185,7 @@ def _derive_person_columns(person: pd.DataFrame) -> pd.DataFrame:
     disabled = ((r1 == 2) | (r2 == 2)) & ~retired
     survivor = (r1.isin([3, 5]) | r2.isin([3, 5])) & ~retired & ~disabled
     dependent = (
-        (r1.isin([4, 6, 7]) | r2.isin([4, 6, 7]))
-        & ~retired
-        & ~disabled
-        & ~survivor
+        (r1.isin([4, 6, 7]) | r2.isin([4, 6, 7])) & ~retired & ~disabled & ~survivor
     )
     unclassified = (ss > 0) & ~(retired | disabled | survivor | dependent)
     age = num("A_AGE")
@@ -202,6 +196,7 @@ def _derive_person_columns(person: pd.DataFrame) -> pd.DataFrame:
     p["social_security_survivors"] = (ss * survivor).astype(float)
     p["social_security_dependents"] = (ss * dependent).astype(float)
     return p
+
 
 # Person-level ASEC harmonized income columns that sum to tax-unit totals.
 PERSON_INCOME_COLUMNS = (
@@ -282,10 +277,20 @@ def _build_imputation_steps(*, weighted: bool = True) -> list[dict]:
     puf_only = [v for v in puf_vars if v not in CPS_MEASURED]
     w = {"weights": "weight"} if weighted else {}
     return [
-        {"onto": "synthetic_puf", "from": "puf", "vars": puf_vars,
-         "order": "spine_first", **w},
-        {"onto": "cps_keep", "from": "puf", "vars": puf_only,
-         "condition_on": ["demographics", *CPS_MEASURED], **w},
+        {
+            "onto": "synthetic_puf",
+            "from": "puf",
+            "vars": puf_vars,
+            "order": "spine_first",
+            **w,
+        },
+        {
+            "onto": "cps_keep",
+            "from": "puf",
+            "vars": puf_only,
+            "condition_on": ["demographics", *CPS_MEASURED],
+            **w,
+        },
     ]
 
 
@@ -298,14 +303,9 @@ def _aggregate_tax_units(person: pd.DataFrame, tax_unit: pd.DataFrame) -> pd.Dat
     base["n_people"] = g.size().astype(float)
     is_head = person["tax_unit_role_input"] == "HEAD"
     head_age = (
-        person.loc[is_head]
-        .groupby("person_tax_unit_id")["A_AGE"]
-        .max()
-        .astype(float)
+        person.loc[is_head].groupby("person_tax_unit_id")["A_AGE"].max().astype(float)
     )
-    base["age"] = head_age.reindex(base.index).fillna(
-        g["A_AGE"].max().astype(float)
-    )
+    base["age"] = head_age.reindex(base.index).fillna(g["A_AGE"].max().astype(float))
     base["n_children"] = (
         person.assign(_child=(person["A_AGE"] < 18).astype(float))
         .groupby("person_tax_unit_id")["_child"]
@@ -434,9 +434,7 @@ def _allocate_to_persons(
     person = person.copy()
     m = unit_map.set_index("orig_tax_unit_id")
     person["_half"] = person["person_tax_unit_id"].map(m["_half"])
-    person["new_tax_unit_id"] = person["person_tax_unit_id"].map(
-        m["new_tax_unit_id"]
-    )
+    person["new_tax_unit_id"] = person["person_tax_unit_id"].map(m["new_tax_unit_id"])
     unmapped = int(person["_half"].isna().sum())
     if unmapped:
         raise ValueError(f"{unmapped} persons failed to map to a spine half")
@@ -452,9 +450,7 @@ def _allocate_to_persons(
         if var in person.columns:
             # CPS-measured: keep person values on cps_keep, head-allocate
             # the synthetic draw on the synthetic half.
-            person[var] = np.where(
-                synthetic, head_alloc, person[var].fillna(0.0)
-            )
+            person[var] = np.where(synthetic, head_alloc, person[var].fillna(0.0))
         else:
             person[var] = head_alloc
     return person
@@ -584,9 +580,9 @@ def main() -> int:
     rng = np.random.default_rng(args.seed)
     pw = puf["weight"].to_numpy(dtype=float)
     pw = pw / pw.sum()
-    puf = puf.iloc[
-        rng.choice(len(puf), size=len(puf), replace=True, p=pw)
-    ].reset_index(drop=True)
+    puf = puf.iloc[rng.choice(len(puf), size=len(puf), replace=True, p=pw)].reset_index(
+        drop=True
+    )
     # Harmonize donor names + derive the shared predictor surface.
     puf = puf.rename(columns={"gross_social_security": "social_security"})
     puf["is_joint"] = (puf["filing_status"] == "JOINT").astype(float)
@@ -609,8 +605,7 @@ def main() -> int:
     spine = result.frame
     half_col = [c for c in spine.columns if c.startswith("_spine")][0]
     log(
-        f"  spine rows={len(spine):,} halves="
-        f"{spine[half_col].value_counts().to_dict()}"
+        f"  spine rows={len(spine):,} halves={spine[half_col].value_counts().to_dict()}"
     )
 
     # ---- Stage E: geography -------------------------------------------------
@@ -645,43 +640,29 @@ def main() -> int:
     # Pre-response copies and aliases the contract requires alongside the
     # base variables.
     person["employment_income_before_lsr"] = person["employment_income"]
-    person["self_employment_income_before_lsr"] = person[
-        "self_employment_income"
-    ]
+    person["self_employment_income_before_lsr"] = person["self_employment_income"]
     person["long_term_capital_gains_before_response"] = person[
         "long_term_capital_gains"
     ]
-    person["taxable_unemployment_compensation"] = person[
-        "unemployment_compensation"
-    ]
+    person["taxable_unemployment_compensation"] = person["unemployment_compensation"]
     person["farm_operations_income"] = person["farm_income"]
     person["taxable_private_pension_income"] = person["taxable_pension_income"]
-    person["tax_exempt_private_pension_income"] = person[
-        "tax_exempt_pension_income"
-    ]
+    person["tax_exempt_private_pension_income"] = person["tax_exempt_pension_income"]
     # Re-key every unit system per (original id, half): the synthetic half's
     # units are new synthetic entities, and a multi-unit household whose
     # units land in different halves splits into per-half export households.
     person["person_tax_unit_id"] = person["new_tax_unit_id"].astype(np.int64)
     for unit in ("spm_unit", "family", "marital_unit"):
-        key = (
-            person[f"person_{unit}_id"].astype(str) + "|" + person["_half"]
-        )
-        person[f"person_{unit}_id"] = (pd.factorize(key)[0] + 1).astype(
-            np.int64
-        )
+        key = person[f"person_{unit}_id"].astype(str) + "|" + person["_half"]
+        person[f"person_{unit}_id"] = (pd.factorize(key)[0] + 1).astype(np.int64)
     person["_orig_household_id"] = person["household_id"]
     hh_key = person["household_id"].astype(str) + "|" + person["_half"]
-    person["person_household_id"] = (pd.factorize(hh_key)[0] + 1).astype(
-        np.int64
-    )
+    person["person_household_id"] = (pd.factorize(hh_key)[0] + 1).astype(np.int64)
     person["person_id"] = np.arange(1, len(person) + 1, dtype=np.int64)
     person["age"] = person["A_AGE"].astype(float)
     # eCPS source flags: synthetic_puf half maps to the PUF-clone marker the
     # loss surface's nation/source/* household-count targets read.
-    person["person_is_puf_clone"] = (person["_half"] == "synthetic_puf").astype(
-        bool
-    )
+    person["person_is_puf_clone"] = (person["_half"] == "synthetic_puf").astype(bool)
 
     def _group_clone_flag(id_col: str) -> pd.Series:
         share = person.groupby(person[id_col])["person_is_puf_clone"].mean()
@@ -715,9 +696,7 @@ def main() -> int:
     )
     hh = piece.merge(hh_attrs, on="_orig", how="left")
     hh["household_weight"] = (
-        hh["_orig_weight"]
-        * hh["_n"]
-        / hh["_orig"].map(orig_household_size).to_numpy()
+        hh["_orig_weight"] * hh["_n"] / hh["_orig"].map(orig_household_size).to_numpy()
     ).astype(float)
     hh["tract_geoid"] = hh["block_geoid"].astype(str).str[:11]
     hh["household_is_puf_clone"] = (hh["_half"] == "synthetic_puf").astype(bool)
@@ -836,7 +815,9 @@ def main() -> int:
                 grp = handle.create_group(column)
                 grp.create_dataset(str(args.calendar_year), data=values)
         missing_tp = sorted(set(contract.required) - seen)
-    log(f"  time-period export: {tp_h5.name} cols={len(seen)} missing={len(missing_tp)}")
+    log(
+        f"  time-period export: {tp_h5.name} cols={len(seen)} missing={len(missing_tp)}"
+    )
     log(
         f"  gate passed={gate.passed} missing={len(gate.missing_required)} "
         f"defaulted={len(gate.defaulted)} dropped={len(gate.dropped)}"
@@ -870,7 +851,9 @@ def main() -> int:
         (out / "score_stdout.log").write_text(proc.stdout)
         (out / "score_stderr.log").write_text(proc.stderr)
         log(f"  harness exit: {proc.returncode}")
-        result_json = out / "sound_comparison" / "sound_ecps_replacement_comparison.json"
+        result_json = (
+            out / "sound_comparison" / "sound_ecps_replacement_comparison.json"
+        )
         if result_json.exists():
             payload = json.loads(result_json.read_text())
             log(json.dumps(payload.get("headline", payload), indent=2)[:2000])

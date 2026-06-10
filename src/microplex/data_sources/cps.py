@@ -319,7 +319,9 @@ def _harmonize_tax_units(
         if target in result.columns or source not in persons.columns:
             continue
         if "household_id" not in persons.columns:
-            raise ValueError(f"CPS raw aggregate {source!r} requires household_id or PH_SEQ")
+            raise ValueError(
+                f"CPS raw aggregate {source!r} requires household_id or PH_SEQ"
+            )
         aggregated = persons.groupby("household_id", as_index=False)[source].sum()
         aggregated = aggregated.rename(columns={source: target})
         result = result.merge(aggregated, on="household_id", how="left")
