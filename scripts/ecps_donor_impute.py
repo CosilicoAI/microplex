@@ -136,7 +136,9 @@ def _donor_frames(baseline_h5: str) -> tuple[pd.DataFrame, pd.DataFrame]:
                 ),
             }
         )
-        for t in PERSON_TARGETS:
+        person_targets = [t for t in PERSON_TARGETS if t in keys]
+        skipped_p = sorted(set(PERSON_TARGETS) - set(person_targets))
+        for t in person_targets:
             person[t] = col(t)
         hh = pd.DataFrame(
             {
@@ -147,8 +149,12 @@ def _donor_frames(baseline_h5: str) -> tuple[pd.DataFrame, pd.DataFrame]:
         )
         hh_targets = [
             t for t in HOUSEHOLD_TARGETS
-            if t != "spm_unit_pre_subsidy_childcare_expenses"
+            if t != "spm_unit_pre_subsidy_childcare_expenses" and t in keys
         ]
+        skipped_h = sorted(
+            set(HOUSEHOLD_TARGETS) - set(hh_targets)
+            - {"spm_unit_pre_subsidy_childcare_expenses"}
+        )
         for t in hh_targets:
             hh[t] = col(t)
         # SPM childcare -> household grain (first SPM unit per household).
@@ -169,7 +175,15 @@ def _donor_frames(baseline_h5: str) -> tuple[pd.DataFrame, pd.DataFrame]:
         hh["spm_unit_pre_subsidy_childcare_expenses"] = (
             hh["household_id"].map(cc_by_hh).fillna(0.0)
         )
-    return person, hh
+    if skipped_p or skipped_h:
+        print(
+            "  donor does not store (skipping, not parity gaps): "
+            f"{skipped_p + skipped_h}"
+        )
+    person.attrs = {}  # silence pandas attrs propagation warnings
+    return person, hh, person_targets, hh_targets + [
+        "spm_unit_pre_subsidy_childcare_expenses"
+    ]
 
 
 def _household_aggregates(person: pd.DataFrame, hh_id_col: str) -> pd.DataFrame:
@@ -203,7 +217,7 @@ def run(
     """Impute the donor blocks onto the pool person/household frames."""
     from microimpute import Imputer
 
-    d_person, d_hh = _donor_frames(baseline_h5)
+    d_person, d_hh, person_targets, household_targets = _donor_frames(baseline_h5)
     log(f"  donor: {len(d_person):,} persons, {len(d_hh):,} households")
 
     # Person weights = household weight of the person's household.
@@ -223,13 +237,13 @@ def run(
     fitted = Imputer(seed=seed, log_level="WARNING").fit(
         d_person,
         PERSON_PREDICTORS,
-        PERSON_TARGETS,
+        person_targets,
         weight_col="_w",
     )
     draws = fitted.predict(recv_p[PERSON_PREDICTORS].copy())
-    for t in PERSON_TARGETS:
+    for t in person_targets:
         person[t] = np.asarray(draws[t])
-    log(f"  person block imputed: {len(PERSON_TARGETS)} variables")
+    log(f"  person block imputed: {len(person_targets)} variables")
 
     # ---- household block ---------------------------------------------------
     d_aggr = _household_aggregates(d_person, "person_household_id")
@@ -249,11 +263,11 @@ def run(
     fitted_h = Imputer(seed=seed + 1, log_level="WARNING").fit(
         d_hh,
         HOUSEHOLD_PREDICTORS,
-        HOUSEHOLD_TARGETS,
+        household_targets,
         weight_col="household_weight",
     )
     draws_h = fitted_h.predict(recv_h[HOUSEHOLD_PREDICTORS].copy())
-    for t in HOUSEHOLD_TARGETS:
+    for t in household_targets:
         hh[t] = np.asarray(draws_h[t])
     # Vehicle counts and origination years are integral quantities.
     hh["household_vehicles_owned"] = (
@@ -264,5 +278,5 @@ def run(
         hh["first_home_mortgage_origination_year"].clip(1960, 2024).round(),
         0,
     )
-    log(f"  household block imputed: {len(HOUSEHOLD_TARGETS)} variables")
+    log(f"  household block imputed: {len(household_targets)} variables")
     return person, hh
