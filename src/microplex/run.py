@@ -38,7 +38,7 @@ Source resolution contract: ``run_spec`` takes an already-loaded
 from __future__ import annotations
 
 import logging
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
@@ -365,6 +365,8 @@ def run_spec(
     calibrator: SpecCalibrator | None = None,
     calibration_entity: EntityType | str | None = None,
     calibration_entity_bundle: EntityTableBundle | None = None,
+    calibration_entity_bundle_factory: Callable[[pd.DataFrame], EntityTableBundle]
+    | None = None,
     calibration_id_column: str | None = None,
     simulation_compiler: Any | None = None,
     calibration_certificate: Mapping[str, Any] | None = None,
@@ -422,6 +424,11 @@ def run_spec(
             person/household/tax-unit frames to simulator-aware target
             compilation instead of calibrating only the flat post-transform
             frame.
+        calibration_entity_bundle_factory: Optional callable that receives the
+            post-transform frame and returns a prepared
+            :class:`EntityTableBundle`. This is useful when the bundle should
+            combine resolved linked entity tables with the final support frame
+            produced inside ``run_spec``.
         calibration_id_column: Record id column for the post-transform frame
             when ``calibration_entity`` is set.
         simulation_compiler: Optional simulator-aware target compiler for
@@ -594,15 +601,30 @@ def run_spec(
     # without a loaded TargetSet would recreate the stale eCPS-surface failure
     # mode that the release gates now forbid.
     if calibrator is not None and (
-        calibration_entity is not None or calibration_entity_bundle is not None
+        calibration_entity is not None
+        or calibration_entity_bundle is not None
+        or calibration_entity_bundle_factory is not None
     ):
         raise ValueError(
             "pass either a legacy calibrator or generic entity-table "
             "calibration inputs, not both"
         )
+    if (
+        calibration_entity_bundle is not None
+        and calibration_entity_bundle_factory is not None
+    ):
+        raise ValueError(
+            "pass either calibration_entity_bundle or "
+            "calibration_entity_bundle_factory, not both"
+        )
 
     entity_table_bundle: EntityTableBundle | None = None
-    if calibration_entity_bundle is not None:
+    prepared_calibration_entity_bundle = calibration_entity_bundle
+    if calibration_entity_bundle_factory is not None:
+        prepared_calibration_entity_bundle = calibration_entity_bundle_factory(
+            final_frame.copy()
+        )
+    if prepared_calibration_entity_bundle is not None:
         if calibration_id_column is not None:
             raise ValueError(
                 "calibration_entity_bundle does not use calibration_id_column; "
@@ -620,11 +642,11 @@ def run_spec(
                 "target_provider for the spec-declared target surface"
             )
         output_entity = _calibration_output_entity(
-            calibration_entity_bundle,
+            prepared_calibration_entity_bundle,
             calibration_entity,
         )
         bundle_result = _calibrate_entity_bundle(
-            calibration_entity_bundle,
+            prepared_calibration_entity_bundle,
             target_set=target_set,
             calibrate=spec.calibrate,
             simulation_compiler=simulation_compiler,

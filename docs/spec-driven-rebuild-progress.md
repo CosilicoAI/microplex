@@ -105,6 +105,12 @@ diagnostics. It still refuses to calibrate without a spec-declared loaded target
 surface, a stable non-null unique record id for one-table calibration, and an
 explicit `calibrate` section.
 
+`run_spec` also accepts a `calibration_entity_bundle_factory` for real-data
+builders that need the post-transform support frame before constructing a
+multi-entity bundle. The factory receives a copy of the final support frame and
+returns an `EntityTableBundle`, preserving the same strict target-surface and
+`calibrate` checks as a prebuilt bundle.
+
 ### 5a. `microplex.source_registry` — provider-backed source resolution
 `SourceRegistry` bridges spec content to real provider loaders: it resolves each
 `sources[*].dataset` id through a registered `SourceProvider`, loads and
@@ -112,6 +118,12 @@ validates an `ObservationFrame`, and selects the declared entity table for the
 frame-based runner. Sources with multiple entity tables must declare
 `sources.<name>.entity` in the spec or register a `default_entity`; otherwise
 resolution fails closed instead of guessing.
+
+For multi-entity calibration builders, `SourceRegistry` exposes full
+`resolve_observation_frame(s)` calls. `entity_table_bundle_from_observation_frame`
+can then convert a validated observation frame into a prepared calibration bundle,
+optionally replacing one observed entity table with a post-run support table
+while retaining source relationships.
 
 ### 5b. `microplex.data_sources` — first ASEC+PUF source providers
 The first real-data providers now materialize validated `ObservationFrame`s for
@@ -186,9 +198,10 @@ weights or calibrated datasets are fabricated. Remaining TODOs:
 
 - **`calibrate` (concrete US wiring/clone-local variants):** the
   national/entity-table path and prepared multi-entity bundle path are wired.
-  Real-data builders still need to pass the resolved US entity tables and
-  runtime simulation compiler explicitly; more complex local-area clone
-  surfaces should be added only as real data demands them.
+  Real-data builders can now pass a bundle factory that combines resolved US
+  household/person tables with the post-transform tax-unit support frame, plus a
+  runtime simulation compiler. The remaining concrete US task is to call that
+  seam from the real ASEC+PUF+geography builder with Arch targets.
 - **`export` (Exporter):** write the PolicyEngine dataset.
 
 ## Stretch goal (Arch provider move) — assessed and deferred, not attempted
