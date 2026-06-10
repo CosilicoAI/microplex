@@ -48,6 +48,7 @@ dependencies = [
     "scikit-learn>=1.3",  # For classification in zero-inflated models
     "pydantic>=2.0",  # For data models
     "prdc>=0.1",  # Canonical PRDC metrics (Naeem et al. 2020)
+    "microunit>=0.1.0",
 ]
 
 [project.optional-dependencies]
@@ -73,6 +74,11 @@ calibrate = [
     # microplex installs on 3.11/3.12 that don't need the extra.
     "microcalibrate>=0.22; python_version >= '3.13'",
 ]
+us = [
+    # Matches the certified comparison environment used by the US candidate
+    # export/scoring driver.
+    "policyengine-us==1.715.3",
+]
 benchmark = [
     "sdv>=1.0",  # CT-GAN, TVAE, Copulas
     "scikit-learn>=1.3",  # For QRF comparison
@@ -86,7 +92,7 @@ docs = [
     "sphinx-autodoc-typehints>=1.23",
 ]
 all = [
-    "microplex[dev,benchmark,docs,calibrate]",
+    "microplex[dev,benchmark,docs,calibrate,us]",
 ]
 
 [project.urls]

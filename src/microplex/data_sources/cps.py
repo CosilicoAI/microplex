@@ -8,7 +8,8 @@ demographic information for ~100K households.
 Data source: https://www.census.gov/data/datasets/time-series/demo/cps/cps-asec.html
 """
 
-from collections.abc import Callable
+import hashlib
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -126,6 +127,67 @@ _CPS_TAX_UNIT_HOUSEHOLD_VARIABLES = (
     "cbsa",
     "household_size",
 )
+
+
+def _normalize_extra_columns(columns: Sequence[str]) -> tuple[str, ...]:
+    """Return a sorted, de-duplicated tuple of requested extra raw columns.
+
+    The default (empty) request collapses to ``()`` so that callers who do not
+    opt in get byte-identical behaviour (and cache filenames) to before.
+    """
+    return tuple(sorted({str(column) for column in columns}))
+
+
+def _extra_columns_cache_token(
+    person_columns: Sequence[str],
+    household_columns: Sequence[str],
+) -> str:
+    """Build the cache-filename token for a requested extra-column set.
+
+    Returns an empty string when no extra columns are requested so the default
+    processed-parquet filenames (``cps_asec_{year}_processed.parquet`` and its
+    household sibling) are unchanged. For a non-empty request it returns a
+    short, stable ``__x<digest>`` suffix derived from a sha256 of the sorted
+    person/household column lists, guaranteeing different column sets land in
+    different cache files and never collide with the default set.
+    """
+    person = _normalize_extra_columns(person_columns)
+    household = _normalize_extra_columns(household_columns)
+    if not person and not household:
+        return ""
+    payload = "P:" + ",".join(person) + "|H:" + ",".join(household)
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"__x{digest}"
+
+
+def _validate_requested_columns(
+    available: set[str],
+    requested: Sequence[str],
+    *,
+    file_label: str,
+) -> None:
+    """Raise ``ValueError`` listing any requested columns not in the CSV."""
+    missing = [column for column in requested if column not in available]
+    if missing:
+        raise ValueError(
+            f"Requested extra {file_label} columns not found in CPS ASEC "
+            f"{file_label} file: {sorted(missing)}. "
+            f"Available column count: {len(available)}."
+        )
+
+
+def _extra_columns_frame(
+    df: pl.DataFrame,
+    requested: Sequence[str],
+) -> pl.DataFrame:
+    """Return ``df`` restricted to the requested raw columns (verbatim).
+
+    Columns are emitted in the normalized (sorted) order. Dtypes are preserved
+    exactly as read from the CSV; no sentinel rewriting (-1/0) and no weight
+    scaling are applied to these passthrough columns.
+    """
+    requested = _normalize_extra_columns(requested)
+    return df.select([pl.col(column) for column in requested])
 
 
 @dataclass
@@ -257,7 +319,9 @@ def _harmonize_tax_units(
         if target in result.columns or source not in persons.columns:
             continue
         if "household_id" not in persons.columns:
-            raise ValueError(f"CPS raw aggregate {source!r} requires household_id or PH_SEQ")
+            raise ValueError(
+                f"CPS raw aggregate {source!r} requires household_id or PH_SEQ"
+            )
         aggregated = persons.groupby("household_id", as_index=False)[source].sum()
         aggregated = aggregated.rename(columns={source: target})
         result = result.merge(aggregated, on="household_id", how="left")
@@ -329,6 +393,8 @@ class CPSAsecSourceProvider:
     download: bool = True
     loader: Callable[..., CPSDataset] | None = None
     source_name: str = "cps_asec"
+    extra_person_columns: Sequence[str] = ()
+    extra_household_columns: Sequence[str] = ()
 
     @property
     def descriptor(self) -> SourceDescriptor:
@@ -388,11 +454,20 @@ class CPSAsecSourceProvider:
         from microplex.data_sources.cps_transform import transform_cps_to_policyengine
 
         loader = self.loader or load_cps_asec
-        cps = loader(
-            year=self.asec_year,
-            cache_dir=self.cache_dir,
-            download=self.download,
-        )
+        loader_kwargs: dict = {
+            "year": self.asec_year,
+            "cache_dir": self.cache_dir,
+            "download": self.download,
+        }
+        # Only forward the extra-column kwargs when requested so custom loaders
+        # (e.g. test fixtures) that predate this option keep their signatures.
+        extra_person = _normalize_extra_columns(self.extra_person_columns)
+        extra_household = _normalize_extra_columns(self.extra_household_columns)
+        if extra_person:
+            loader_kwargs["extra_person_columns"] = extra_person
+        if extra_household:
+            loader_kwargs["extra_household_columns"] = extra_household
+        cps = loader(**loader_kwargs)
         households = _to_pandas(cps.households)
         persons = _to_pandas(cps.persons)
         transformed = transform_cps_to_policyengine(cps)
@@ -558,6 +633,8 @@ def load_cps_asec(
     year: int = 2023,
     cache_dir: Path | None = None,
     download: bool = True,
+    extra_person_columns: Sequence[str] = (),
+    extra_household_columns: Sequence[str] = (),
 ) -> CPSDataset:
     """
     Load CPS ASEC data for a given year.
@@ -566,23 +643,41 @@ def load_cps_asec(
         year: Year of CPS ASEC (e.g., 2023)
         cache_dir: Directory for cached data
         download: Whether to download if not cached
+        extra_person_columns: Raw CPS person-CSV column names to carry through
+            verbatim (dtypes/sentinels untouched) alongside the harmonized
+            columns. Unknown columns raise ``ValueError`` after parsing.
+        extra_household_columns: Raw CPS household-CSV column names to carry
+            through verbatim alongside the harmonized columns.
 
     Returns:
         CPSDataset with persons and households DataFrames
+
+    Notes:
+        The processed-parquet cache filenames incorporate a short sha256 token
+        derived from the requested extra-column set, so different column sets
+        are cached separately and never collide. The default (no extra columns)
+        request uses the original, unsuffixed cache filenames and is fully
+        backward compatible with caches written before this option existed.
     """
     import zipfile
 
     if cache_dir is None:
         cache_dir = DEFAULT_CACHE_DIR
 
-    # Check for processed parquet first
-    processed_path = cache_dir / f"cps_asec_{year}_processed.parquet"
+    extra_person = _normalize_extra_columns(extra_person_columns)
+    extra_household = _normalize_extra_columns(extra_household_columns)
+    cache_token = _extra_columns_cache_token(extra_person, extra_household)
+
+    # Check for processed parquet first (cache key includes the extra-column
+    # token so distinct column sets land in distinct files; the default set
+    # keeps the original unsuffixed filenames).
+    processed_path = cache_dir / f"cps_asec_{year}_processed{cache_token}.parquet"
+    household_processed_path = (
+        cache_dir / f"cps_asec_{year}_households_processed{cache_token}.parquet"
+    )
     if processed_path.exists():
         print(f"Loading processed CPS ASEC {year} from {processed_path}")
         persons = pl.read_parquet(processed_path)
-        household_processed_path = (
-            cache_dir / f"cps_asec_{year}_households_processed.parquet"
-        )
         if household_processed_path.exists():
             households = pl.read_parquet(household_processed_path)
         else:
@@ -655,19 +750,22 @@ def load_cps_asec(
             households_raw = None
 
     # Process person data
-    persons = _process_persons(persons_raw, year)
+    persons = _process_persons(persons_raw, year, extra_person)
 
     # Process or derive household data
     if households_raw is not None:
-        households = _process_households(households_raw, year)
+        households = _process_households(households_raw, year, extra_household)
+    elif extra_household:
+        raise ValueError(
+            "Requested extra household columns but the CPS ASEC archive has no "
+            f"household (hhpub) file to read them from: {sorted(extra_household)}"
+        )
     else:
         households = _derive_households(persons)
 
     # Cache processed data
     persons.write_parquet(processed_path)
-    households.write_parquet(
-        cache_dir / f"cps_asec_{year}_households_processed.parquet"
-    )
+    households.write_parquet(household_processed_path)
     print(f"Cached processed data to {processed_path}")
 
     return CPSDataset(
@@ -678,8 +776,21 @@ def load_cps_asec(
     )
 
 
-def _process_persons(df: pl.DataFrame, year: int) -> pl.DataFrame:
-    """Process raw person file into clean format."""
+def _process_persons(
+    df: pl.DataFrame,
+    year: int,
+    extra_columns: Sequence[str] = (),
+) -> pl.DataFrame:
+    """Process raw person file into clean format.
+
+    Args:
+        df: Raw person CSV frame.
+        year: Survey year tag.
+        extra_columns: Raw CSV column names to carry through verbatim alongside
+            the harmonized columns. Validated against the CSV header; unknown
+            columns raise ``ValueError``. Dtypes and sentinel semantics are left
+            untouched for these passthrough columns.
+    """
     # Select and rename available columns
     available = set(df.columns)
     selected = {}
@@ -690,6 +801,8 @@ def _process_persons(df: pl.DataFrame, year: int) -> pl.DataFrame:
 
     if not selected:
         raise ValueError("No recognized variables found in person file")
+
+    _validate_requested_columns(available, extra_columns, file_label="person")
 
     result = df.select(
         [
@@ -742,11 +855,36 @@ def _process_persons(df: pl.DataFrame, year: int) -> pl.DataFrame:
     # Add year
     result = result.with_columns(pl.lit(year).alias("year"))
 
+    # Carry requested raw columns through verbatim (dtypes/sentinels untouched).
+    # Selected from the raw frame so e.g. PH_SEQ survives both as the renamed
+    # household_id and as its raw PH_SEQ column. Any name already produced by
+    # the harmonized select is skipped so concat never duplicates a column.
+    extra = _normalize_extra_columns(extra_columns)
+    if extra:
+        passthrough = [name for name in extra if name not in result.columns]
+        if passthrough:
+            result = pl.concat(
+                [result, _extra_columns_frame(df, passthrough)],
+                how="horizontal",
+            )
+
     return result
 
 
-def _process_households(df: pl.DataFrame, year: int) -> pl.DataFrame:
-    """Process raw household file into clean format."""
+def _process_households(
+    df: pl.DataFrame,
+    year: int,
+    extra_columns: Sequence[str] = (),
+) -> pl.DataFrame:
+    """Process raw household file into clean format.
+
+    Args:
+        df: Raw household CSV frame.
+        year: Survey year tag.
+        extra_columns: Raw CSV column names to carry through verbatim alongside
+            the harmonized columns. Validated against the CSV header; unknown
+            columns raise ``ValueError``.
+    """
     available = set(df.columns)
     selected = {}
 
@@ -756,6 +894,8 @@ def _process_households(df: pl.DataFrame, year: int) -> pl.DataFrame:
 
     if not selected:
         raise ValueError("No recognized variables found in household file")
+
+    _validate_requested_columns(available, extra_columns, file_label="household")
 
     result = df.select(
         [
@@ -771,6 +911,16 @@ def _process_households(df: pl.DataFrame, year: int) -> pl.DataFrame:
         )
 
     result = result.with_columns(pl.lit(year).alias("year"))
+
+    # Carry requested raw columns through verbatim (dtypes/sentinels untouched).
+    extra = _normalize_extra_columns(extra_columns)
+    if extra:
+        passthrough = [name for name in extra if name not in result.columns]
+        if passthrough:
+            result = pl.concat(
+                [result, _extra_columns_frame(df, passthrough)],
+                how="horizontal",
+            )
 
     return result
 
