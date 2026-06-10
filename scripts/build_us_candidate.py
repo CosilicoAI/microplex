@@ -68,6 +68,20 @@ MICROUNIT_RAW_COLUMNS = (
 # Raw ASEC columns backing CPS-threadable contract variables (mapping rules
 # mirror the eCPS loader in policyengine-us-data cps.py).
 EXTRA_ASEC_COLUMNS = (
+    # v2 parity additions (rules mirror usdata cps.py; see V2_PLAN.md)
+    "ED_VAL",
+    "FIN_VAL",
+    "SRVS_VAL",
+    "VET_VAL",
+    "WC_VAL",
+    "OI_VAL",
+    "OI_OFF",
+    "A_HRS1",
+    "WKSWORK",
+    "POCCU2",
+    "RETCB_VAL",
+    "WSAL_VAL",
+    "SEMP_VAL",
     "CSP_VAL",
     "CHSP_VAL",
     "DIS_VAL1",
@@ -201,6 +215,37 @@ def _derive_person_columns(person: pd.DataFrame) -> pd.DataFrame:
     p["social_security_disability"] = (ss * disabled).astype(float)
     p["social_security_survivors"] = (ss * survivor).astype(float)
     p["social_security_dependents"] = (ss * dependent).astype(float)
+    # ---- v2 parity derivations (rules mirror usdata cps.py; V2_PLAN.md) ----
+    p["educational_assistance"] = num("ED_VAL").astype(float)
+    p["financial_assistance"] = num("FIN_VAL").astype(float)
+    p["survivor_benefits"] = num("SRVS_VAL").astype(float)
+    p["veterans_benefits"] = num("VET_VAL").astype(float)
+    p["workers_compensation"] = num("WC_VAL").astype(float)
+    oi_val, oi_off = num("OI_VAL"), num("OI_OFF")
+    strike = oi_off == 12
+    alimony_oi = oi_off == 20
+    p["strike_benefits"] = (oi_val * strike).astype(float)
+    p["miscellaneous_income"] = (
+        oi_val * ~(strike | alimony_oi)
+    ).astype(float)
+    p["hours_worked_last_week"] = num("A_HRS1").clip(lower=0).astype(float)
+    p["weeks_worked"] = num("WKSWORK").clip(0, 52).astype(float)
+    p["detailed_occupation_recode"] = num("POCCU2").astype(float)
+    # RETCB proportional split (usdata cps.py:1505-1552; shares from
+    # imputation_parameters.yaml — BEA/FRED + IRS SOI administrative shares).
+    retcb = num("RETCB_VAL").clip(lower=0)
+    has_wages = num("WSAL_VAL") > 0
+    has_se = num("SEMP_VAL") > 0
+    has_earned = has_wages | has_se
+    se_pension = retcb * 0.046 * has_se
+    p["self_employed_pension_contributions_desired"] = se_pension.astype(float)
+    remaining = (retcb - se_pension).clip(lower=0)
+    dc_pool = remaining * 0.908 * has_wages
+    ira_pool = (remaining - dc_pool) * has_earned
+    p["traditional_401k_contributions_desired"] = (dc_pool * 0.85).astype(float)
+    p["roth_401k_contributions_desired"] = (dc_pool * 0.15).astype(float)
+    p["traditional_ira_contributions_desired"] = (ira_pool * 0.392).astype(float)
+    p["roth_ira_contributions_desired"] = (ira_pool * 0.608).astype(float)
     return p
 
 # Person-level ASEC harmonized income columns that sum to tax-unit totals.
@@ -332,7 +377,14 @@ def _aggregate_tax_units(person: pd.DataFrame, tax_unit: pd.DataFrame) -> pd.Dat
 def _attach_household_columns(
     base: pd.DataFrame, households: pd.DataFrame
 ) -> pd.DataFrame:
-    keep = ["household_id", "state_fips", "household_weight"]
+    households = households.copy()
+    if "H_TENURE" in households.columns:
+        households["tenure_type"] = (
+            pd.to_numeric(households["H_TENURE"], errors="coerce")
+            .fillna(0)
+            .map({0: "NONE", 1: "OWNED_WITH_MORTGAGE", 2: "RENTED", 3: "NONE"})
+        )
+    keep = ["household_id", "state_fips", "household_weight", "tenure_type"]
     have = [c for c in keep if c in households.columns]
     return base.merge(
         households[have].drop_duplicates("household_id"),
@@ -506,6 +558,7 @@ def main() -> int:
         extra_person_columns=(
             list(MICROUNIT_RAW_COLUMNS) + ["PH_SEQ"] + list(EXTRA_ASEC_COLUMNS)
         ),
+        extra_household_columns=["H_TENURE"],
     )
     persons = ds.persons.to_pandas()
     households = ds.households.to_pandas()
