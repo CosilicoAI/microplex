@@ -312,6 +312,7 @@ def run(
         HOUSEHOLD_PREDICTORS,
         household_targets,
         weight_col="household_weight",
+        not_numeric_categorical=["tenure_type"],
     )
     draws_h = fitted_h.predict(recv_h[HOUSEHOLD_PREDICTORS].copy())
     for t in household_targets:
