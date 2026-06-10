@@ -255,13 +255,25 @@ def run(
     )
     log(f"  donor: {len(d_person):,} persons, {len(d_hh):,} households")
 
-    # Person weights = household weight of the person's household.
+    # Person weights = household weight of the person's household (ids cast
+    # to int64 — the donor stores them in mixed dtypes). The eCPS keeps some
+    # zero-weight records; drop them from training (microimpute requires
+    # positive weights, and zero-weight donors carry no information).
     wmap = dict(
-        zip(d_hh["household_id"].tolist(), d_hh["household_weight"].tolist())
+        zip(
+            d_hh["household_id"].astype("int64").tolist(),
+            d_hh["household_weight"].astype(float).tolist(),
+        )
     )
     d_person["_w"] = (
-        d_person["person_household_id"].map(wmap).fillna(0.0).astype(float)
+        d_person["person_household_id"]
+        .astype("int64")
+        .map(wmap)
+        .fillna(0.0)
+        .astype(float)
     )
+    d_person = d_person[d_person["_w"] > 0].copy()
+    d_hh = d_hh[d_hh["household_weight"] > 0].copy()
 
     # ---- person block -----------------------------------------------------
     recv_p = person.copy()
