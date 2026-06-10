@@ -98,16 +98,42 @@ def _donor_frames(baseline_h5: str) -> tuple[pd.DataFrame, pd.DataFrame]:
                 return np.char.decode(v.astype("S32"))
             return v
 
+        keys = set(f.keys())
+
+        def first_of(*names):
+            for n in names:
+                if n in keys:
+                    return col(n)
+            raise KeyError(f"none of {names} in donor")
+
+        # The eCPS stores pre-LSR earnings and split social security; map to
+        # the predictor names the pool uses.
+        ss = sum(
+            col(n)
+            for n in (
+                "social_security_retirement",
+                "social_security_disability",
+                "social_security_survivors",
+                "social_security_dependents",
+            )
+            if n in keys
+        )
         person = pd.DataFrame(
             {
                 "person_household_id": col("person_household_id"),
                 "age": col("age"),
                 "is_female": col("is_female").astype(bool),
                 "is_household_head": col("is_household_head").astype(bool),
-                "employment_income": col("employment_income"),
-                "self_employment_income": col("self_employment_income"),
-                "social_security": col("social_security"),
-                "taxable_pension_income": col("taxable_pension_income"),
+                "employment_income": first_of(
+                    "employment_income", "employment_income_before_lsr"
+                ),
+                "self_employment_income": first_of(
+                    "self_employment_income", "self_employment_income_before_lsr"
+                ),
+                "social_security": ss,
+                "taxable_pension_income": first_of(
+                    "taxable_pension_income", "taxable_private_pension_income"
+                ),
             }
         )
         for t in PERSON_TARGETS:
