@@ -193,3 +193,14 @@ section H observatory lineage while it runs → C recalibrate → D export+surge
 (GENERALIZE interest_deduction surgery: group-sum EVERY person-stored
 tax-unit-entity head-carried variable in build_populace_us_dataset.py — the new
 PUF vars land person-stored like interest_deduction did) → E gates → F/G publish.
+
+## @ 00:50: SMOKE GREEN end-to-end (iteration 7; fixes: donor stored-names,
+## grain routing + head-carry mortgage block, int64 weight join + drop zero-weight
+## donors, one-hot tenure predictors). Smoke output verified: tenure mix
+## 2599 owned/1131 rented, net_worth 99% nz, scf_retirement 66%, veterans 1.3%,
+## estate 0.8%, tips 0.7%, mortgage 15%, 401k desired 19.9%. weeks_worked
+## dropped=1 is BY DESIGN (formula_owned_excluded in export contract) — the
+## parity checker must EXCLUDE formula-owned vars. defaulted=118 remain (take-up
+## flags etc. — many legit; compare against eCPS-stored when gating).
+## FULL REBUILD RUNNING: /tmp/v2_full_build.log (watcher bh4h2ktk6), ~1-2h.
+## All 19+ worktree commits pushed to origin/claude/spec-build-20260610.
