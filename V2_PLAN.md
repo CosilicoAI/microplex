@@ -118,3 +118,22 @@ candidate_refit optimized train 0.1274 / holdout 0.0319 / full 0.1593
 baseline_refit  optimized train 1.0888 / holdout 0.3167 / full 1.4055
 → WIN on all three (8-10x). Per-target: candidate wins 1,192, baseline 2,458,
 ties 54 (disclose). v1 loss gates PASS; parity gate (82 gaps) is the v2 work.
+
+## VERIFIED v2 family-1 rules (from usdata cps.py, importable from ~/.claude-worktrees/usdata-populace):
+- tenure_type (HOUSEHOLD) = H_TENURE.map({0:"NONE",1:"OWNED_WITH_MORTGAGE",2:"RENTED",3:"NONE"})
+- veterans_benefits=VET_VAL; workers_compensation=WC_VAL (cps.py:1559-60)
+- educational_assistance=ED_VAL; financial_assistance=FIN_VAL; survivor_benefits=SRVS_VAL; (1493-95)
+- strike_benefits=OI_VAL*(OI_OFF==12); miscellaneous_income=OI_VAL unless alimony/strike (1485-91)
+- hours_worked_last_week=A_HRS1; weeks_worked=clip(WKSWORK,0,52) (1367-68)
+- detailed_occupation_recode=POCCU2; treasury_tipped_occupation_code + is_tipped_occupation
+  via `from policyengine_us_data.datasets.cps.tipped_occupation import derive_*` (1229-34)
+- 401k/IRA/Roth contributions: RETCB_VAL proportional split by admin shares — read
+  cps.py ~1505-1559 for exact proportions and replicate
+- previous_year_income_available + *_last_year: PYEARN/SEMP_VAL prior-year join (1693+) — replicate or defer
+- hourly_wage: rule not found yet — grep usdata again (maybe ERN_* or computed)
+- RAW columns to add: person ED_VAL FIN_VAL SRVS_VAL VET_VAL WC_VAL OI_VAL OI_OFF CSP_VAL? A_HRS1
+  WKSWORK POCCU2 RETCB_VAL PYEARN? SEMP_VAL SSI_VAL; household H_TENURE
+- Family-3 (eCPS-donor populace-fit) confirmed remainder: net_worth+scf_*+stock/bond/bank assets,
+  first/second_home_mortgage_*, auto_loan_*, vehicles, other/employer health premiums,
+  tip_income($54B; eCPS imputes via tipped occ — could derive share*earnings instead),
+  weekly_hours_worked_before_lsr, fsla_overtime_premium, sstb_*/qbi/unadjusted_basis (check PUF first).
