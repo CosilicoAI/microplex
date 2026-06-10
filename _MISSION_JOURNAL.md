@@ -170,3 +170,16 @@ PUF source: registry puf_path=…/storage/puf_2024.h5 (verify format; HF fallbac
 | v4 (running) | weighted PUF fits (B arm) | ? | ? | |
 Old imperative pipeline best (a3a1934, 06-07): cand 0.0606 vs eCPS 0.0559 full / 0.0278 vs 0.0127 holdout
 (different matched-N=15,875 + surface scale — not directly comparable to the 41,314-hh refits above).
+
+## microimpute weight bug — FIXED upstream (2026-06-10 ~05:50)
+- Canonical Imputer ignored weight_col for ALL numeric targets: (1) regime_gated.fit
+  never threaded weights into the numeric chain; (2) quantile-forest's native
+  sample_weight is a no-op for the predictive distribution (leaf-mask only).
+  Fixed in microimpute@676a5ab on claude/imputer-canonical (PR #196): weights
+  threaded through gates + per-regime fits; QRF materializes weights via weighted
+  bootstrap. Regression tests added. Verified: weighted mean draw 11,090 vs truth
+  10,755 (was 202,329).
+- TRAP: driver v5 resamples the donor by weight AND passes weights: "weight"
+  (harmless under the old pin which ignores it). After bumping the microplex pin
+  to 676a5ab: REMOVE the driver resample (else double-correction) and rely on the
+  step weights param alone.
