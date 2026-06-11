@@ -48,9 +48,42 @@ def stored_layers(path: Path) -> dict[str, float]:
     return shares
 
 
+def candidate_stored_shares() -> dict[str, float]:
+    """entity.column -> nonzero share over every stored candidate column."""
+    from policyengine_us.data import USSingleYearDataset
+
+    ds = USSingleYearDataset(file_path=str(CANDIDATE))
+    shares: dict[str, float] = {}
+    for ent in ("person", "household", "tax_unit", "spm_unit", "family",
+                "marital_unit"):
+        tbl = getattr(ds, ent)
+        structural = {f"{ent}_id", f"{ent}_weight"} | {
+            c for c in tbl.columns if c.startswith("person_")
+        }
+        for c in tbl.columns:
+            if c in structural:
+                continue
+            vals = tbl[c].to_numpy()
+            if vals.dtype.kind not in "fiub":
+                continue
+            shares[f"{ent}.{c}"] = float(
+                (np.asarray(vals, dtype=np.float64) != 0).mean()
+            )
+    return shares
+
+
 def main() -> int:
     from policyengine_us import Microsimulation
-    from populace.build import parity_gate
+    from populace.build import exported_nonzero_gate, parity_gate
+
+    # gate 0: every stored column carries signal (populate it or drop it)
+    nonzero = exported_nonzero_gate(candidate_stored_shares())
+    print(
+        f"exported_nonzero: passed={nonzero.passed} "
+        f"({nonzero.details['columns_checked']} stored columns)"
+    )
+    for line in nonzero.failures:
+        print(f"  ZERO {line}")
 
     ref_layers = stored_layers(REFERENCE)
     print(f"reference stored layers: {len(ref_layers)}")
@@ -109,16 +142,18 @@ def main() -> int:
     }
     print("smoke:", json.dumps(smoke, indent=1))
 
+    def _gate_dict(gate):
+        return {
+            "passed": gate.passed,
+            "failures": list(gate.failures),
+            "details": dict(gate.details),
+        }
+
     OUT.write_text(
         json.dumps(
             {
-                "parity": result.to_manifest()
-                if hasattr(result, "to_manifest")
-                else {
-                    "passed": result.passed,
-                    "failures": list(result.failures),
-                    "details": dict(result.details),
-                },
+                "exported_nonzero": _gate_dict(nonzero),
+                "parity": _gate_dict(result),
                 "smoke": smoke,
                 "skipped_layers": skipped,
             },
@@ -126,7 +161,7 @@ def main() -> int:
         )
     )
     print(f"wrote {OUT}")
-    return 0 if result.passed else 1
+    return 0 if (result.passed and nonzero.passed) else 1
 
 
 if __name__ == "__main__":

@@ -129,25 +129,45 @@ def main():
             del tbl["year"]
             log(f"dropped year from {ent}")
     ds.save(OUT)
-    # All-zero stored copies of PE FORMULA variables mask the formulas (a
-    # stored input supersedes computation): drop them so PE computes live —
-    # e.g. traditional_401k_contributions from the *_desired inputs.
+    # No all-zero stored layers, period (the exported_nonzero gate's
+    # invariant): an all-zero column either masks a PE formula (a stored
+    # input supersedes computation) or is dead scaffolding shadowing the
+    # engine's own default. Drop every all-zero numeric/bool column whose
+    # PE default is itself zero/False — the artifact then says exactly what
+    # it knows and nothing else. Structural id/weight columns are kept.
     from policyengine_us.system import system as _pe
 
     dropped_masks = []
+    kept_zero = []
     for ent in ("person", "household", "tax_unit", "spm_unit", "family",
                 "marital_unit"):
         tbl = getattr(ds, ent)
+        structural = {f"{ent}_id", f"{ent}_weight"} | {
+            c for c in tbl.columns if c.startswith("person_")
+        }
         for c in list(tbl.columns):
+            if c in structural:
+                continue
+            vals = tbl[c].to_numpy()
+            if vals.dtype.kind not in "fiub" or np.any(vals):
+                continue
             var = _pe.variables.get(c)
-            if var is not None and var.formulas:
-                vals = tbl[c].to_numpy()
-                if vals.dtype.kind in "fiu" and not np.any(vals):
-                    del tbl[c]
-                    dropped_masks.append(f"{ent}.{c}")
+            default = getattr(var, "default_value", 0) if var is not None else 0
+            default_is_zero = (
+                default in (0, 0.0, False) or default is None
+            )
+            if default_is_zero:
+                del tbl[c]
+                dropped_masks.append(f"{ent}.{c}")
+            else:
+                # Dropping would CHANGE semantics (engine default != 0):
+                # the stored zeros are a real statement. Keep + report.
+                kept_zero.append(f"{ent}.{c} (default {default!r})")
     if dropped_masks:
-        log(f"dropped formula-masking zero columns: {dropped_masks}")
+        log(f"dropped {len(dropped_masks)} all-zero columns: {dropped_masks}")
         ds.save(OUT)
+    if kept_zero:
+        log(f"kept all-zero columns with nonzero engine defaults: {kept_zero}")
 
     # other_health_insurance_premiums: usdata's decomposition — reported
     # non-Medicare premiums minus the baseline-computed CHIP/marketplace/
@@ -214,7 +234,7 @@ def main():
         learning_rate=0.15,
         seed=0,
     )
-    log("V2 BUILD COMPLETE")
+    log("BUILD COMPLETE")
     return 0
 
 
