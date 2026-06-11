@@ -270,7 +270,7 @@ def add_prior_year_income(person: pd.DataFrame, asec_year: int, log) -> pd.DataF
     return person
 
 
-def add_mortgage_conversion(person: pd.DataFrame, year: int, log) -> pd.DataFrame:
+def add_mortgage_conversion(person: pd.DataFrame, hh: pd.DataFrame, year: int, log) -> pd.DataFrame:
     """Structural mortgages from SCF hints + PUF deductible interest.
 
     Ports usdata's two-step conversion (extended_cps.py:1183-1190): SCF-donor
@@ -334,7 +334,32 @@ def add_mortgage_conversion(person: pd.DataFrame, year: int, log) -> pd.DataFram
         "is_female": {tp: person.get("is_female", pd.Series(False, index=person.index)).astype(bool).to_numpy()},
         "cps_race": {tp: person_col("cps_race")},
         "is_tax_unit_head": {tp: (person.get("tax_unit_role_input", "") == "HEAD").to_numpy()},
+        "is_tax_unit_spouse": {tp: (person.get("tax_unit_role_input", "") == "SPOUSE").to_numpy()},
+        "person_household_id": {tp: person["person_household_id"].to_numpy()},
+        "person_spm_unit_id": {tp: person["person_spm_unit_id"].to_numpy()},
+        "household_id": {tp: hh["household_id"].to_numpy()},
+        "spm_unit_id": {tp: np.sort(person["person_spm_unit_id"].unique())},
+        "tenure_type": {tp: hh.get("tenure_type", pd.Series("NONE", index=hh.index)).fillna("NONE").astype(str).to_numpy()},
     })
+    # filing_status per tax unit: JOINT when a spouse is present, else SINGLE
+    # (the converter uses it only for the mortgage debt-cap split).
+    has_spouse_tu = np.zeros(len(tu_ids), dtype=bool)
+    np.add.at(
+        has_spouse_tu,
+        p_tu_idx,
+        (person.get("tax_unit_role_input", "") == "SPOUSE").to_numpy(),
+    )
+    data["filing_status"] = {tp: np.where(has_spouse_tu, "JOINT", "SINGLE")}
+    # spm_unit_tenure_type: the SPM unit inherits its household's tenure.
+    hh_tenure = dict(zip(hh["household_id"], data["tenure_type"][tp]))
+    spm_ids = data["spm_unit_id"][tp]
+    spm_hh = (
+        pd.DataFrame({"spm": person["person_spm_unit_id"], "hh": person["person_household_id"]})
+        .drop_duplicates("spm").set_index("spm")["hh"]
+    )
+    data["spm_unit_tenure_type"] = {tp: np.array([
+        hh_tenure.get(spm_hh.get(sid), "NONE") for sid in spm_ids.tolist()
+    ])}
     before = set(data)
     data = impute_tax_unit_mortgage_balance_hints(data, tp)
     data = convert_mortgage_interest_to_structural_inputs(data, tp)
