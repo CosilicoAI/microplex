@@ -174,7 +174,25 @@ def add_org_wages(person: pd.DataFrame, hh: pd.DataFrame, year: int, log) -> pd.
     from policyengine_us_data.datasets.cps.cps import add_org_labor_market_inputs
 
     hh_state = pd.to_numeric(hh.get("state_fips", 0), errors="coerce").fillna(0)
-    cps = {
+
+    class _ZeroFallback(dict):
+        """h5-like mapping: unknown reads return zeros (logged once)."""
+
+        def __init__(self, n, *a, **k):
+            super().__init__(*a, **k)
+            self._n = n
+            self._missed = set()
+
+        def __getitem__(self, key):
+            if key in self:
+                return super().__getitem__(key)
+            if key not in self._missed:
+                self._missed.add(key)
+            return np.zeros(self._n, dtype=np.float32)
+
+    n_persons = len(person)
+    cps = _ZeroFallback(n_persons)
+    cps.update({
         "age": pd.to_numeric(person.get("age", person.get("A_AGE", 0)), errors="coerce").fillna(0).to_numpy(np.float32),
         "household_id": hh["household_id"].to_numpy(np.int64),
         "person_household_id": person["person_household_id"].to_numpy(np.int64),
@@ -185,9 +203,12 @@ def add_org_wages(person: pd.DataFrame, hh: pd.DataFrame, year: int, log) -> pd.
         "weekly_hours_worked": pd.to_numeric(person.get("hours_worked_last_week", 0), errors="coerce").fillna(0).to_numpy(np.float32),
         "hours_worked_last_week": pd.to_numeric(person.get("hours_worked_last_week", 0), errors="coerce").fillna(0).to_numpy(np.float32),
         "weeks_worked": pd.to_numeric(person.get("weeks_worked", 0), errors="coerce").fillna(0).to_numpy(np.float32),
-    }
+        "is_hispanic": person.get("is_hispanic", pd.Series(False, index=person.index)).astype(bool).to_numpy(),
+    })
     try:
         add_org_labor_market_inputs(cps, year)
+        if cps._missed:
+            log(f"  ORG zero-fallback keys: {sorted(cps._missed)}")
         person = person.copy()
         for out in ("hourly_wage", "is_paid_hourly", "is_union_member_or_covered",
                     "weekly_hours_worked_before_lsr", "fsla_overtime_premium"):
