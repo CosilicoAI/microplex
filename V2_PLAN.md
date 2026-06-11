@@ -257,3 +257,15 @@ PUF vars land person-stored like interest_deduction did) → E gates → F/G pub
   -$522B, partnership_se -$280B). /tmp/v2_diag2.log computing v2 LTCG/divs/
   interest/pension/rental/partnership/farm + household_tax/benefits.
 - SCORE v2 still running (score_out_v2, hb healthy).
+
+## @ 07:05 HNI ROOT CAUSE FOUND + FIXED: short_term_capital_gains -$3.890T
+## (eCPS +$0.035T, v1 -$0.148T). 2,020 records < -$1M in the MAIN pool (tail
+## only -$0.015T; min -$140.6M = uprated PUF extreme). Cause: our tail-faithful
+## QRF (the microimpute#196+interpolation fix) draws PUF extreme losses far
+## more often than eCPS's old nearest-snap tail-thinning forest. FIX: 
+## realized-support guard in the driver pre-export — clip every imputed
+## person-grain value to the BASELINE's per-record [min,max] (parity-bounded,
+## documented; STCG floor becomes -$10.0M). v2 SCORE killed (pool changes).
+## REBUILD 5 RUNNING with guard; then: extract -> calibrate (also drops
+## formula-masking zero columns now) -> parity/smoke (expect HNI to recover
+## toward ~$14.5-15T and 401k >$100B) -> FRESH score -> publish chain.
