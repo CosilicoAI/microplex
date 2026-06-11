@@ -4,6 +4,8 @@
 # gates). Fails fast; the log narrates which step died.
 set -e
 WT=~/.claude-worktrees/microplex-spec-build
+# One chain = one run id = one fresh log; never inherit a prior chain's.
+rm -f /tmp/populace_run_id
 BUILD_PY=$WT/.venv/bin/python
 POP_PY=/tmp/populace-build-venv/bin/python
 

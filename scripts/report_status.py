@@ -35,10 +35,15 @@ STEP_NAMES = {
 }
 
 
+CHAIN_PATTERN = str(
+    Path(__file__).resolve().parent / "run_chain.sh"
+)
+
+
 def chain_alive() -> bool:
     return (
         subprocess.run(
-            ["pgrep", "-f", "run_chain.sh"], capture_output=True
+            ["pgrep", "-f", CHAIN_PATTERN], capture_output=True
         ).returncode
         == 0
     )
@@ -103,15 +108,22 @@ def parse_status(text: str, alive: bool) -> dict:
     return status
 
 
-def push(status: dict, run_id: str | None) -> None:
-    if not telemetry.insert(
-        "build_events",
-        {"run": status["run"], "run_id": run_id, "status": status},
-    ):
-        raise RuntimeError("build_events insert failed")
+def push(status: dict, run_id: str | None) -> bool:
+    return telemetry.insert(
+        "build_events", {"run_id": run_id, "status": status}
+    )
 
 
 def main() -> int:
+    import signal
+
+    def _on_term(signum, frame):  # noqa: ARG001 - signal signature
+        run_id = telemetry.current_run_id()
+        if run_id is not None:
+            telemetry.finish_run(run_id, "stale")
+        sys.exit(143)
+
+    signal.signal(signal.SIGTERM, _on_term)
     git_sha = subprocess.run(
         ["git", "-C", str(Path(__file__).resolve().parent.parent),
          "rev-parse", "--short", "HEAD"],
@@ -127,14 +139,11 @@ def main() -> int:
         alive = chain_alive()
         text = LOG.read_text(errors="replace") if LOG.exists() else ""
         status = parse_status(text, alive)
-        try:
-            push(status, run_id)
+        if push(status, run_id):
             print(
                 f"pushed: step {status['chain_step']} {status['state']} "
                 f"@ {status['updated_at']}"
             )
-        except Exception as error:  # noqa: BLE001 - keep reporting
-            print(f"supabase push failed: {error}", file=sys.stderr)
         if not alive:
             if run_id is not None and status["state"] in (
                 "complete", "failed", "stale",
