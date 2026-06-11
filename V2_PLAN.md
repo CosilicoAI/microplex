@@ -241,3 +241,19 @@ PUF vars land person-stored like interest_deduction did) → E gates → F/G pub
 ## stratum 10,384 vs v5 15,000; income_tax spike from new deduction inputs is
 ## NOT plausible (deductions raise net income). SCORE still running on this
 ## pool (score_out_v2). DO NOT PUBLISH until HNI story understood + 401k fixed.
+
+## @ 06:55 DIAGNOSIS PROGRESS:
+- 401k-zero ROOT CAUSE: the export stores all-zero copies of PE FORMULA
+  variables (traditional/roth_401k, roth_ira, self_employed_pension
+  contributions + spm capped childcare) — a stored input MASKS the formula.
+  FIX patched into /tmp/build_populace_us_v2.py: drop all-zero formula-variable
+  columns from the published USSingleYearDataset (PE then computes from
+  *_desired). Rerun script after HNI verdict (one run covers both).
+- HNI: v1 full decomp: emp 10.31 selfemp 0.44 LTCG 1.22 qdiv 0.31 int 0.28
+  pension 1.01 SS 1.54 -> mkt 15.98, ben 1.97, tax 3.21 -> HNI 14.74. v2: emp
+  10.86 selfemp 0.68 SS 1.48 tax 3.80 ben 2.21 mkt 12.61. Gap must sit in
+  capital/pension components and/or NEW NEGATIVE components (estate_income,
+  partnership_se_income, rent/royalty losses — v1 lacked them; eCPS has estate
+  -$522B, partnership_se -$280B). /tmp/v2_diag2.log computing v2 LTCG/divs/
+  interest/pension/rental/partnership/farm + household_tax/benefits.
+- SCORE v2 still running (score_out_v2, hb healthy).
