@@ -303,6 +303,15 @@ PUF_IMPUTE_VARS = (
     "salt_refund_income",
     "investment_income_elected_form_4952",
     "capital_gains_distributions",
+    # v3 QBI/partnership block (derived in the PUF loader from usdata rules)
+    "partnership_se_income",
+    "w2_wages_from_qualified_business",
+    "unadjusted_basis_qualified_property",
+    "sstb_self_employment_income",
+    "sstb_w2_wages_from_qualified_business",
+    "sstb_unadjusted_basis_qualified_property",
+    "qualified_bdc_income",
+    "qualified_reit_and_ptp_income",
 )
 CPS_MEASURED = (
     "employment_income",
@@ -326,6 +335,7 @@ DONOR_TO_PE = {
     "ira_deduction": "traditional_ira_contributions",
     "puf_miscellaneous_income": "miscellaneous_income",
     "capital_gains_distributions": "non_sch_d_capital_gains",
+    "sstb_self_employment_income": "sstb_self_employment_income_before_lsr",
 }
 
 SHARED_PREDICTORS = ("age", "is_joint", "n_people", "n_children")

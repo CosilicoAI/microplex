@@ -254,6 +254,78 @@ def map_puf_variables(puf: pd.DataFrame) -> pd.DataFrame:
         )
         result = result.drop(columns=["_estate_income_gross", "_estate_income_loss"])
 
+    # ---- v3 parity: partnership SE + QBI simulation (usdata rules) ---------
+    # partnership_se_income: Yale Budget Lab rule — gross SE (E30400+E30500 /
+    # 0.9235) minus Schedule C/F (E00900+E02100), only where net partnership
+    # rental activity exists (E25940+E25980-E25920-E25960 != 0).
+    if {"E30400", "E30500", "E00900", "E02100"}.issubset(puf.columns):
+        _se_factor = 0.9235
+        _gross_se = (puf["E30400"].fillna(0) + puf["E30500"].fillna(0)) / _se_factor
+        _cf = puf["E00900"].fillna(0) + puf["E02100"].fillna(0)
+        _has_p = (
+            puf.get("E25940", 0).fillna(0) if hasattr(puf.get("E25940", 0), "fillna") else 0
+        )
+        _has_partnership = (
+            puf["E25940"].fillna(0) + puf["E25980"].fillna(0)
+            - puf["E25920"].fillna(0) - puf["E25960"].fillna(0)
+        ) != 0 if {"E25940", "E25980", "E25920", "E25960"}.issubset(puf.columns) else False
+        import numpy as _np
+
+        result["partnership_se_income"] = _np.where(
+            _has_partnership, _gross_se - _cf, 0.0
+        )
+
+    # QBI simulation via the usdata helpers (the build inserts the usdata repo
+    # on sys.path before the PUF stage runs). Fail loudly if unavailable.
+    try:
+        from policyengine_us_data.datasets.puf.puf import (
+            QBI_PARAMS,
+            QBI_QUALIFICATION_SEED,
+            QBI_SSTB_SEED,
+            QBI_W2_UBIA_SEED,
+            QBI_INVESTMENT_SEED,
+            add_qbi_qualification_flags_to_puf,
+            simulate_business_is_sstb,
+            simulate_investment_qbi_income_from_puf,
+            simulate_w2_and_ubia_from_puf,
+        )
+
+        _q = puf.copy()
+        for _c in ("self_employment_income", "self_employment_income_would_be_qualified"):
+            if _c in result.columns and _c not in _q.columns:
+                _q[_c] = result[_c]
+        if "self_employment_income" not in _q.columns:
+            _q["self_employment_income"] = result.get("self_employment_income", 0)
+        _q = add_qbi_qualification_flags_to_puf(_q, seed=QBI_QUALIFICATION_SEED)
+        _w2, _ubia = simulate_w2_and_ubia_from_puf(_q, seed=QBI_W2_UBIA_SEED)
+        result["w2_wages_from_qualified_business"] = _w2
+        result["unadjusted_basis_qualified_property"] = _ubia
+        _q["w2_wages_from_qualified_business"] = _w2
+        _q["unadjusted_basis_qualified_property"] = _ubia
+        _sstb = simulate_business_is_sstb(
+            _q,
+            rng=_np.random.default_rng(QBI_SSTB_SEED),
+            probability_map=QBI_PARAMS["sstb_prob_map_by_source_name"],
+        ).astype(bool)
+        _legacy_se = result.get("self_employment_income", _q["self_employment_income"]).fillna(0)
+        result["sstb_self_employment_income"] = _np.where(_sstb, _legacy_se, 0.0)
+        result["self_employment_income"] = _np.where(_sstb, 0.0, _legacy_se)
+        result["sstb_w2_wages_from_qualified_business"] = _np.where(_sstb, _w2, 0.0)
+        result["sstb_unadjusted_basis_qualified_property"] = _np.where(_sstb, _ubia, 0.0)
+        result["w2_wages_from_qualified_business"] = _np.where(_sstb, 0.0, _w2)
+        result["unadjusted_basis_qualified_property"] = _np.where(_sstb, 0.0, _ubia)
+        _inv = simulate_investment_qbi_income_from_puf(
+            _q, rng=_np.random.default_rng(QBI_INVESTMENT_SEED)
+        )
+        for _var, _vals in _inv.items():
+            result[_var] = _vals
+        print(f"PUF QBI simulation: investment vars {sorted(_inv)}", flush=True)
+    except ImportError as exc:
+        raise RuntimeError(
+            "QBI simulation needs the usdata repo on sys.path (the driver "
+            f"inserts it); import failed: {exc}"
+        )
+
 
     # Map filing status code to string
     filing_status_map = {
