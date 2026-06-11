@@ -18,35 +18,10 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 
-SUPABASE_URL = "https://pgrhxxhiyqgngoffwden.supabase.co"
+import populace_telemetry as telemetry
+
 LOG = Path("/tmp/populace_chain.log")
 INTERVAL_S = 45
-
-
-def _secret_key() -> str:
-    for cmd in (
-        ["agent-secret", "get", "POPULACE_SUPABASE_SECRET_KEY"],
-        [
-            str(Path.home() / ".claude" / "manage-secret.sh"),
-            "get",
-            "POPULACE_SUPABASE_SECRET_KEY",
-        ],
-    ):
-        try:
-            out = subprocess.run(
-                cmd, capture_output=True, text=True, check=True
-            ).stdout.strip()
-            if out:
-                return out
-        except (subprocess.CalledProcessError, FileNotFoundError):
-            continue
-    raise RuntimeError(
-        "POPULACE_SUPABASE_SECRET_KEY not retrievable; refusing to report "
-        "without authenticated writes."
-    )
-
-
-_KEY = None
 
 STEP_RE = re.compile(r"=== CHAIN (step (\d): )?([A-Za-z -]+?) ===")
 STAGE_RE = re.compile(r"\[build\] (stage [A-Z0-9]+[a-z]?: .+)")
@@ -128,35 +103,32 @@ def parse_status(text: str, alive: bool) -> dict:
     return status
 
 
-def push(status: dict) -> None:
-    global _KEY
-    if _KEY is None:
-        _KEY = _secret_key()
-    import urllib.request
-
-    request = urllib.request.Request(
-        f"{SUPABASE_URL}/rest/v1/build_events",
-        data=json.dumps({"run": status["run"], "status": status}).encode(),
-        headers={
-            "apikey": _KEY,
-            "Authorization": f"Bearer {_KEY}",
-            "Content-Type": "application/json",
-            "Prefer": "return=minimal",
-        },
-        method="POST",
-    )
-    with urllib.request.urlopen(request, timeout=20) as response:
-        if response.status not in (200, 201, 204):
-            raise RuntimeError(f"supabase write HTTP {response.status}")
+def push(status: dict, run_id: str | None) -> None:
+    if not telemetry.insert(
+        "build_events",
+        {"run": status["run"], "run_id": run_id, "status": status},
+    ):
+        raise RuntimeError("build_events insert failed")
 
 
 def main() -> int:
+    git_sha = subprocess.run(
+        ["git", "-C", str(Path(__file__).resolve().parent.parent),
+         "rev-parse", "--short", "HEAD"],
+        capture_output=True, text=True,
+    ).stdout.strip() or None
+    run_id = telemetry.ensure_run(
+        country="us",
+        year=2024,
+        label="us-2024 (eCPS-free rebuild)",
+        git_sha=git_sha,
+    )
     while True:
         alive = chain_alive()
         text = LOG.read_text(errors="replace") if LOG.exists() else ""
         status = parse_status(text, alive)
         try:
-            push(status)
+            push(status, run_id)
             print(
                 f"pushed: step {status['chain_step']} {status['state']} "
                 f"@ {status['updated_at']}"
@@ -164,6 +136,10 @@ def main() -> int:
         except Exception as error:  # noqa: BLE001 - keep reporting
             print(f"supabase push failed: {error}", file=sys.stderr)
         if not alive:
+            if run_id is not None and status["state"] in (
+                "complete", "failed", "stale",
+            ):
+                telemetry.finish_run(run_id, status["state"])
             return 0
         time.sleep(INTERVAL_S)
 

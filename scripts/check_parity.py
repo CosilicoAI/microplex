@@ -142,6 +142,18 @@ def main() -> int:
     }
     print("smoke:", json.dumps(smoke, indent=1))
 
+    # Telemetry (fail-soft): gate verdicts as queryable rows.
+    try:
+        import sys as _sys
+
+        _sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import populace_telemetry as _telemetry
+
+        _telemetry.push_gate_result(nonzero)
+        _telemetry.push_gate_result(result)
+    except Exception as _err:  # noqa: BLE001
+        print(f"telemetry skipped: {_err}")
+
     def _gate_dict(gate):
         return {
             "passed": gate.passed,

@@ -110,6 +110,18 @@ def main():
         seed=0,
     )
     cw = result.frame.resolve_weights("household").values.astype(np.float64)
+    # Telemetry (fail-soft): per-target diagnostics power the observatory's
+    # live fit tables and cross-run regression checks.
+    try:
+        import sys as _sys
+
+        _sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import populace_telemetry as _telemetry
+
+        _telemetry.push_target_diagnostics(result.diagnostics)
+    except Exception as _err:  # noqa: BLE001 - telemetry never fails a build
+        log(f"telemetry skipped: {_err}")
+
     log(
         f"done {time.time()-t0:.0f}s | loss {result.initial_loss:.3f}->"
         f"{result.final_loss:.4f} | within10 "
