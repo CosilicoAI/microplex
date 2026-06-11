@@ -992,6 +992,7 @@ def main() -> int:
     person = psi.add_meps_esi_premiums(person, log=log)
     person = psi.add_prior_year_income(person, args.asec_year, log=log)
     person = psi.add_mortgage_conversion(person, hh, args.calendar_year, log=log)
+    person, hh = psi.add_acs_rent(person, hh, seed=args.seed, log=log)
 
     def _group_clone_flag(id_col: str) -> pd.Series:
         share = person.groupby(person[id_col])["person_is_puf_clone"].mean()

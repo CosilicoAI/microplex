@@ -425,3 +425,74 @@ def add_mortgage_conversion(person: pd.DataFrame, hh: pd.DataFrame, year: int, l
     if inv is not None:
         log(f"  investment_interest_expense: nz {(pd.to_numeric(inv, errors='coerce').fillna(0)>0).mean()*100:.1f}%")
     return person
+
+
+def add_acs_rent(person: pd.DataFrame, hh: pd.DataFrame, seed: int, log):
+    """Rent + vehicle ownership from the Census ACS 2022 artifact (usdata
+    storage), imputed at household grain with ACS household weights;
+    pre_subsidy_rent is person-entity and head-carried."""
+    import h5py
+    from microimpute import Imputer
+
+    acs_path = (
+        "/Users/maxghenis/.claude-worktrees/usdata-populace/"
+        "policyengine_us_data/storage/acs_2022.h5"
+    )
+    with h5py.File(acs_path) as f:
+        def col(name):
+            v = f[name][:]
+            return v
+        d_pers = pd.DataFrame({
+            "person_household_id": col("person_household_id"),
+            "is_household_head": col("is_household_head").astype(bool),
+            "employment_income": col("employment_income"),
+        })
+        d_hh = pd.DataFrame({
+            "household_id": col("household_id"),
+            "household_weight": col("household_weight"),
+            "state_fips": col("household_state_fips"),
+            "rent": col("rent"),
+            "household_vehicles_owned": col("household_vehicles_owned"),
+        })
+    g = d_pers.groupby("person_household_id")
+    d_hh = d_hh.merge(
+        pd.DataFrame({
+            "hh_employment_income": g["employment_income"].sum(),
+            "hh_size": g.size(),
+        }),
+        left_on="household_id", right_index=True, how="left",
+    ).fillna({"hh_employment_income": 0, "hh_size": 1})
+    d_hh = d_hh[d_hh["household_weight"] > 0]
+
+    PRED = ["state_fips", "hh_employment_income", "hh_size"]
+    fitted = Imputer(seed=seed, log_level="WARNING").fit(
+        d_hh.dropna(subset=PRED + ["rent", "household_vehicles_owned"]),
+        PRED, ["rent", "household_vehicles_owned"],
+        weight_col="household_weight",
+    )
+    pg = person.groupby(person["person_household_id"])
+    recv = pd.DataFrame({
+        "hh_employment_income": pd.to_numeric(person["employment_income"], errors="coerce").fillna(0).groupby(person["person_household_id"]).sum(),
+        "hh_size": pg.size(),
+    })
+    recv = recv.reindex(hh["household_id"]).fillna(0)
+    recv["state_fips"] = pd.to_numeric(hh.get("state_fips", 0), errors="coerce").fillna(0).to_numpy()
+    draws = fitted.predict(recv[PRED].reset_index(drop=True))
+
+    hh = hh.copy()
+    rent = _support_guard(np.asarray(draws["rent"], dtype=np.float64), d_hh["rent"].to_numpy(np.float64), "rent", log)
+    # Rent applies to renter households only (tenure from the CPS H_TENURE map).
+    tenure = hh.get("tenure_type", pd.Series("NONE", index=hh.index)).astype(str)
+    rent = np.where(tenure.str.upper() == "RENTED", rent, 0.0)
+    veh = np.clip(np.round(np.asarray(draws["household_vehicles_owned"], dtype=np.float64)), 0, None)
+    hh["household_vehicles_owned"] = veh
+    # pre_subsidy_rent is person-entity: head-carry the household rent.
+    headp = person.get("is_household_head", pd.Series(False, index=person.index)).astype(bool)
+    hmap = dict(zip(hh["household_id"].tolist(), range(len(hh))))
+    pidx = person["person_household_id"].map(hmap)
+    person = person.copy()
+    person["pre_subsidy_rent"] = np.where(
+        headp & pidx.notna(), rent[pidx.fillna(0).astype(int)], 0.0
+    )
+    log(f"  ACS rent: renter-hh rent nz {(rent>0).mean()*100:.1f}%, vehicles imputed")
+    return person, hh
