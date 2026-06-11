@@ -462,3 +462,13 @@ smoke gate -> score -> republish (full protocol in prior wakeups).
 ## Epic branch populace-rebase: all six commits + review fixes pushed; reviewer
 ## subagent a66cbd5268751880b was mid-re-verify (suite green) — re-verify, then
 ## PR to PolicyEngine/populace on green CI.
+
+## EPIC MERGED (2026-06-11 ~13:20): populace PR #5 squashed to main (a542524) —
+## frame.place, sparse solve + options record, TargetSpec registry,
+## gates (parity/support/aggregate-vs-admin/per-family/EXPORTED-NONZERO) +
+## rotated holdout, StagePlan + us_plan donor graph, wheels CI (3.13+3.14).
+## Two review rounds; 1 actionable fixed. /tmp/populace-build-venv editable
+## installs re-pointed at ~/PolicyEngine/populace main; rebase worktree gone.
+## check_parity.py gate 0 = exported_nonzero (chain fails on any all-zero
+## stored column); build_dataset.py drops all-zero cols with zero engine
+## defaults. US implementations port = task #26, AFTER republish.
