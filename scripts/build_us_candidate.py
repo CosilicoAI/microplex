@@ -1040,10 +1040,17 @@ def main() -> int:
     from microplex.data_sources.puf import PUF_VARIABLE_MAP as PUF_FIELD_MAP
     from microplex.data_sources.puf import UPRATING_FACTORS
 
-    _puf_raw = pd.read_csv(
-        Path.home() / ".cache" / "microplex" / "puf_2015.csv",
-        usecols=[c for c in PUF_FIELD_MAP if c != "S006"],
-    )
+    _puf_csv = Path.home() / ".cache" / "microplex" / "puf_2015.csv"
+    _header = pd.read_csv(_puf_csv, nrows=0).columns
+    _by_upper = {c.upper(): c for c in _header}
+    _want = {
+        _by_upper[k.upper()]: v
+        for k, v in PUF_FIELD_MAP.items()
+        if k != "S006" and k.upper() in _by_upper
+    }
+    _puf_raw = pd.read_csv(_puf_csv, usecols=list(_want))
+    _puf_raw.columns = [c for c in _puf_raw.columns]
+    PUF_FIELD_MAP = {c: _want[c] for c in _want}
     _ranges: dict[str, tuple[float, float]] = {}
     for _raw, _donor in PUF_FIELD_MAP.items():
         if _raw == "S006" or _raw not in _puf_raw.columns:
