@@ -1037,7 +1037,8 @@ def main() -> int:
     # contamination and, per the architecture review, the wrong reference.
     # Structural heavy-tail control belongs to signed calibration targets;
     # this clip only enforces the donor's own support.)
-    from microplex.data_sources.puf import PUF_FIELD_MAP, UPRATING_FACTORS
+    from microplex.data_sources.puf import PUF_VARIABLE_MAP as PUF_FIELD_MAP
+    from microplex.data_sources.puf import UPRATING_FACTORS
 
     _puf_raw = pd.read_csv(
         Path.home() / ".cache" / "microplex" / "puf_2015.csv",
