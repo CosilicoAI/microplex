@@ -533,11 +533,26 @@ def add_vehicle_assets(person: pd.DataFrame, hh: pd.DataFrame, log):
     )
 
     model = get_vehicle_model()
-    receiver_person = person.copy()
-    if "person_household_id" in receiver_person.columns:
-        receiver_person = receiver_person.rename(
-            columns={"person_household_id": "household_id"}
+    # Build the receiver from a controlled column set: the person frame may
+    # already carry a household_id-named column, and a duplicate name breaks
+    # the builder's groupby.
+    receiver_cols = [
+        c
+        for c in (
+            "employment_income",
+            "interest_income",
+            "dividend_income",
+            "interest_dividend_income",
+            "rental_income",
+            "age",
+            "is_female",
+            "is_married",
+            "is_household_head",
         )
+        if c in person.columns
+    ]
+    receiver_person = person[receiver_cols].copy()
+    receiver_person["household_id"] = person["person_household_id"].to_numpy()
     tenure = hh.get("tenure_type")
     receiver = build_household_vehicle_receiver(
         receiver_person,
