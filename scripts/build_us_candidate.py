@@ -1032,37 +1032,52 @@ def main() -> int:
         .drop(columns=["tax_unit_id", "_half"])
         .rename(columns={"new_tax_unit_id": "TAX_ID"})
     )
-    # ---- v2: realized-support guard on imputed draws ------------------------
-    # The fixed tail-faithful QRF draws the PUF's extreme records (e.g.
-    # -$140M short-term capital losses) far more often than the incumbent's
-    # tail-thinning forest did, blowing up sign-mixed aggregates (v2 drew
-    # STCG to -$3.9T vs eCPS +$0.04T). Clip every imputed person-grain value
-    # to the incumbent baseline's realized per-record [min, max] — a parity
-    # guard bounded by what the published incumbent actually ships.
-    import h5py as _h5py
+    # ---- v3: support guard anchored to the PUF's OWN realized ranges -------
+    # (The v2 guard clipped to the eCPS baseline's ranges — an eCPS
+    # contamination and, per the architecture review, the wrong reference.
+    # Structural heavy-tail control belongs to signed calibration targets;
+    # this clip only enforces the donor's own support.)
+    from microplex.data_sources.puf import PUF_FIELD_MAP, UPRATING_FACTORS
 
-    with _h5py.File(str(args.baseline_h5)) as _bf:
-        _period = str(args.calendar_year)
-        for _c in list(person.columns):
-            if _c.startswith("person_") or _c not in _bf:
-                continue
-            if _period not in _bf[_c]:
-                continue
-            _bv = _bf[_c][_period][:]
-            if _bv.dtype.kind not in "fi":
-                continue
-            _vals = pd.to_numeric(person[_c], errors="coerce")
-            if _vals.isna().all():
-                continue
-            _lo, _hi = float(_bv.min()), float(_bv.max())
-            _clipped = _vals.clip(_lo, _hi)
-            _n = int((_clipped != _vals).sum())
-            if _n:
-                log(
-                    f"  support-guard {_c}: clipped {_n} values to "
-                    f"[{_lo:,.0f}, {_hi:,.0f}]"
-                )
-                person[_c] = _clipped
+    _puf_raw = pd.read_csv(
+        Path.home() / ".cache" / "microplex" / "puf_2015.csv",
+        usecols=[c for c in PUF_FIELD_MAP if c != "S006"],
+    )
+    _ranges: dict[str, tuple[float, float]] = {}
+    for _raw, _donor in PUF_FIELD_MAP.items():
+        if _raw == "S006" or _raw not in _puf_raw.columns:
+            continue
+        _up = UPRATING_FACTORS.get(_donor, 1.0)
+        _v = pd.to_numeric(_puf_raw[_raw], errors="coerce").dropna()
+        _pe = DONOR_TO_PE.get(_donor, _donor)
+        _lo, _hi = float(_v.min()) * _up, float(_v.max()) * _up
+        _ranges[_pe] = (min(_lo, _hi), max(_lo, _hi))
+    if "_estate_income_gross" in _puf_raw.columns or True:
+        # estate_income = E26390 - E26400 (uprated): bound by the rowwise diff.
+        try:
+            _est = pd.read_csv(
+                Path.home() / ".cache" / "microplex" / "puf_2015.csv",
+                usecols=["E26390", "E26400"],
+            )
+            _diff = (
+                pd.to_numeric(_est["E26390"], errors="coerce").fillna(0)
+                - pd.to_numeric(_est["E26400"], errors="coerce").fillna(0)
+            ) * UPRATING_FACTORS.get("estate_income", 1.0)
+            _ranges["estate_income"] = (float(_diff.min()), float(_diff.max()))
+        except Exception:
+            pass
+    for _c in list(person.columns):
+        if _c.startswith("person_") or _c not in _ranges:
+            continue
+        _vals = pd.to_numeric(person[_c], errors="coerce")
+        if _vals.isna().all():
+            continue
+        _lo, _hi = _ranges[_c]
+        _clipped = _vals.clip(_lo, _hi)
+        _n = int((_clipped != _vals).sum())
+        if _n:
+            log(f"  puf-support-guard {_c}: clipped {_n} to [{_lo:,.0f}, {_hi:,.0f}]")
+            person[_c] = _clipped
 
     # ---- v2: place variables at their PolicyEngine entity ------------------
     # The PUF and donor stages leave tax-unit and SPM-entity amounts on the
