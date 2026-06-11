@@ -392,3 +392,20 @@ max_weight_ratio=50 into stage config + manifest.
 ## the scored comparison surface stays frozen (symmetric refit unaffected).
 ## DEFERRED to the re-base epic: stage package, donor graph, target registry,
 ## RulesEngine adapter, sparse solve, rotated holdout, pip-wheels CI.
+
+## V3 @ 09:55: ALL SEVEN STAGES IMPLEMENTED. SCF/SIPP/ORG green (smoke 4);
+## MEPS + prior-year (PERIDNUM join, downloads ASEC 2022 on first run) +
+## mortgage conversion (SCF hints + PUF interest residual -> first/second_home_
+## mortgage_*, home_mortgage_interest, investment_interest_expense) wired;
+## childcare raw SPM columns at export. REVIEW ADOPTIONS DONE: support guard
+## re-anchored to PUF's OWN uprated ranges (eCPS baseline now appears ONLY in
+## the driver's scoring invocation — benchmark use); signed net-STCG target
+## (PUF-weighted-uprated value, computed not typed) appended in
+## /tmp/build_populace_us_v2.py. Smoke 5 running (/tmp/v3_smoke.log) covering
+## MEPS/prior-year/mortgage for the first time — iterate on tracebacks
+## (likely: converter dict KeyErrors -> add the key from person; prior-year
+## ASEC 2022 download time; MEPS NOW_* column dtypes). Then full chain:
+## rebuild -> extract -> calibrate (with STCG target) -> gates (parity 0,
+## smoke investment_interest ~tens of B + STCG near PUF total, score) ->
+## republish per V3 plan (card de-eCPS rewrite, diagram topology update,
+## bundles PR #20, observatory dated release, #us-data comparison rerun).
