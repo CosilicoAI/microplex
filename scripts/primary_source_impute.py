@@ -224,3 +224,47 @@ def add_org_wages(person: pd.DataFrame, hh: pd.DataFrame, year: int, log) -> pd.
     except Exception as exc:
         log(f"  ORG stage FAILED ({exc}); leaving defaults")
     return person
+
+
+def add_meps_esi_premiums(person: pd.DataFrame, log) -> pd.DataFrame:
+    """ESI premiums from MEPS-IC plan-type parameters (usdata rule, verbatim)."""
+    from policyengine_us_data.datasets.cps.cps import (
+        impute_employer_sponsored_insurance_premiums,
+    )
+
+    person = person.copy()
+    person["employer_sponsored_insurance_premiums"] = (
+        impute_employer_sponsored_insurance_premiums(person)
+    )
+    nz = float((person["employer_sponsored_insurance_premiums"] > 0).mean())
+    log(f"  MEPS ESI premiums: nz {nz*100:.1f}%")
+    return person
+
+
+def add_prior_year_income(person: pd.DataFrame, asec_year: int, log) -> pd.DataFrame:
+    """Prior-year earnings via the consecutive-ASEC PERIDNUM join (usdata rule).
+
+    Maps last year's WSAL_VAL/SEMP_VAL onto matched persons; sentinel values
+    {-1, -9999} mean unavailable.
+    """
+    from microplex.data_sources.cps import load_cps_asec
+
+    person = person.copy()
+    if "PERIDNUM" not in person.columns:
+        log("  prior-year: PERIDNUM missing from pool; skipping")
+        return person
+    prior = load_cps_asec(
+        year=asec_year - 1,
+        extra_person_columns=["PERIDNUM", "WSAL_VAL", "SEMP_VAL"],
+    ).persons.to_pandas()
+    prior = prior.drop_duplicates("PERIDNUM").set_index("PERIDNUM")
+    sentinels = {-1, -9999}
+    cur_ids = person["PERIDNUM"]
+    emp = cur_ids.map(prior["WSAL_VAL"]) if "WSAL_VAL" in prior.columns else pd.Series(np.nan, index=person.index)
+    se = cur_ids.map(prior["SEMP_VAL"]) if "SEMP_VAL" in prior.columns else pd.Series(np.nan, index=person.index)
+    matched = emp.notna() & se.notna() & ~emp.isin(sentinels) & ~se.isin(sentinels)
+    person["employment_income_last_year"] = pd.to_numeric(emp, errors="coerce").where(matched, 0.0).fillna(0.0)
+    person["self_employment_income_last_year"] = pd.to_numeric(se, errors="coerce").where(matched, 0.0).fillna(0.0)
+    person["previous_year_income_available"] = matched.astype(bool)
+    log(f"  prior-year join: matched {matched.mean()*100:.1f}% of persons (ASEC {asec_year-1})")
+    return person
