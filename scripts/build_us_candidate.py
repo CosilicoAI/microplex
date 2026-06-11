@@ -561,6 +561,10 @@ def main() -> int:
     )
     args = ap.parse_args()
 
+    # The usdata package provides primary-source rules (tipped occupations,
+    # QBI simulators, SCF/ACS loaders); make it importable for every stage.
+    sys.path.insert(0, str(args.usdata_repo))
+
     smoke = args.mode == "smoke"
     max_units = args.max_tax_units or (4000 if smoke else None)
     max_puf = args.max_puf_rows or (8000 if smoke else None)
@@ -754,7 +758,6 @@ def main() -> int:
         ).clip(lower=0.0)
     person = _derive_person_columns(person)
     # Tipped-occupation codes via the eCPS's own mapping (usdata module).
-    sys.path.insert(0, str(args.usdata_repo))
     from policyengine_us_data.datasets.cps.tipped_occupation import (
         derive_is_tipped_occupation,
         derive_treasury_tipped_occupation_code,
