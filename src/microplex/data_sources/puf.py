@@ -290,12 +290,16 @@ def map_puf_variables(puf: pd.DataFrame) -> pd.DataFrame:
             simulate_w2_and_ubia_from_puf,
         )
 
+        # Seed the simulator frame with the raw fields plus every derived
+        # donor-named column (the usdata helpers read their own derived names).
         _q = puf.copy()
-        for _c in ("self_employment_income", "self_employment_income_would_be_qualified"):
-            if _c in result.columns and _c not in _q.columns:
+        for _c in result.columns:
+            if _c not in _q.columns:
                 _q[_c] = result[_c]
+        if "farm_operations_income" not in _q.columns:
+            _q["farm_operations_income"] = _q.get("farm_income", _q.get("E02100", 0))
         if "self_employment_income" not in _q.columns:
-            _q["self_employment_income"] = result.get("self_employment_income", 0)
+            _q["self_employment_income"] = 0
         _q = add_qbi_qualification_flags_to_puf(_q, seed=QBI_QUALIFICATION_SEED)
         _w2, _ubia = simulate_w2_and_ubia_from_puf(_q, seed=QBI_W2_UBIA_SEED)
         result["w2_wages_from_qualified_business"] = _w2
