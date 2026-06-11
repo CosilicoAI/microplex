@@ -450,3 +450,15 @@ smoke gate -> score -> republish (full protocol in prior wakeups).
 ## FORWARD PROTOCOL (v3 chain): smoke green -> full build (build_us_candidate.py --mode full)
 ## -> scripts/extract_target_surface.py -> scripts/build_dataset.py -> parity MUST be 0 ->
 ## smoke gate -> score (run_comparison.py, beats 1.0888/0.3167 matched) -> republish.
+
+## PAUSE STATE (2026-06-11 ~12:10, Claude restart): smoke 15 RUNNING detached
+## (pid ppid=1, log /tmp/populace_smoke.log) with the FULL 35-gap parity sprint
+## wired (ASEC derives, head-carry loud, SIPP vehicles, AOTC, SSTB persist,
+## weeks_worked contract fix, person->spm moves). ON RESUME: re-arm watcher on
+## the smoke; green -> full build -> scripts/extract_target_surface.py ->
+## scripts/build_dataset.py (calibrate venv /tmp/populace-build-venv) ->
+## scripts/enrich_artifact.py (worktree .venv, sqlmodel installed) ->
+## scripts/check_parity.py (build venv; expect 0 gaps) -> score -> republish.
+## Epic branch populace-rebase: all six commits + review fixes pushed; reviewer
+## subagent a66cbd5268751880b was mid-re-verify (suite green) — re-verify, then
+## PR to PolicyEngine/populace on green CI.
