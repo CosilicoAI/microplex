@@ -448,16 +448,18 @@ def add_acs_rent(person: pd.DataFrame, hh: pd.DataFrame, seed: int, log):
         def col(name):
             v = f[name][:]
             return v
+        # rent is stored at person grain in the ACS artifact (head-carried);
+        # everything else here is household grain — aggregate before framing.
         d_pers = pd.DataFrame({
             "person_household_id": col("person_household_id"),
             "is_household_head": col("is_household_head").astype(bool),
             "employment_income": col("employment_income"),
+            "rent": col("rent"),
         })
         d_hh = pd.DataFrame({
             "household_id": col("household_id"),
             "household_weight": col("household_weight"),
             "state_fips": col("household_state_fips"),
-            "rent": col("rent"),
             "household_vehicles_owned": col("household_vehicles_owned"),
         })
     g = d_pers.groupby("person_household_id")
@@ -465,9 +467,10 @@ def add_acs_rent(person: pd.DataFrame, hh: pd.DataFrame, seed: int, log):
         pd.DataFrame({
             "hh_employment_income": g["employment_income"].sum(),
             "hh_size": g.size(),
+            "rent": g["rent"].sum(),
         }),
         left_on="household_id", right_index=True, how="left",
-    ).fillna({"hh_employment_income": 0, "hh_size": 1})
+    ).fillna({"hh_employment_income": 0, "hh_size": 1, "rent": 0})
     d_hh = d_hh[d_hh["household_weight"] > 0]
 
     PRED = ["state_fips", "hh_employment_income", "hh_size"]
