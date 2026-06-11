@@ -156,12 +156,20 @@ def main():
     from policyengine_us import Microsimulation as _Msim
 
     _sim = _Msim(dataset=USSingleYearDataset(file_path=OUT))
+    # All terms mapped to person grain explicitly — the premium variables
+    # live at different entities (person vs tax unit).
     _reported = np.asarray(
-        _sim.calculate("health_insurance_premiums_without_medicare_part_b", 2024).values,
+        _sim.calculate(
+            "health_insurance_premiums_without_medicare_part_b",
+            2024,
+            map_to="person",
+        ).values,
         dtype=np.float64,
     )
     _modeled = sum(
-        np.asarray(_sim.calculate(_v, 2024).values, dtype=np.float64)
+        np.asarray(
+            _sim.calculate(_v, 2024, map_to="person").values, dtype=np.float64
+        )
         for _v in ("chip_premium", "marketplace_net_premium", "medicaid_premium")
     )
     _other = np.maximum(_reported - _modeled, 0.0)
