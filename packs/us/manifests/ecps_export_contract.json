@@ -293,7 +293,5 @@
     "tanf_reported",
     "unreported_payroll_tax"
   ],
-  "formula_owned_excluded": [
-    "weeks_worked"
-  ]
+  "formula_owned_excluded": []
 }

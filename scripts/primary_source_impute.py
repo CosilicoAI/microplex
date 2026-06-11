@@ -140,19 +140,23 @@ def add_scf_wealth(person: pd.DataFrame, hh: pd.DataFrame, seed: int, log) -> pd
         present = [c for c in cols if c in hh.columns]
         return sum(hh[c].to_numpy(dtype=np.float64) for c in present) if present else None
 
-    # Raw-SCF -> PE names (PE wants person-entity assets and household vehicles;
-    # the SCF surveys them at household level — values land on the household
-    # head at export via the person head-carry below).
+    # The usdata target helpers impute PE-shaped names under an scf_ prefix
+    # (scf_bank_account_assets etc.); person-entity assets head-carry from
+    # those. Loud: a missing source column is a build bug, not a skip.
     PE_FROM_SCF = {
-        "bank_account_assets": ["checking", "saving"],
-        "stock_assets": ["stocks"],
-        "bond_assets": ["bond"],
+        "bank_account_assets": "scf_bank_account_assets",
+        "stock_assets": "scf_stock_assets",
+        "bond_assets": "scf_bond_assets",
     }
     head_carry_to_person = {}
-    for pe_name, comps in PE_FROM_SCF.items():
-        vals = hh_sum(comps)
-        if vals is not None:
-            head_carry_to_person[pe_name] = vals
+    for pe_name, scf_name in PE_FROM_SCF.items():
+        if scf_name not in hh.columns:
+            raise RuntimeError(
+                f"SCF stage expected imputed column {scf_name!r} for "
+                f"{pe_name!r}; imputed scf columns: "
+                f"{[c for c in hh.columns if c.startswith('scf_')][:8]}..."
+            )
+        head_carry_to_person[pe_name] = hh[scf_name].to_numpy(dtype=np.float64)
     # net worth = sum of imputed SCF components (usdata computes it the same way).
     asset_like = [t for t in targets if t.startswith("scf_") and "debt" not in t and "installment" not in t and "lines_of_credit" not in t]
     debt_like = [t for t in targets if t.startswith("scf_") and (("debt" in t) or ("installment" in t) or ("lines_of_credit" in t))]

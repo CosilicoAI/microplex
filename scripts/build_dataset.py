@@ -113,9 +113,10 @@ def main():
     # Telemetry (fail-soft): per-target diagnostics power the observatory's
     # live fit tables and cross-run regression checks.
     try:
+        import pathlib as _pathlib
         import sys as _sys
 
-        _sys.path.insert(0, str(Path(__file__).resolve().parent))
+        _sys.path.insert(0, str(_pathlib.Path(__file__).resolve().parent))
         import populace_telemetry as _telemetry
 
         _telemetry.push_target_diagnostics(result.diagnostics)
