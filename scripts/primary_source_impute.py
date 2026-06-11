@@ -158,23 +158,17 @@ def add_scf_wealth(person: pd.DataFrame, hh: pd.DataFrame, seed: int, log) -> pd
             )
         head_carry_to_person[pe_name] = hh[scf_name].to_numpy(dtype=np.float64)
     # net worth = sum of imputed SCF components (usdata computes it the same way).
-    asset_like = [t for t in targets if t.startswith("scf_") and "debt" not in t and "installment" not in t and "lines_of_credit" not in t]
-    debt_like = [t for t in targets if t.startswith("scf_") and (("debt" in t) or ("installment" in t) or ("lines_of_credit" in t))]
-    def _or_zero(v):
-        return v if v is not None else np.zeros(len(hh))
-
-    assets = _or_zero(hh_sum(asset_like))
-    debts = _or_zero(hh_sum(debt_like))
-    extra_assets = sum(
-        (np.asarray(head_carry_to_person[k]) for k in PE_FROM_SCF if k in head_carry_to_person),
-        np.zeros(len(hh)),
-    )
-    hh["net_worth"] = assets + extra_assets - debts
-    # vehicles: SCF carries vehicle values under raw names if present
-    veh_val = hh_sum(["vehic", "vehicle_value", "vehicles"])
-    if veh_val is not None:
-        hh["household_vehicles_value"] = veh_val
-        hh["household_vehicles_owned"] = (veh_val > 0).astype(float)
+    # Net worth is usdata's own imputed measure — scf_net_worth already nets
+    # assets against debts. Summing the scf_ component columns ON TOP of it
+    # double-counts (the +34% miss on nation/net_worth/total); the vehicle
+    # value joins later in the SIPP vehicle stage, mirroring usdata's
+    # net_worth_components assembly.
+    if "scf_net_worth" not in hh.columns:
+        raise RuntimeError(
+            "SCF stage expected imputed column 'scf_net_worth'; got "
+            f"{[c for c in hh.columns if c.startswith('scf_')][:8]}..."
+        )
+    hh["net_worth"] = hh["scf_net_worth"].to_numpy(dtype=np.float64)
     # person-entity assets: head-carry onto persons (export entity mover is
     # person->tax_unit only; person columns export directly).
     if "is_household_head" not in person.columns:
@@ -592,8 +586,16 @@ def add_vehicle_assets(person: pd.DataFrame, hh: pd.DataFrame, log):
             )
         hh["household_vehicles_owned"] = owned
         hh["household_vehicles_value"] = value
+    # usdata folds the vehicle value into net worth (cps.py net_worth
+    # components assembly); mirror that here, where the value is imputed.
+    if "net_worth" in hh.columns:
+        hh["net_worth"] = (
+            hh["net_worth"].to_numpy(dtype=np.float64)
+            + hh["household_vehicles_value"].to_numpy(dtype=np.float64)
+        )
     log(
         f"  SIPP vehicles: owned nz {(hh['household_vehicles_owned']>0).mean()*100:.1f}%, "
-        f"value nz {(hh['household_vehicles_value']>0).mean()*100:.1f}%"
+        f"value nz {(hh['household_vehicles_value']>0).mean()*100:.1f}%, "
+        f"folded into net_worth"
     )
     return person, hh
