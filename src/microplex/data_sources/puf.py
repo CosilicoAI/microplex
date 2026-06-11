@@ -318,6 +318,16 @@ def map_puf_variables(puf: pd.DataFrame) -> pd.DataFrame:
         result["sstb_unadjusted_basis_qualified_property"] = _np.where(_sstb, _ubia, 0.0)
         result["w2_wages_from_qualified_business"] = _np.where(_sstb, 0.0, _w2)
         result["unadjusted_basis_qualified_property"] = _np.where(_sstb, 0.0, _ubia)
+        # Persist the SSTB flag itself and split the would-be-qualified flag
+        # the same way the income splits (usdata convention).
+        result["business_is_sstb"] = _sstb
+        _would = (
+            _q["self_employment_income_would_be_qualified"].astype(bool)
+            if "self_employment_income_would_be_qualified" in _q.columns
+            else _np.zeros(len(_q), dtype=bool)
+        )
+        result["sstb_self_employment_income_would_be_qualified"] = _would & _sstb
+        result["self_employment_income_would_be_qualified"] = _would & ~_sstb
         _inv = simulate_investment_qbi_income_from_puf(
             _q, rng=_np.random.default_rng(QBI_INVESTMENT_SEED)
         )

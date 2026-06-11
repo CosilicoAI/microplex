@@ -90,7 +90,13 @@ def add_scf_wealth(person: pd.DataFrame, hh: pd.DataFrame, seed: int, log) -> pd
     log(f"  SCF 2022 donor: {len(scf):,} rows, {len(targets)} targets")
 
     num = lambda c: pd.to_numeric(person.get(c, 0), errors="coerce").fillna(0)  # noqa: E731
-    head = person.get("is_household_head", pd.Series(False, index=person.index)).astype(bool)
+    if "is_household_head" not in person.columns:
+        raise RuntimeError(
+            "head-carry requires is_household_head on the person frame "
+            "(derive it from ASEC P_SEQ == 1 before stage F2); refusing to "
+            "head-carry onto an all-False mask."
+        )
+    head = person["is_household_head"].astype(bool)
     pf = pd.DataFrame(
         {
             "hh": person["person_household_id"],
@@ -167,7 +173,13 @@ def add_scf_wealth(person: pd.DataFrame, hh: pd.DataFrame, seed: int, log) -> pd
         hh["household_vehicles_owned"] = (veh_val > 0).astype(float)
     # person-entity assets: head-carry onto persons (export entity mover is
     # person->tax_unit only; person columns export directly).
-    headp = person.get("is_household_head", pd.Series(False, index=person.index)).astype(bool)
+    if "is_household_head" not in person.columns:
+        raise RuntimeError(
+            "head-carry requires is_household_head on the person frame "
+            "(derive it from ASEC P_SEQ == 1 before stage F2); refusing to "
+            "head-carry onto an all-False mask."
+        )
+    headp = person["is_household_head"].astype(bool)
     hmap = dict(zip(hh["household_id"].tolist(), range(len(hh))))
     pidx = person["person_household_id"].map(hmap)
     for pe_name, vals in head_carry_to_person.items():
@@ -475,8 +487,8 @@ def add_acs_rent(person: pd.DataFrame, hh: pd.DataFrame, seed: int, log):
 
     PRED = ["state_fips", "hh_employment_income", "hh_size"]
     fitted = Imputer(seed=seed, log_level="WARNING").fit(
-        d_hh.dropna(subset=PRED + ["rent", "household_vehicles_owned"]),
-        PRED, ["rent", "household_vehicles_owned"],
+        d_hh.dropna(subset=PRED + ["rent"]),
+        PRED, ["rent"],
         weight_col="household_weight",
     )
     pg = person.groupby(person["person_household_id"])
@@ -493,15 +505,76 @@ def add_acs_rent(person: pd.DataFrame, hh: pd.DataFrame, seed: int, log):
     # Rent applies to renter households only (tenure from the CPS H_TENURE map).
     tenure = hh.get("tenure_type", pd.Series("NONE", index=hh.index)).astype(str)
     rent = np.where(tenure.str.upper() == "RENTED", rent, 0.0)
-    veh = np.clip(np.round(np.asarray(draws["household_vehicles_owned"], dtype=np.float64)), 0, None)
-    hh["household_vehicles_owned"] = veh
     # pre_subsidy_rent is person-entity: head-carry the household rent.
-    headp = person.get("is_household_head", pd.Series(False, index=person.index)).astype(bool)
+    if "is_household_head" not in person.columns:
+        raise RuntimeError(
+            "head-carry requires is_household_head on the person frame "
+            "(derive it from ASEC P_SEQ == 1 before stage F2); refusing to "
+            "head-carry onto an all-False mask."
+        )
+    headp = person["is_household_head"].astype(bool)
     hmap = dict(zip(hh["household_id"].tolist(), range(len(hh))))
     pidx = person["person_household_id"].map(hmap)
     person = person.copy()
     person["pre_subsidy_rent"] = np.where(
         headp & pidx.notna(), rent[pidx.fillna(0).astype(int)], 0.0
     )
-    log(f"  ACS rent: renter-hh rent nz {(rent>0).mean()*100:.1f}%, vehicles imputed")
+    log(f"  ACS rent: renter-hh rent nz {(rent>0).mean()*100:.1f}%")
+    return person, hh
+
+
+def add_vehicle_assets(person: pd.DataFrame, hh: pd.DataFrame, log):
+    """Household vehicles (count + value) from the SIPP-trained QRF donor
+    (usdata get_vehicle_model + receiver builder), mirroring usdata's
+    auto-loan/vehicle imputation. Writes household grain."""
+    from policyengine_us_data.datasets.sipp import get_vehicle_model
+    from policyengine_us_data.utils.asset_imputation import (
+        build_household_vehicle_receiver,
+    )
+
+    model = get_vehicle_model()
+    receiver_person = person.copy()
+    if "person_household_id" in receiver_person.columns:
+        receiver_person = receiver_person.rename(
+            columns={"person_household_id": "household_id"}
+        )
+    tenure = hh.get("tenure_type")
+    receiver = build_household_vehicle_receiver(
+        receiver_person,
+        tenure_type=(np.asarray(tenure) if tenure is not None else None),
+    )
+    pred = model.predict(X_test=receiver, mean_quantile=0.5)
+    owned = np.clip(
+        np.rint(np.asarray(pred["household_vehicles_owned"], dtype=np.float64)),
+        0,
+        None,
+    )
+    value = np.clip(
+        np.asarray(pred["household_vehicles_value"], dtype=np.float64), 0, None
+    )
+    # receiver rows are one per household in hh order (builder groups by
+    # household_id of the persons); align defensively by id.
+    rid = np.asarray(receiver["household_id"]) if "household_id" in receiver else None
+    hh = hh.copy()
+    if rid is not None:
+        owned_by = dict(zip(rid.tolist(), owned.tolist()))
+        value_by = dict(zip(rid.tolist(), value.tolist()))
+        hh["household_vehicles_owned"] = (
+            hh["household_id"].map(owned_by).fillna(0.0).astype(float)
+        )
+        hh["household_vehicles_value"] = (
+            hh["household_id"].map(value_by).fillna(0.0).astype(float)
+        )
+    else:
+        if len(owned) != len(hh):
+            raise RuntimeError(
+                f"vehicle receiver rows ({len(owned)}) != households "
+                f"({len(hh)}) and no household_id to align by."
+            )
+        hh["household_vehicles_owned"] = owned
+        hh["household_vehicles_value"] = value
+    log(
+        f"  SIPP vehicles: owned nz {(hh['household_vehicles_owned']>0).mean()*100:.1f}%, "
+        f"value nz {(hh['household_vehicles_value']>0).mean()*100:.1f}%"
+    )
     return person, hh

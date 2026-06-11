@@ -119,6 +119,17 @@ EXTRA_ASEC_COLUMNS = (
     "DST_VAL1_YNG",
     "DST_VAL2_YNG",
     "SPM_CAPWKCCXPNS",
+    # v3 parity additions (ASEC raw sources for eCPS-populated layers)
+    "A_FTPT",
+    "P_SEQ",
+    "NOW_NONM",
+    "NOW_CAID",
+    "NOW_OTHMT",
+    "NOW_MIL",
+    "NOW_CHAMPVA",
+    "NOW_VACARE",
+    "NOW_IHSFLG",
+    "SPM_CAPHOUSESUB",
 )
 
 # Contract-required columns eCPS sources from PUF/SIPP/SCF detail our v1
@@ -228,6 +239,39 @@ def _derive_person_columns(person: pd.DataFrame) -> pd.DataFrame:
     p["detailed_occupation_recode"] = num("POCCU2").astype(float)
     # Weeks looking for work (LKWEEKS: -1 NIU -> 0), mirroring usdata.
     p["weeks_unemployed"] = num("LKWEEKS").clip(lower=0).astype(float)
+    # v3 parity: ASEC raw derivations mirroring usdata cps.py exactly.
+    p["is_blind"] = (num("PEDISEYE") == 1).astype(bool)
+    p["is_surviving_spouse"] = (num("A_MARITL") == 4).astype(bool)
+    p["is_full_time_college_student"] = (
+        (num("A_HSCOL") == 2) & (num("A_FTPT") == 1)
+    ).astype(bool)
+    # Household head: person sequence 1 within the household (usdata P_SEQ rule).
+    p["is_household_head"] = (num("P_SEQ") == 1).astype(bool)
+    # Current health coverage at interview (ASEC NOW_* flags; 1 = covered).
+    for _pe_name, _now in {
+        "has_marketplace_health_coverage_at_interview": "NOW_MRK",
+        "has_non_marketplace_direct_purchase_health_coverage_at_interview": "NOW_NONM",
+        "has_medicaid_health_coverage_at_interview": "NOW_CAID",
+        "has_other_means_tested_health_coverage_at_interview": "NOW_OTHMT",
+        "has_tricare_health_coverage_at_interview": "NOW_MIL",
+        "has_champva_health_coverage_at_interview": "NOW_CHAMPVA",
+        "has_va_health_coverage_at_interview": "NOW_VACARE",
+        "has_indian_health_service_coverage_at_interview": "NOW_IHSFLG",
+    }.items():
+        p[_pe_name] = (num(_now) == 1).astype(bool)
+    # SPM-reported housing assistance (capped housing subsidy > 0).
+    p["receives_housing_assistance"] = (num("SPM_CAPHOUSESUB") > 0).astype(bool)
+    # FLSA overtime occupation flags from POCCU2 (codes shipped by the engine).
+    from policyengine_us.data.cps import (
+        CPS_FLSA_EXECUTIVE_ADMINISTRATIVE_PROFESSIONAL_OCCUPATION_CODES as _EXEC,
+        CPS_FLSA_OVERTIME_OCCUPATION_CODES as _OCC,
+    )
+
+    for _flag, _code in _OCC.items():
+        p[_flag] = (num("POCCU2") == _code).astype(bool)
+    p["is_executive_administrative_professional"] = (
+        num("POCCU2").isin(list(_EXEC)).astype(bool)
+    )
     # RETCB proportional split (usdata cps.py:1505-1552; shares from
     # imputation_parameters.yaml — BEA/FRED + IRS SOI administrative shares).
     retcb = num("RETCB_VAL").clip(lower=0)
@@ -296,6 +340,8 @@ PUF_IMPUTE_VARS = (
     "long_term_capital_gains_on_collectibles",
     "unreimbursed_business_employee_expenses",
     "qualified_tuition_expenses",
+    "business_is_sstb",
+    "sstb_self_employment_income_would_be_qualified",
     "farm_rent_income",
     "self_employed_pension_contribution_ald",
     "unrecaptured_section_1250_gain",
@@ -581,10 +627,18 @@ def main() -> int:
         extra_person_columns=(
             list(MICROUNIT_RAW_COLUMNS) + ["PH_SEQ"] + list(EXTRA_ASEC_COLUMNS)
         ),
-        extra_household_columns=["H_TENURE"],
+        extra_household_columns=["H_TENURE", "GTCO"],
     )
     persons = ds.persons.to_pandas()
     households = ds.households.to_pandas()
+    if "GTCO" in households.columns:
+        # NYC boroughs by state*1000+county FIPS (usdata cps.py NYC list).
+        _scf = (
+            pd.to_numeric(households.get("state_fips", 0), errors="coerce").fillna(0)
+            * 1000
+            + pd.to_numeric(households["GTCO"], errors="coerce").fillna(0)
+        )
+        households["in_nyc"] = _scf.isin([36005, 36047, 36061, 36081, 36085]).astype(bool)
     if "H_TENURE" in households.columns:
         # Same base map as the eCPS loader (usdata cps.py:418).
         households["tenure_type"] = (
@@ -776,6 +830,15 @@ def main() -> int:
          / "imputation_parameters.yaml").read_text()
     )
     _codes = {1: "401k", 2: "403b", 6: "sep"}
+    # Codes without a taxable split: keogh (5) is its own PE input; roth IRA
+    # (3) is tax-exempt by assumption (usdata cps.py RETIREMENT_CODES).
+    for _code, _pe in ((5, "keogh_distributions"), (3, "tax_exempt_ira_distributions")):
+        _tot = 0
+        for _i in ("1", "2", "1_YNG", "2_YNG"):
+            _sc = pd.to_numeric(person.get(f"DST_SC{_i}", 0), errors="coerce").fillna(0)
+            _val = pd.to_numeric(person.get(f"DST_VAL{_i}", 0), errors="coerce").fillna(0)
+            _tot = _tot + (_sc == _code) * _val
+        person[_pe] = pd.Series(_tot, index=person.index).astype(float)
     for _code, _name in _codes.items():
         _tot = 0
         for _i in ("1", "2", "1_YNG", "2_YNG"):
@@ -996,6 +1059,7 @@ def main() -> int:
     person = psi.add_prior_year_income(person, args.asec_year, log=log)
     person = psi.add_mortgage_conversion(person, hh, args.calendar_year, log=log)
     person, hh = psi.add_acs_rent(person, hh, seed=args.seed, log=log)
+    person, hh = psi.add_vehicle_assets(person, hh, log=log)
 
     def _group_clone_flag(id_col: str) -> pd.Series:
         share = person.groupby(person[id_col])["person_is_puf_clone"].mean()
@@ -1132,6 +1196,26 @@ def main() -> int:
             log(f"  puf-support-guard {_c}: clipped {_n} to [{_lo:,.0f}, {_hi:,.0f}]")
             person[_c] = _clipped
 
+    # ---- v3: AOTC factual inputs from the PUF tuition signal ----------------
+    # usdata extended_cps: with no credit signal, the AOTC student mask is
+    # simply qualified_tuition_expenses > 0; the five factual eligibility
+    # flags are set for those students.
+    _aotc = (
+        pd.to_numeric(
+            person.get("qualified_tuition_expenses", 0), errors="coerce"
+        ).fillna(0)
+        > 0
+    )
+    for _flag in (
+        "is_pursuing_credential_for_american_opportunity_credit",
+        "attends_eligible_educational_institution_for_american_opportunity_credit",
+        "is_enrolled_at_least_half_time_for_american_opportunity_credit",
+        "has_american_opportunity_credit_1098_t_or_exception",
+        "has_american_opportunity_credit_institution_ein",
+    ):
+        person[_flag] = _aotc.astype(bool)
+    log(f"  AOTC factual inputs: {_aotc.mean()*100:.1f}% of persons flagged")
+
     # ---- v2: place variables at their PolicyEngine entity ------------------
     # The PUF and donor stages leave tax-unit and SPM-entity amounts on the
     # person/household frames (head-carried); PE rejects inputs stored at the
@@ -1162,6 +1246,17 @@ def main() -> int:
     person = person.drop(columns=tu_moves)
     if tu_moves:
         log(f"  moved to tax_unit entity: {tu_moves}")
+    person_spm_moves = [
+        c for c in person.columns
+        if not c.startswith("person_") and _pe_entity(c) == "spm_unit"
+    ]
+    spm_agg = {
+        c: person[c].groupby(person["person_spm_unit_id"]).first()
+        for c in person_spm_moves
+    }
+    person = person.drop(columns=person_spm_moves)
+    if person_spm_moves:
+        log(f"  moved person->spm_unit entity: {person_spm_moves}")
     spm_moves = [c for c in hh.columns if _pe_entity(c) == "spm_unit"]
     for c in spm_moves:
         val = dict(zip(hh["household_id"], hh[c]))
@@ -1171,6 +1266,12 @@ def main() -> int:
         hh = hh.drop(columns=[c])
     if spm_moves:
         log(f"  moved to spm_unit entity: {spm_moves}")
+    for c, agg in spm_agg.items():
+        mapped = spm["spm_unit_id"].map(agg)
+        if pd.api.types.is_bool_dtype(person.dtypes.get(c, bool)) or mapped.dtype == object:
+            spm[c] = mapped.fillna(False).astype(bool)
+        else:
+            spm[c] = pd.to_numeric(mapped, errors="coerce").fillna(0.0)
 
     tax_unit_tbl = unit_table("tax_unit_id", units_tu_new)
     for c, agg in tu_agg.items():

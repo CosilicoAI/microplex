@@ -266,7 +266,8 @@
     "household_is_puf_clone",
     "person_is_puf_clone",
     "spm_unit_is_puf_clone",
-    "tax_unit_is_puf_clone"
+    "tax_unit_is_puf_clone",
+    "weeks_worked"
   ],
   "forbidden": [
     "amt_foreign_tax_credit",
