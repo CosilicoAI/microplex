@@ -1009,6 +1009,38 @@ def main() -> int:
         .drop(columns=["tax_unit_id", "_half"])
         .rename(columns={"new_tax_unit_id": "TAX_ID"})
     )
+    # ---- v2: realized-support guard on imputed draws ------------------------
+    # The fixed tail-faithful QRF draws the PUF's extreme records (e.g.
+    # -$140M short-term capital losses) far more often than the incumbent's
+    # tail-thinning forest did, blowing up sign-mixed aggregates (v2 drew
+    # STCG to -$3.9T vs eCPS +$0.04T). Clip every imputed person-grain value
+    # to the incumbent baseline's realized per-record [min, max] — a parity
+    # guard bounded by what the published incumbent actually ships.
+    import h5py as _h5py
+
+    with _h5py.File(str(args.baseline_h5)) as _bf:
+        _period = str(args.calendar_year)
+        for _c in list(person.columns):
+            if _c.startswith("person_") or _c not in _bf:
+                continue
+            if _period not in _bf[_c]:
+                continue
+            _bv = _bf[_c][_period][:]
+            if _bv.dtype.kind not in "fi":
+                continue
+            _vals = pd.to_numeric(person[_c], errors="coerce")
+            if _vals.isna().all():
+                continue
+            _lo, _hi = float(_bv.min()), float(_bv.max())
+            _clipped = _vals.clip(_lo, _hi)
+            _n = int((_clipped != _vals).sum())
+            if _n:
+                log(
+                    f"  support-guard {_c}: clipped {_n} values to "
+                    f"[{_lo:,.0f}, {_hi:,.0f}]"
+                )
+                person[_c] = _clipped
+
     # ---- v2: place variables at their PolicyEngine entity ------------------
     # The PUF and donor stages leave tax-unit and SPM-entity amounts on the
     # person/household frames (head-carried); PE rejects inputs stored at the
