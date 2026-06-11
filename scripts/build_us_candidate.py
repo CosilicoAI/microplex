@@ -109,6 +109,15 @@ EXTRA_ASEC_COLUMNS = (
     "NOW_HIPAID",
     "NOW_GRPFTYP",
     "PERIDNUM",
+    "LKWEEKS",
+    "DST_SC1",
+    "DST_SC2",
+    "DST_SC1_YNG",
+    "DST_SC2_YNG",
+    "DST_VAL1",
+    "DST_VAL2",
+    "DST_VAL1_YNG",
+    "DST_VAL2_YNG",
     "SPM_CAPWKCCXPNS",
 )
 
@@ -217,6 +226,8 @@ def _derive_person_columns(person: pd.DataFrame) -> pd.DataFrame:
     p["hours_worked_last_week"] = num("A_HRS1").clip(lower=0).astype(float)
     p["weeks_worked"] = num("WKSWORK").clip(0, 52).astype(float)
     p["detailed_occupation_recode"] = num("POCCU2").astype(float)
+    # Weeks looking for work (LKWEEKS: -1 NIU -> 0), mirroring usdata.
+    p["weeks_unemployed"] = num("LKWEEKS").clip(lower=0).astype(float)
     # RETCB proportional split (usdata cps.py:1505-1552; shares from
     # imputation_parameters.yaml — BEA/FRED + IRS SOI administrative shares).
     retcb = num("RETCB_VAL").clip(lower=0)
@@ -742,6 +753,26 @@ def main() -> int:
     ttoc = derive_treasury_tipped_occupation_code(person["PEIOOCC"])
     person["treasury_tipped_occupation_code"] = ttoc.astype(float)
     person["is_tipped_occupation"] = derive_is_tipped_occupation(ttoc)
+
+    # Retirement-account distributions: ASEC DST_SC/DST_VAL pairs by source
+    # code, split by the usdata taxable fractions (imputation_parameters.yaml).
+    import yaml as _yaml
+
+    _ipar = _yaml.safe_load(
+        (args.usdata_repo / "policyengine_us_data" / "datasets" / "cps"
+         / "imputation_parameters.yaml").read_text()
+    )
+    _codes = {1: "401k", 2: "403b", 6: "sep"}
+    for _code, _name in _codes.items():
+        _tot = 0
+        for _i in ("1", "2", "1_YNG", "2_YNG"):
+            _sc = pd.to_numeric(person.get(f"DST_SC{_i}", 0), errors="coerce").fillna(0)
+            _val = pd.to_numeric(person.get(f"DST_VAL{_i}", 0), errors="coerce").fillna(0)
+            _tot = _tot + (_sc == _code) * _val
+        _frac = float(_ipar[f"taxable_{_name}_distribution_fraction"])
+        person[f"taxable_{_name}_distributions"] = (_tot * _frac).astype(float)
+        person[f"tax_exempt_{_name}_distributions"] = (_tot * (1 - _frac)).astype(float)
+    log("  retirement distributions split (DST codes x usdata taxable fractions)")
     # Pre-response copies and aliases the contract requires alongside the
     # base variables.
     person["employment_income_before_lsr"] = person["employment_income"]
