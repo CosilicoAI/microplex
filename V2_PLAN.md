@@ -409,3 +409,26 @@ max_weight_ratio=50 into stage config + manifest.
 ## smoke investment_interest ~tens of B + STCG near PUF total, score) ->
 ## republish per V3 plan (card de-eCPS rewrite, diagram topology update,
 ## bundles PR #20, observatory dated release, #us-data comparison rerun).
+
+## V3 PARITY ITERATION @ 10:35 (22 gaps -> fixes in flight):
+FIXED this commit: (1) mortgage interest zero = missing person-grain
+"deductible_mortgage_interest" key (getter never falls through to
+interest_deduction; now provided = head-carried itd_person); (2) SCF raw names
+(checking/saving/stocks/bond) mapped to PE bank/stock/bond_assets, head-carried
+onto household-head persons (person-entity); net_worth computed on hh as
+scf asset components - debt components (+ mapped assets); vehicles attempted
+from raw names if present (verify in smoke — SCF column list had
+total_vehicle_installments only; vehicles may need the full SCF loader vars or
+stay a documented gap pending Fed SCF summary variable check).
+REMAINING CLASS-2 SOURCES (pin): weeks_unemployed = raw weeks col (usdata
+cps.py:1442 weeks_raw; find ASEC name e.g. WKSUNEM1, add to loader + derive
+where -1 -> 0); other_health_insurance_premiums rule at usdata cps.py:829
+(read block, port); pre_subsidy_rent = ACS rent imputation (usdata add_rent
+cps.py:417 — port donor flow with microimpute or implement ACS donor directly;
+LAST/heaviest); taxable_401k/403b/sep_distributions + QBI block (w2_wages,
+unadjusted_basis, sstb_*, qualified_bdc/reit_and_ptp, partnership_se_income):
+read usdata puf.py lines ~700-800 for the derivation rules (they are PUF
+preprocessing outputs in the extended imputed list) and port into the
+microplex puf.py preprocessing + PUF_IMPUTE_VARS like the v2.1 batch.
+Then: smoke -> full rebuild -> extract -> calibrate -> parity MUST be 0 ->
+smoke gate -> score -> republish (full protocol in prior wakeups).
