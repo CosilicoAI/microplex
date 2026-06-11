@@ -1215,6 +1215,17 @@ def main() -> int:
     ):
         person[_flag] = _aotc.astype(bool)
     log(f"  AOTC factual inputs: {_aotc.mean()*100:.1f}% of persons flagged")
+    # QRF-drawn boolean flags can land as mixed-object columns; normalize to
+    # clean bools so HDF serialization and PE casting are deterministic.
+    for _bcol in (
+        "business_is_sstb",
+        "sstb_self_employment_income_would_be_qualified",
+        "self_employment_income_would_be_qualified",
+    ):
+        if _bcol in person.columns:
+            person[_bcol] = (
+                pd.to_numeric(person[_bcol], errors="coerce").fillna(0) > 0.5
+            ).astype(bool)
 
     # ---- v2: place variables at their PolicyEngine entity ------------------
     # The PUF and donor stages leave tax-unit and SPM-entity amounts on the
