@@ -336,3 +336,28 @@ other thread metric — comparison in /tmp/itemized_compare.log).
 ## retirement/non_ssi_income aggregates). SCF loader: datasets/scf/fed_scf.py
 ## (.load() with download). ALL stages now have primary loaders in the
 ## usdata-populace worktree — no eCPS anywhere in the build.
+
+## V3 PROGRESS @ 08:55: scripts/primary_source_impute.py v0 wired (SCF wealth
+## block via SummarizedFedSCF + weighted microimpute + own-donor support guard;
+## SIPP tips via get_tip_model; ORG wages via add_org_labor_market_inputs with
+## a dict adapter). ecps_donor_impute REMOVED from the build path. STILL TO
+## IMPLEMENT before parity passes: (a) ACS mortgage stage (census_acs loader +
+## usdata utils/mortgage_interest.py person-residual rule -> first_home_
+## mortgage_balance/interest/origination_year + investment_interest_expense);
+## (b) prior-year income (PERIDNUM join vs prior ASEC: add PERIDNUM to loader
+## raw columns, load asec_year-1 via load_cps_asec, map prior WSAL_VAL/
+## SEMP_VAL -> employment/self_employment_income_last_year + previous_year_
+## income_available; sentinels {-1,-9999}); (c) MEPS-IC ESI premiums (usdata
+## cps.py ~line 195-230 parameter block: plan-type premiums applied to has_esi
+## persons — copy the parameter table + rule); (d) childcare raw columns:
+## SPM_CHILDCAREXPNS + SPM_CAPWKCCXPNS via extra_person_columns -> spm-grain
+## (max per spm unit) at export (entity mover handles spm placement if set on
+## hh or person? childcare is SPM entity — set person-level then entity mover
+## needs spm handling for person-stored spm vars OR aggregate at export like
+## v2 did from hh; simplest: person col -> groupby person_spm_unit_id max ->
+## attach in unit_table spm block next to spm_unit_energy_subsidy precedent).
+## Smoke-iterate after each addition: nohup .venv/bin/python -u
+## scripts/build_us_candidate.py --mode smoke --usdata-repo
+## ~/.claude-worktrees/usdata-populace > /tmp/v3_smoke.log. Donor downloads
+## (SCF/ORG/SIPP model) happen on first run — may need network time. THEN full
+## rebuild -> extract -> recalibrate -> gates -> republish per V3 section.
