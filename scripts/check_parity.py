@@ -135,7 +135,7 @@ def main() -> int:
         "people_m": float(sim.calculate("age", YEAR).count()) / 1e6,
         "snap_b": total("snap") / 1e9,
         "net_worth_t": total("net_worth") / 1e12,
-        "net_stcg_b": total("net_short_term_capital_gains") / 1e9,
+        "net_stcg_b": total("short_term_capital_gains") / 1e9,
         "investment_interest_expense_b": total("investment_interest_expense")
         / 1e9,
         "tips_b": total("tip_income") / 1e9,
