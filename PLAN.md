@@ -432,3 +432,21 @@ preprocessing outputs in the extended imputed list) and port into the
 microplex puf.py preprocessing + PUF_IMPUTE_VARS like the v2.1 batch.
 Then: smoke -> full rebuild -> extract -> calibrate -> parity MUST be 0 ->
 smoke gate -> score -> republish (full protocol in prior wakeups).
+
+## WORKSPACE CANONICALIZATION (2026-06-11, Max: "clean this up — there should not
+## be multiple versions of anything") — one canonical name per thing, git is the
+## versioning. Scripts now in-tree: scripts/build_dataset.py (was /tmp/build_populace_us_v2.py),
+## scripts/extract_target_surface.py (was /tmp/extract_v2_surface.py); ecps_donor_impute.py
+## DELETED (git history has it); this file renamed V2_PLAN.md -> PLAN.md. Artifacts:
+## artifacts/{populace_us_2024.h5,populace_us_2024_timeperiod.h5,populace_us_2024_calibration.npz,
+## target_surface_raw.npz} are THE names (currently the published build's bytes; the v3 chain
+## overwrites in place), pools at spec_candidate_full_2024/ + spec_candidate_smoke_2024/ only —
+## all iteration-suffixed files/dirs purged (~4GB; HF revisions hold shipped history).
+## Score rig: ~/populace-score-work/{run_comparison.py,score_out,populace_us_2024_timeperiod.h5}.
+## Smoke log: /tmp/populace_smoke.log. Bundles proposal moved to clean branch: PR #21
+## (was #20; branch populace-us-2024-v2-proposal deleted). Standalone ~/PolicyEngine/populace-us
+## scaffold deleted (monorepo build/us/ holds newer copies, diff-verified). Observatory builder
+## points at canonical paths + primary_source_impute.py.
+## FORWARD PROTOCOL (v3 chain): smoke green -> full build (build_us_candidate.py --mode full)
+## -> scripts/extract_target_surface.py -> scripts/build_dataset.py -> parity MUST be 0 ->
+## smoke gate -> score (run_comparison.py, beats 1.0888/0.3167 matched) -> republish.
