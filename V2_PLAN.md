@@ -277,3 +277,14 @@ PUF vars land person-stored like interest_deduction did) → E gates → F/G pub
 ## SAVED). Then gates: parity (expect 0) / smoke (HNI ~$14.5T+, 401k >$100B,
 ## STCG ~±$0.2T) / fresh score (rm score_out_v2 first; copy v2 timeperiod to
 ## ~/populace-score-work). Then publish chain.
+
+## @ 07:30 v2.2 GATES: parity PASS (0 gaps). Smoke: people 332.7M / snap $93.2B
+## / 401k $338.4B (mask fix WORKS) / net_worth $163.6T / HNI $13.68T / STCG
+## -$0.907T. STCG story CLOSED with full mechanism: donor weighted truth
+## -$76.8B uprated; pool at DESIGN weights -$164B (faithful); CALIBRATION
+## amplifies to -$907B (optimizer loads weight onto big-loss records to hit
+## visible targets; STCG not on the surface — same blind spot exists for eCPS
+## in principle, thinner tails in practice). v3 roadmap: net-STCG calibration
+## target. v2 ships with honest card note. Calibration v2.2: 2.288->0.0220,
+## 95.55% within10, max 382,478, 0>500k, formula-masks dropped. FRESH SCORE
+## RUNNING (score_out_v2, caffeinated). On train+holdout WIN -> publish chain.
