@@ -472,3 +472,25 @@ smoke gate -> score -> republish (full protocol in prior wakeups).
 ## check_parity.py gate 0 = exported_nonzero (chain fails on any all-zero
 ## stored column); build_dataset.py drops all-zero cols with zero engine
 ## defaults. US implementations port = task #26, AFTER republish.
+
+# V3 SHIPPED (2026-06-11 ~16:40, build populace-us-2024-9f1260b-20260611) —
+# THE eCPS-FREE REBUILD IS PUBLISHED. Every layer primary-source (ASEC, PUF,
+# Fed SCF 2022, SIPP, CPS-ORG, MEPS-IC, ACS 2022); eCPS benchmark-only.
+# GATES: parity 0 (169 layers, sim-level), exported-nonzero PASS (309 cols),
+# calibration 95.09% within10 (loss 0.022, max w 297,651, 0>500k), smoke in
+# band (332.3M ppl, $97.8B snap, $176.5T net worth vs Z.1 ~$169T, STCG
+# -$77.5B vs signed -$76.8B target, tips $52.9B, rent $757.5B; investment
+# interest $5.1B = thin vs SOI ~$24B, on the card as a known gap).
+# SCORE (matched 41,314, symmetric refit, seed 20260529): train 0.190 vs
+# 1.089, holdout 0.038 vs 0.317, full 0.228 vs 1.406; per-target incumbent
+# 2,613 / populace 1,040 / 51 ties (disclosed). #us-data metrics: itemized
+# $1.67T (eCPS $5.5T, SOI ~$1.5-1.7T), charitable $397B (eCPS $2.8T),
+# QBI $217B (eCPS $405B, SOI ~$210B), mortgage interest $270B (eCPS $1.7T).
+# PUBLISHED: HF revision 4a8e7d39eb9e (h5 sha256 dc75c0d4..., manifest at
+# releases/populace-us-2024-9f1260b-20260611/), card de-eCPS'd, e2e
+# populace.data.load verified on fresh download; provenance PR #6 MERGED
+# (33ed83d, snapshots of the whole chain); bundles PR #21 proposal updated
+# to the new pins; observatory deployed (new release data, primary-source
+# diagram, live strip on Supabase telemetry: runs/build_events/gate_results/
+# target_diagnostics). NEXT: task #26 — port stage implementations into
+# populace.build.us and delete these worktree copies.
