@@ -361,3 +361,34 @@ other thread metric — comparison in /tmp/itemized_compare.log).
 ## ~/.claude-worktrees/usdata-populace > /tmp/v3_smoke.log. Donor downloads
 ## (SCF/ORG/SIPP model) happen on first run — may need network time. THEN full
 ## rebuild -> extract -> recalibrate -> gates -> republish per V3 section.
+
+# ARCHITECTURE REVIEW (greenfield subagent, 2026-06-11 ~09:30) — ADOPTED DECISIONS
+Full text delivered in-session. Ranked verdicts:
+A1(L): build = 1,195-line imperative driver on legacy microplex; greenfield =
+typed stage package populace.build.us over Frame, retire the spec DSL for the
+US build ("sequencing step 5 is the whole job"). A2(M): the build uses legacy
+microplex.units/microimpute while populace.frame.units/populace.fit (which fix
+the exact weight_col bug by construction) sit unused — swap engines. B(M): one
+declarative donor graph; heavy-tail fix = SIGNED calibration targets (net-STCG,
+investment-interest, itemizer counts, charitable) appended to OUR TargetSet —
+NOT range clips; ORG try/except silent fallback violates charter, make it fail.
+C(M): replace the harness-extracted npz with a populace-owned versioned
+TargetSpec registry (+SEs, sources); reverse build→scorer dependency. D(M):
+kernel excellent/unused — needs policyengine_us RulesEngine adapter +
+frame.place(column, entity); deletes ~150 driver lines. E(M): gate suite =
+parity + support + AGGREGATE-VS-ADMIN (permanent, would have caught STCG +
+investment-interest) + per-family + ROTATED holdout; FIX objective mismatch
+(calibrator relative loss vs scorer absolute SSE). F: shipped artifact still
+v2.2 eCPS-contaminated (v3 in flight); driver STILL opens baseline_h5 for the
+v2 support-guard loop — DELETE IT in v3 (re-anchor PUF clips to PUF's own
+ranges); calibrate solver DENSIFIES the sparse matrix (blocks 3M+ scaling —
+fix with torch.sparse SpMM); add the charter-mandated pip-from-wheels CI job;
+max_weight_ratio=50 into stage config + manifest.
+## IMMEDIATE v3 adoptions (this build): (1) delete driver baseline_h5 guard
+## loop, re-anchor PUF-imputed clips to PUF's own realized ranges (computed at
+## the PUF stage); (2) append signed calibration targets to the TargetSet in
+## /tmp/build_populace_us_v2.py: net STCG (SOI-scale small negative),
+## investment_interest_expense total, from SOI-published values with sources;
+## the scored comparison surface stays frozen (symmetric refit unaffected).
+## DEFERRED to the re-base epic: stage package, donor graph, target registry,
+## RulesEngine adapter, sparse solve, rotated holdout, pip-wheels CI.
