@@ -326,3 +326,13 @@ other thread metric — comparison in /tmp/itemized_compare.log).
 ## holdout win) -> republish SAME filename new revision + new build-id ->
 ## update card (drop "eCPS as donor" language!), bundles PR #20, observatory,
 ## index evidence, memory. NAMING: no ordinals (policy set).
+## Final source pins (verified): investment_interest_expense = residual of PUF
+## interest paid (E19200/mortgage_interest_paid donor var we already impute)
+## after the ACS mortgage split — port usdata utils/mortgage_interest.py
+## (person-level residual at line ~154/320) inside the ACS stage. tip_income =
+## SIPP model: `from policyengine_us_data.datasets.sipp import get_tip_model;
+## model.predict(X_test=cps_frame, mean_quantile=0.5)` (cps.py:2828-2835 shows
+## the exact call + required predictor columns upstream ~2815: pension/
+## retirement/non_ssi_income aggregates). SCF loader: datasets/scf/fed_scf.py
+## (.load() with download). ALL stages now have primary loaders in the
+## usdata-populace worktree — no eCPS anywhere in the build.
