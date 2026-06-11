@@ -55,45 +55,83 @@ def _support_guard(values: np.ndarray, donor: np.ndarray, name: str, log) -> np.
 
 
 def add_scf_wealth(person: pd.DataFrame, hh: pd.DataFrame, seed: int, log) -> pd.DataFrame:
-    """Impute the wealth block onto households from the Fed SCF (weighted)."""
-    from microimpute import Imputer
-    from policyengine_us_data.datasets.scf.fed_scf import SummarizedFedSCF
+    """Impute the wealth block onto households from SCF 2022 (usdata blueprint).
 
-    scf = SummarizedFedSCF().load()
-    log(f"  SCF donor: {len(scf):,} rows, cols sample {list(scf.columns)[:8]}")
-    # Predictors present on both sides (SCF is renamed to CPS-comparable names).
-    cand_preds = [
-        "age", "employment_income", "self_employment_income",
-        "social_security", "is_female",
-    ]
-    # Household-grain receiver aggregates from persons.
-    g = person.groupby(person["person_household_id"])
-    recv = pd.DataFrame({
-        "age": g.apply(lambda x: x.loc[x["is_household_head"].astype(bool), "A_AGE"].max() if x["is_household_head"].astype(bool).any() else x["A_AGE"].max()) if "A_AGE" in person.columns else g["age"].max(),
-    })
-    for c in ("employment_income", "self_employment_income", "social_security"):
-        recv[c] = pd.to_numeric(person[c], errors="coerce").fillna(0).groupby(person["person_household_id"]).sum()
-    recv["is_female"] = person.groupby(person["person_household_id"])["is_female"].first().astype(float) if "is_female" in person.columns else 0.0
-    preds = [p for p in cand_preds if p in scf.columns and p in recv.columns]
-    targets = [t for t in SCF_TARGETS if t in scf.columns]
-    skipped = sorted(set(SCF_TARGETS) - set(targets))
-    if skipped:
-        log(f"  SCF donor lacks (skipping): {skipped}")
-    wcol = next((c for c in ("household_weight", "weight", "wgt") if c in scf.columns), None)
-    fitted = Imputer(seed=seed, log_level="WARNING").fit(
-        scf.dropna(subset=preds + targets + ([wcol] if wcol else [])),
-        preds, targets, weight_col=wcol,
+    Mirrors usdata cps.py's own SCF stage: SCF_2022 donor, `wgt` weights, the
+    same predictor list, target lists from the same helper functions; imputed
+    at household-head grain and attached to households, support-guarded to the
+    SCF's own realized ranges.
+    """
+    from microimpute import Imputer
+    from policyengine_us_data.datasets.cps.cps import (
+        add_scf_financial_asset_targets,
+        add_scf_household_asset_targets,
+        add_scf_net_worth_component_targets,
+        add_scf_net_worth_target,
     )
-    draws = fitted.predict(recv[preds].copy())
+    from policyengine_us_data.datasets.scf.scf import SCF_2022
+
+    scf_raw = SCF_2022().load_dataset()
+    scf = pd.DataFrame({k: scf_raw[k] for k in scf_raw.keys()})
+    targets = list(
+        dict.fromkeys(
+            list(add_scf_net_worth_target(scf))
+            + ["auto_loan_balance", "auto_loan_interest"]
+            + list(add_scf_financial_asset_targets(scf))
+            + list(add_scf_household_asset_targets(scf))
+            + list(add_scf_net_worth_component_targets(scf))
+        )
+    )
+    PREDICTORS = [
+        "age", "is_female", "cps_race", "is_married",
+        "own_children_in_household", "employment_income",
+        "interest_dividend_income", "social_security_pension_income",
+    ]
+    log(f"  SCF 2022 donor: {len(scf):,} rows, {len(targets)} targets")
+
+    num = lambda c: pd.to_numeric(person.get(c, 0), errors="coerce").fillna(0)  # noqa: E731
+    head = person.get("is_household_head", pd.Series(False, index=person.index)).astype(bool)
+    pf = pd.DataFrame(
+        {
+            "hh": person["person_household_id"],
+            "head": head,
+            "age": num("A_AGE") if "A_AGE" in person.columns else num("age"),
+            "is_female": person.get("is_female", False),
+            "cps_race": num("cps_race"),
+            "is_married": person.get("A_MARITL", pd.Series(0, index=person.index)).isin([1, 2]).astype(float) if "A_MARITL" in person.columns else 0.0,
+            "own_children_in_household": num("own_children_in_household"),
+            "employment_income": num("employment_income"),
+            "interest_dividend_income": num("taxable_interest_income") + num("dividend_income") + num("qualified_dividend_income") + num("non_qualified_dividend_income"),
+            "social_security_pension_income": num("social_security") + num("taxable_pension_income"),
+        }
+    )
+    heads = pf[pf["head"]].drop_duplicates("hh").set_index("hh")
+    # Households with no flagged head: use the eldest member.
+    missing = set(hh["household_id"]) - set(heads.index)
+    if missing:
+        eldest = (
+            pf[pf["hh"].isin(missing)]
+            .sort_values("age", ascending=False)
+            .drop_duplicates("hh")
+            .set_index("hh")
+        )
+        heads = pd.concat([heads, eldest])
+    recv = heads.reindex(hh["household_id"]).fillna(0.0)
+
+    donor_cols = [c for c in PREDICTORS if c in scf.columns]
+    targets = [t for t in targets if t in scf.columns]
+    donor = scf[donor_cols + targets + ["wgt"]].dropna()
+    fitted = Imputer(seed=seed, log_level="WARNING").fit(
+        donor, donor_cols, targets, weight_col="wgt"
+    )
+    draws = fitted.predict(recv[donor_cols].copy().reset_index(drop=True))
     hh = hh.copy()
-    hh_order = hh["household_id"]
     for t in targets:
-        vals = pd.Series(np.asarray(draws[t]), index=recv.index)
-        aligned = hh_order.map(vals).fillna(0.0).to_numpy(dtype=np.float64)
-        hh[t] = _support_guard(aligned, scf[t].to_numpy(dtype=np.float64), t, log)
+        vals = np.asarray(draws[t], dtype=np.float64)
+        hh[t] = _support_guard(vals, scf[t].to_numpy(dtype=np.float64), t, log)
     if "household_vehicles_owned" in hh.columns:
         hh["household_vehicles_owned"] = hh["household_vehicles_owned"].clip(lower=0).round()
-    log(f"  SCF wealth block: {len(targets)} variables imputed (weighted={bool(wcol)})")
+    log(f"  SCF wealth block: {len(targets)} variables imputed (weighted=wgt)")
     return hh
 
 
