@@ -288,3 +288,41 @@ PUF vars land person-stored like interest_deduction did) → E gates → F/G pub
 ## target. v2 ships with honest card note. Calibration v2.2: 2.288->0.0220,
 ## 95.55% within10, max 382,478, 0>500k, formula-masks dropped. FRESH SCORE
 ## RUNNING (score_out_v2, caffeinated). On train+holdout WIN -> publish chain.
+
+# V3: ECPS-FREE BUILD (Max, 2026-06-11: "this should REPLACE the ecps - we
+# want to totally get rid of it" — eCPS may appear ONLY as the scoring
+# baseline, never as a build input)
+Contamination scope (confined to the v2 parity-fill): ecps_donor_impute.py's
+~40 vars (wealth/mortgage/vehicles/premiums/tips/hourly/prior-year) + the
+support guard's eCPS ranges. Core economics already primary (CPS+PUF).
+Proven cost: investment_interest_expense $33.5T (donor-poisoned from the
+broken eCPS layer flagged in #us-data; populace beats eCPS 4-14x on every
+other thread metric — comparison in /tmp/itemized_compare.log).
+## Source map (all primary, loaders exist in usdata-populace worktree):
+1. RAW ASEC adds: spm_unit_pre_subsidy_childcare_expenses=SPM_CHILDCAREXPNS,
+   spm_unit_capped_work_childcare_expenses=SPM_CAPWKCCXPNS (cps.py:1616) —
+   SPM-record columns; carry via extra columns + spm-grain mapping.
+2. PUF adds: investment_interest_expense (verify raw field E20300-class in
+   puf_2015.csv; else usdata puf.py rule), anything else donor-block that PUF
+   carries directly.
+3. SCF stage (wealth block: net_worth, scf_*, bank/bond/stock assets,
+   vehicles, auto loans): donor = Fed SCF via
+   policyengine_us_data.datasets.scf (fed_scf.py loader), weighted QRF
+   (microimpute, weight_col=SCF weights), predictors mirroring usdata's SCF
+   imputation config; support-guard to SCF's OWN realized ranges.
+4. ACS stage (first_home_mortgage_balance/interest/origination_year, rent):
+   donor = census_acs loader; usdata's rent-imputation predictors.
+5. CPS-ORG stage (hourly_wage, is_paid_hourly): datasets/org loader.
+6. Prior-year income: usdata add_previous_year_income pattern (consecutive
+   ASEC self-join) — port the join, primary.
+7. ESI premiums: MEPS-IC parameters (usdata cps.py:204 block) applied to
+   has_esi holders — parameter assignment, not a model.
+8. tip_income: derive from is_tipped_occupation x tip share of earnings
+   (usdata rule if present, else SIPP stage) — check usdata tip_income source.
+## Execution: replace stage F2 (ecps_donor_impute) with stages F2a-F2e above;
+## support guard generalized to per-donor ranges; delete eCPS baseline arg from
+## the BUILD path (keep only in scoring); rebuild -> extract -> recalibrate ->
+## all gates (parity 0, smoke incl. investment_interest sane, score train+
+## holdout win) -> republish SAME filename new revision + new build-id ->
+## update card (drop "eCPS as donor" language!), bundles PR #20, observatory,
+## index evidence, memory. NAMING: no ordinals (policy set).
