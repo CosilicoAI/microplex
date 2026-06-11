@@ -35,15 +35,27 @@ STEP_NAMES = {
 }
 
 
-CHAIN_PATTERN = str(
-    Path(__file__).resolve().parent / "run_chain.sh"
-)
+CHAIN_PIDFILE = Path("/tmp/populace_chain.pid")
 
 
 def chain_alive() -> bool:
+    """Pidfile first (exact); pattern fallback for chains launched before
+    the pidfile existed. The pattern matches the script's repo-relative
+    path, which survives relative *and* absolute launches."""
+    if CHAIN_PIDFILE.exists():
+        try:
+            pid = int(CHAIN_PIDFILE.read_text().strip())
+            return (
+                subprocess.run(
+                    ["kill", "-0", str(pid)], capture_output=True
+                ).returncode
+                == 0
+            )
+        except ValueError:
+            pass
     return (
         subprocess.run(
-            ["pgrep", "-f", CHAIN_PATTERN], capture_output=True
+            ["pgrep", "-f", "scripts/run_chain.sh"], capture_output=True
         ).returncode
         == 0
     )
