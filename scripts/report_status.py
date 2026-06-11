@@ -150,8 +150,19 @@ def main() -> int:
         label="us-2024 (eCPS-free rebuild)",
         git_sha=git_sha,
     )
+    not_alive_streak = 0
     while True:
         alive = chain_alive()
+        # A live run must never be retired on a single flaky ps/pgrep
+        # reading: require two consecutive not-alive polls (one immediate
+        # re-probe after a short grace) before reporting the chain down.
+        if not alive:
+            not_alive_streak += 1
+            if not_alive_streak == 1:
+                time.sleep(5)
+                continue
+        else:
+            not_alive_streak = 0
         text = LOG.read_text(errors="replace") if LOG.exists() else ""
         status = parse_status(text, alive)
         if push(status, run_id):
