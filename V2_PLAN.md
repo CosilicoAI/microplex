@@ -217,3 +217,14 @@ PUF vars land person-stored like interest_deduction did) → E gates → F/G pub
 ## snap) → sound comparison (update ~/populace-score-work/run_comparison.py
 ## candidate to populace_us_2024_v2_timeperiod.h5; train AND holdout beat
 ## baseline 1.0888/0.3167) → publish chain F/G.
+
+## @ 06:35 GATE STATUS (machine slept 02:00-06:29; chain survived):
+- v2.1 calibration: loss 19.27->0.0205, 95.71% within10, max 284,679, 0>500k
+  (vs v1 90.58% / v2.0 93.47%) — artifacts populace_us_2024_v2{.h5,_timeperiod.h5} verified.
+- PARITY GATE: **PASS, 0 gaps** (PE-known input vars; formula-owned excluded via
+  system.variables[var].formulas check).
+- SMOKE GATE: running (/tmp/v2_smoke_gate.log) — people/HNI/snap/401k-from-desired/net_worth.
+- SCORE GATE: running caffeinated (~/populace-score-work/run_v2.log, score_out_v2/),
+  candidate populace_us_2024_v2_timeperiod.h5, gate train AND holdout < baseline
+  (v1 precedent 0.1274/1.0888 + 0.0319/0.3167 matched 41,314).
+- Observatory: source-family lineage + release switcher LIVE on populace.dev.
