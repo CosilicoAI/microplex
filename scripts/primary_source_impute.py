@@ -129,10 +129,47 @@ def add_scf_wealth(person: pd.DataFrame, hh: pd.DataFrame, seed: int, log) -> pd
     for t in targets:
         vals = np.asarray(draws[t], dtype=np.float64)
         hh[t] = _support_guard(vals, scf[t].to_numpy(dtype=np.float64), t, log)
-    if "household_vehicles_owned" in hh.columns:
-        hh["household_vehicles_owned"] = hh["household_vehicles_owned"].clip(lower=0).round()
-    log(f"  SCF wealth block: {len(targets)} variables imputed (weighted=wgt)")
-    return hh
+
+    def hh_sum(cols):
+        present = [c for c in cols if c in hh.columns]
+        return sum(hh[c].to_numpy(dtype=np.float64) for c in present) if present else None
+
+    # Raw-SCF -> PE names (PE wants person-entity assets and household vehicles;
+    # the SCF surveys them at household level — values land on the household
+    # head at export via the person head-carry below).
+    PE_FROM_SCF = {
+        "bank_account_assets": ["checking", "saving"],
+        "stock_assets": ["stocks"],
+        "bond_assets": ["bond"],
+    }
+    head_carry_to_person = {}
+    for pe_name, comps in PE_FROM_SCF.items():
+        vals = hh_sum(comps)
+        if vals is not None:
+            head_carry_to_person[pe_name] = vals
+    # net worth = sum of imputed SCF components (usdata computes it the same way).
+    asset_like = [t for t in targets if t.startswith("scf_") and "debt" not in t and "installment" not in t and "lines_of_credit" not in t]
+    debt_like = [t for t in targets if t.startswith("scf_") and (("debt" in t) or ("installment" in t) or ("lines_of_credit" in t))]
+    assets = hh_sum(asset_like) or 0.0
+    debts = hh_sum(debt_like) or 0.0
+    extra_assets = sum(head_carry_to_person.get(k, 0.0) for k in PE_FROM_SCF)
+    hh["net_worth"] = assets + extra_assets - debts
+    # vehicles: SCF carries vehicle values under raw names if present
+    veh_val = hh_sum(["vehic", "vehicle_value", "vehicles"])
+    if veh_val is not None:
+        hh["household_vehicles_value"] = veh_val
+        hh["household_vehicles_owned"] = (veh_val > 0).astype(float)
+    # person-entity assets: head-carry onto persons (export entity mover is
+    # person->tax_unit only; person columns export directly).
+    headp = person.get("is_household_head", pd.Series(False, index=person.index)).astype(bool)
+    hmap = dict(zip(hh["household_id"].tolist(), range(len(hh))))
+    pidx = person["person_household_id"].map(hmap)
+    for pe_name, vals in head_carry_to_person.items():
+        person[pe_name] = np.where(
+            headp & pidx.notna(), np.asarray(vals)[pidx.fillna(0).astype(int)], 0.0
+        )
+    log(f"  SCF wealth block: {len(targets)} scf vars + net_worth + {sorted(head_carry_to_person)} (weighted=wgt)")
+    return person, hh
 
 
 def add_sipp_tips(person: pd.DataFrame, log) -> pd.DataFrame:
@@ -322,6 +359,7 @@ def add_mortgage_conversion(person: pd.DataFrame, hh: pd.DataFrame, year: int, l
     data = _PersonZeroFallback(len(person))
     data.update({
         "interest_deduction": {tp: itd_tu},
+        "deductible_mortgage_interest": {tp: np.maximum(itd_person, 0)},
         "person_tax_unit_id": {tp: p_tu},
         "tax_unit_id": {tp: tu_ids},
         "person_id": {tp: person["person_id"].to_numpy()},

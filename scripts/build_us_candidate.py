@@ -945,7 +945,7 @@ def main() -> int:
     sys.path.insert(0, str(args.usdata_repo))
     import primary_source_impute as psi
 
-    hh = psi.add_scf_wealth(person, hh, seed=args.seed, log=log)
+    person, hh = psi.add_scf_wealth(person, hh, seed=args.seed, log=log)
     person = psi.add_sipp_tips(person, log=log)
     person = psi.add_org_wages(person, hh, args.calendar_year, log=log)
     person = psi.add_meps_esi_premiums(person, log=log)
