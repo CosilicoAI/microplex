@@ -1,10 +1,13 @@
-"""Live build-status reporter: chain log -> gist -> populace.dev.
+"""Live build-status reporter: chain log -> Supabase -> populace.dev.
 
 Parses the chain runner's log into a small sanitized status JSON (step,
-stage, gate verdicts, last log line) and PATCHes it to a public gist every
-~45s while the chain runs; the observatory's live-build strip polls the
-gist's raw URL. Publishes only derived status fields, never raw paths or
-environment detail beyond the log lines the build itself prints.
+stage, gate verdicts, last log line) and appends it to the PolicyEngine
+populace Supabase project's ``build_events`` table every ~45s while the
+chain runs; the observatory's live-build strip reads the latest row with
+the public (read-only, RLS-enforced) key. Publishes only derived status
+fields, never raw paths or environment detail beyond the log lines the
+build itself prints. Rows are append-only — the build timeline is queryable
+history, not a mutable blob.
 """
 
 import json
@@ -15,10 +18,35 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 
-GIST_ID = "c245589ec19ec00b02756995a4af7b48"
-GIST_FILE = "populace_build_status.json"
+SUPABASE_URL = "https://pgrhxxhiyqgngoffwden.supabase.co"
 LOG = Path("/tmp/populace_chain.log")
 INTERVAL_S = 45
+
+
+def _secret_key() -> str:
+    for cmd in (
+        ["agent-secret", "get", "POPULACE_SUPABASE_SECRET_KEY"],
+        [
+            str(Path.home() / ".claude" / "manage-secret.sh"),
+            "get",
+            "POPULACE_SUPABASE_SECRET_KEY",
+        ],
+    ):
+        try:
+            out = subprocess.run(
+                cmd, capture_output=True, text=True, check=True
+            ).stdout.strip()
+            if out:
+                return out
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            continue
+    raise RuntimeError(
+        "POPULACE_SUPABASE_SECRET_KEY not retrievable; refusing to report "
+        "without authenticated writes."
+    )
+
+
+_KEY = None
 
 STEP_RE = re.compile(r"=== CHAIN (step (\d): )?([A-Za-z -]+?) ===")
 STAGE_RE = re.compile(r"\[build\] (stage [A-Z0-9]+[a-z]?: .+)")
@@ -101,15 +129,25 @@ def parse_status(text: str, alive: bool) -> dict:
 
 
 def push(status: dict) -> None:
-    payload = json.dumps(
-        {"files": {GIST_FILE: {"content": json.dumps(status, indent=1)}}}
+    global _KEY
+    if _KEY is None:
+        _KEY = _secret_key()
+    import urllib.request
+
+    request = urllib.request.Request(
+        f"{SUPABASE_URL}/rest/v1/build_events",
+        data=json.dumps({"run": status["run"], "status": status}).encode(),
+        headers={
+            "apikey": _KEY,
+            "Authorization": f"Bearer {_KEY}",
+            "Content-Type": "application/json",
+            "Prefer": "return=minimal",
+        },
+        method="POST",
     )
-    subprocess.run(
-        ["gh", "api", f"gists/{GIST_ID}", "-X", "PATCH", "--input", "-"],
-        input=payload.encode(),
-        capture_output=True,
-        check=True,
-    )
+    with urllib.request.urlopen(request, timeout=20) as response:
+        if response.status not in (200, 201, 204):
+            raise RuntimeError(f"supabase write HTTP {response.status}")
 
 
 def main() -> int:
@@ -123,8 +161,8 @@ def main() -> int:
                 f"pushed: step {status['chain_step']} {status['state']} "
                 f"@ {status['updated_at']}"
             )
-        except subprocess.CalledProcessError as error:
-            print(f"gist push failed: {error}", file=sys.stderr)
+        except Exception as error:  # noqa: BLE001 - keep reporting
+            print(f"supabase push failed: {error}", file=sys.stderr)
         if not alive:
             return 0
         time.sleep(INTERVAL_S)
