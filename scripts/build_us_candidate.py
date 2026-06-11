@@ -182,6 +182,12 @@ def _derive_person_columns(person: pd.DataFrame) -> pd.DataFrame:
         pd.concat([num(c) == 1 for c in dis_flags], axis=1).any(axis=1)
     ).astype(bool)
     p["cps_race"] = num("race").astype(int)
+    # The raw ASEC race recode must not shadow PolicyEngine's derived
+    # `race` enum (the engine computes it from cps_race + is_hispanic;
+    # the eCPS stores only cps_race). Stored raw ints break strict
+    # enum ingestion downstream (policyengine.py).
+    if "race" in p.columns:
+        p = p.drop(columns=["race"])
     p["is_female"] = (num("sex") == 2).astype(bool)
     p["is_hispanic"] = (num("hispanic") == 1).astype(bool)
     p["is_household_head"] = num("A_EXPRRP").isin([1, 2]).astype(bool)
@@ -1050,7 +1056,7 @@ def main() -> int:
     # CPS is never a build input; it remains only the scoring benchmark.
     log("stage F2: primary-source imputation (SCF / SIPP / ORG)")
     sys.path.insert(0, str(args.usdata_repo))
-    import primary_source_impute as psi
+    from populace.build.us import sources as psi
 
     person, hh = psi.add_scf_wealth(person, hh, seed=args.seed, log=log)
     person = psi.add_sipp_tips(person, log=log)
