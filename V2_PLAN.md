@@ -228,3 +228,16 @@ PUF vars land person-stored like interest_deduction did) → E gates → F/G pub
   candidate populace_us_2024_v2_timeperiod.h5, gate train AND holdout < baseline
   (v1 precedent 0.1274/1.0888 + 0.0319/0.3167 matched 41,314).
 - Observatory: source-family lineage + release switcher LIVE on populace.dev.
+
+## @ 06:40 SMOKE GATE: MIXED. people 331.7M OK, snap $94.2B OK, net_worth
+## $165.0T OK (eCPS 163.4T - wealth layer REAL). TWO ISSUES: (1)
+## traditional_401k_contributions computes $0 despite desired nz 15.4% in
+## timeperiod — PE formula is just desired*scale, so either the
+## USSingleYearDataset lost the desired columns (timeperiod has them; check
+## /tmp/v2_diag.log first line) or scale=0; (2) household_net_income $11.03T
+## vs v1 $14.73T (eCPS $22.24T) — REGRESSION; diag decomposes market income/
+## taxes/benefits (v5 pool market income was $15.98T per review). Hypotheses:
+## chained-QRF draws shifted when 16 new PUF vars joined the chain; tail
+## stratum 10,384 vs v5 15,000; income_tax spike from new deduction inputs is
+## NOT plausible (deductions raise net income). SCORE still running on this
+## pool (score_out_v2). DO NOT PUBLISH until HNI story understood + 401k fixed.
