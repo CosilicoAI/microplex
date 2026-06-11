@@ -150,9 +150,15 @@ def add_scf_wealth(person: pd.DataFrame, hh: pd.DataFrame, seed: int, log) -> pd
     # net worth = sum of imputed SCF components (usdata computes it the same way).
     asset_like = [t for t in targets if t.startswith("scf_") and "debt" not in t and "installment" not in t and "lines_of_credit" not in t]
     debt_like = [t for t in targets if t.startswith("scf_") and (("debt" in t) or ("installment" in t) or ("lines_of_credit" in t))]
-    assets = hh_sum(asset_like) or 0.0
-    debts = hh_sum(debt_like) or 0.0
-    extra_assets = sum(head_carry_to_person.get(k, 0.0) for k in PE_FROM_SCF)
+    def _or_zero(v):
+        return v if v is not None else np.zeros(len(hh))
+
+    assets = _or_zero(hh_sum(asset_like))
+    debts = _or_zero(hh_sum(debt_like))
+    extra_assets = sum(
+        (np.asarray(head_carry_to_person[k]) for k in PE_FROM_SCF if k in head_carry_to_person),
+        np.zeros(len(hh)),
+    )
     hh["net_worth"] = assets + extra_assets - debts
     # vehicles: SCF carries vehicle values under raw names if present
     veh_val = hh_sum(["vehic", "vehicle_value", "vehicles"])
