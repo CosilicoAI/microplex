@@ -268,3 +268,68 @@ def add_prior_year_income(person: pd.DataFrame, asec_year: int, log) -> pd.DataF
     person["previous_year_income_available"] = matched.astype(bool)
     log(f"  prior-year join: matched {matched.mean()*100:.1f}% of persons (ASEC {asec_year-1})")
     return person
+
+
+def add_mortgage_conversion(person: pd.DataFrame, year: int, log) -> pd.DataFrame:
+    """Structural mortgages from SCF hints + PUF deductible interest.
+
+    Ports usdata's two-step conversion (extended_cps.py:1183-1190): SCF-donor
+    balance hints, then conversion of the PUF-imputed interest deduction into
+    tax-unit mortgage balances/interest/origination plus person-level
+    home_mortgage_interest and the investment_interest_expense residual.
+    Failures raise — no silent zero fallbacks (charter rule).
+    """
+    from policyengine_us_data.utils.mortgage_interest import (
+        convert_mortgage_interest_to_structural_inputs,
+        impute_tax_unit_mortgage_balance_hints,
+    )
+
+    person = person.copy()
+    tp = year
+    p_tu = person["person_tax_unit_id"].to_numpy()
+    tu_ids = np.sort(np.unique(p_tu))
+    tu_index = {t: i for i, t in enumerate(tu_ids.tolist())}
+    p_tu_idx = np.fromiter((tu_index[t] for t in p_tu.tolist()), dtype=np.int64)
+
+    def person_col(name, default=0.0):
+        return pd.to_numeric(person.get(name, default), errors="coerce").fillna(0.0).to_numpy(np.float32)
+
+    # Tax-unit interest deduction from the head-carried person values.
+    itd_person = person_col("interest_deduction")
+    itd_tu = np.zeros(len(tu_ids), dtype=np.float32)
+    np.add.at(itd_tu, p_tu_idx, itd_person)
+
+    data = {
+        "interest_deduction": {tp: itd_tu},
+        "person_tax_unit_id": {tp: p_tu},
+        "tax_unit_id": {tp: tu_ids},
+        "person_id": {tp: person["person_id"].to_numpy()},
+        "age": {tp: person_col("A_AGE" if "A_AGE" in person.columns else "age")},
+        "employment_income": {tp: person_col("employment_income")},
+        "is_tax_unit_head": {tp: (person.get("tax_unit_role_input", "") == "HEAD").to_numpy()},
+    }
+    before = set(data)
+    data = impute_tax_unit_mortgage_balance_hints(data, tp)
+    data = convert_mortgage_interest_to_structural_inputs(data, tp)
+
+    tu_outputs = []
+    for key in set(data) - before | {"interest_deduction"}:
+        arr = np.asarray(data[key][tp])
+        if key.startswith("imputed_"):
+            continue
+        if len(arr) == len(person):
+            person[key] = arr
+        elif len(arr) == len(tu_ids):
+            # Head-carry tax-unit outputs onto persons; the export-time entity
+            # mover places them on the tax-unit table.
+            head = (person.get("tax_unit_role_input", "") == "HEAD").to_numpy()
+            vals = arr[p_tu_idx]
+            person[key] = np.where(head, vals, 0.0)
+            tu_outputs.append(key)
+        else:
+            raise ValueError(f"mortgage conversion output {key!r} has odd length {len(arr)}")
+    log(f"  mortgage conversion: person outputs + head-carried {sorted(tu_outputs)}")
+    inv = person.get("investment_interest_expense")
+    if inv is not None:
+        log(f"  investment_interest_expense: nz {(pd.to_numeric(inv, errors='coerce').fillna(0)>0).mean()*100:.1f}%")
+    return person
