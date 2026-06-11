@@ -205,6 +205,12 @@ def add_org_wages(person: pd.DataFrame, hh: pd.DataFrame, year: int, log) -> pd.
         "weeks_worked": pd.to_numeric(person.get("weeks_worked", 0), errors="coerce").fillna(0).to_numpy(np.float32),
         "is_hispanic": person.get("is_hispanic", pd.Series(False, index=person.index)).astype(bool).to_numpy(),
     })
+    # Occupation flags the ORG models read — pass real pool values when present.
+    for flag in ("has_never_worked", "is_computer_scientist",
+                 "is_executive_administrative_professional",
+                 "is_farmer_fisher", "is_military"):
+        if flag in person.columns:
+            cps[flag] = person[flag].astype(bool).to_numpy()
     try:
         add_org_labor_market_inputs(cps, year)
         if cps._missed:

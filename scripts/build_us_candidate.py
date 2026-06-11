@@ -104,6 +104,8 @@ EXTRA_ASEC_COLUMNS = (
     "RESNSS1",
     "RESNSS2",
     "SPM_ENGVAL",
+    "SPM_CHILDCAREXPNS",
+    "SPM_CAPWKCCXPNS",
 )
 
 # Contract-required columns eCPS sources from PUF/SIPP/SCF detail our v1
@@ -969,6 +971,22 @@ def main() -> int:
         return t
 
     spm = unit_table("spm_unit_id")
+    # SPM-record childcare expenses: raw ASEC columns, max per SPM unit
+    # (constant within unit on the SPM record), mirroring the energy subsidy.
+    for raw, pe_name in (
+        ("SPM_CHILDCAREXPNS", "spm_unit_pre_subsidy_childcare_expenses"),
+        ("SPM_CAPWKCCXPNS", "spm_unit_capped_work_childcare_expenses"),
+    ):
+        if raw in person.columns:
+            agg = (
+                pd.to_numeric(person[raw], errors="coerce")
+                .fillna(0.0)
+                .groupby(person["person_spm_unit_id"])
+                .max()
+            )
+            spm[pe_name] = (
+                spm["spm_unit_id"].map(agg).fillna(0.0).astype(float)
+            )
     if "SPM_ENGVAL" in person.columns:
         eng = (
             pd.to_numeric(person["SPM_ENGVAL"], errors="coerce")
