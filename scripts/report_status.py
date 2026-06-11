@@ -39,23 +39,26 @@ CHAIN_PIDFILE = Path("/tmp/populace_chain.pid")
 
 
 def chain_alive() -> bool:
-    """Pidfile first (exact); pattern fallback for chains launched before
-    the pidfile existed. The pattern matches the script's repo-relative
-    path, which survives relative *and* absolute launches."""
+    """Pidfile first, verified against the pid's actual command line (a
+    recycled pid must not impersonate the chain); bracketed-pattern pgrep
+    fallback for chains launched before the pidfile existed. The bracket
+    keeps the pattern from matching processes that merely MENTION the
+    script in their argv (watchers, editors, this very fallback)."""
     if CHAIN_PIDFILE.exists():
         try:
             pid = int(CHAIN_PIDFILE.read_text().strip())
-            return (
-                subprocess.run(
-                    ["kill", "-0", str(pid)], capture_output=True
-                ).returncode
-                == 0
-            )
         except ValueError:
-            pass
+            pid = None
+        if pid is not None:
+            command = subprocess.run(
+                ["ps", "-p", str(pid), "-o", "command="],
+                capture_output=True,
+                text=True,
+            ).stdout
+            return "run_chain.sh" in command
     return (
         subprocess.run(
-            ["pgrep", "-f", "scripts/run_chain.sh"], capture_output=True
+            ["pgrep", "-f", "[r]un_chain.sh"], capture_output=True
         ).returncode
         == 0
     )
