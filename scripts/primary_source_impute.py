@@ -299,19 +299,48 @@ def add_mortgage_conversion(person: pd.DataFrame, year: int, log) -> pd.DataFram
     itd_tu = np.zeros(len(tu_ids), dtype=np.float32)
     np.add.at(itd_tu, p_tu_idx, itd_person)
 
-    data = {
+    class _PersonZeroFallback(dict):
+        """Missing person-grain reads return person-length zeros (logged)."""
+
+        def __init__(self, n):
+            super().__init__()
+            self._n = n
+            self.missed: set[str] = set()
+
+        def get(self, key, default=None):
+            if key in self:
+                return super().__getitem__(key)
+            self.missed.add(key)
+            return {tp: np.zeros(self._n, dtype=np.float32)}
+
+        def __getitem__(self, key):
+            if key in self:
+                return super().__getitem__(key)
+            self.missed.add(key)
+            return {tp: np.zeros(self._n, dtype=np.float32)}
+
+    data = _PersonZeroFallback(len(person))
+    data.update({
         "interest_deduction": {tp: itd_tu},
         "person_tax_unit_id": {tp: p_tu},
         "tax_unit_id": {tp: tu_ids},
         "person_id": {tp: person["person_id"].to_numpy()},
         "age": {tp: person_col("A_AGE" if "A_AGE" in person.columns else "age")},
         "employment_income": {tp: person_col("employment_income")},
+        "self_employment_income": {tp: person_col("self_employment_income")},
+        "social_security": {tp: person_col("social_security")},
+        "taxable_pension_income": {tp: person_col("taxable_pension_income")},
+        "taxable_interest_income": {tp: person_col("taxable_interest_income")},
+        "is_female": {tp: person.get("is_female", pd.Series(False, index=person.index)).astype(bool).to_numpy()},
+        "cps_race": {tp: person_col("cps_race")},
         "is_tax_unit_head": {tp: (person.get("tax_unit_role_input", "") == "HEAD").to_numpy()},
-    }
+    })
     before = set(data)
     data = impute_tax_unit_mortgage_balance_hints(data, tp)
     data = convert_mortgage_interest_to_structural_inputs(data, tp)
 
+    if data.missed:
+        log(f"  mortgage converter zero-fallback keys: {sorted(data.missed)}")
     tu_outputs = []
     for key in set(data) - before | {"interest_deduction"}:
         arr = np.asarray(data[key][tp])
