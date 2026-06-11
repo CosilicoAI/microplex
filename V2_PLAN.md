@@ -269,3 +269,11 @@ PUF vars land person-stored like interest_deduction did) → E gates → F/G pub
 ## REBUILD 5 RUNNING with guard; then: extract -> calibrate (also drops
 ## formula-masking zero columns now) -> parity/smoke (expect HNI to recover
 ## toward ~$14.5-15T and 401k >$100B) -> FRESH score -> publish chain.
+
+## @ 07:15 REBUILD 5 GREEN: support guard live (STCG 210 clips to
+## [-9.98M, +1.65B] = eCPS realized range; farm/ira/etc clipped too; NOTE
+## farm_income floor 0 per eCPS support). Extraction running, auto-chains
+## into calibration (watcher b9erfnbn6 launches build_populace_us_v2.py on
+## SAVED). Then gates: parity (expect 0) / smoke (HNI ~$14.5T+, 401k >$100B,
+## STCG ~±$0.2T) / fresh score (rm score_out_v2 first; copy v2 timeperiod to
+## ~/populace-score-work). Then publish chain.
