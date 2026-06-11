@@ -932,18 +932,16 @@ def main() -> int:
         person = pd.concat([person, tail_person], ignore_index=True)
         log(f"  households incl. tail: {len(hh):,}")
 
-    # ---- Stage F2: eCPS-donor imputation (v2 parity) -----------------------
-    # SCF/mortgage/auto/premium/tips/prior-year blocks the v1 spec zeroed.
-    log("stage F2: eCPS-donor imputation (v2 parity blocks)")
-    import ecps_donor_impute
+    # ---- Stage F2: primary-source imputation (v3, eCPS-free) ---------------
+    # Wealth from Fed SCF, tips from SIPP, wages from CPS-ORG. The enhanced
+    # CPS is never a build input; it remains only the scoring benchmark.
+    log("stage F2: primary-source imputation (SCF / SIPP / ORG)")
+    sys.path.insert(0, str(args.usdata_repo))
+    import primary_source_impute as psi
 
-    person, hh = ecps_donor_impute.run(
-        person,
-        hh,
-        str(args.baseline_h5),
-        seed=args.seed if hasattr(args, "seed") else 0,
-        log=log,
-    )
+    hh = psi.add_scf_wealth(person, hh, seed=args.seed, log=log)
+    person = psi.add_sipp_tips(person, log=log)
+    person = psi.add_org_wages(person, hh, args.calendar_year, log=log)
 
     def _group_clone_flag(id_col: str) -> pd.Series:
         share = person.groupby(person[id_col])["person_is_puf_clone"].mean()
